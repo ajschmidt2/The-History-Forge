@@ -4,12 +4,43 @@ from datetime import datetime
 
 # ---- Imports from your utils.py ----
 # These must exist in your repo.
-from utils import (
-    generate_script,
-    split_script_into_scenes,
-    generate_prompts,
-    generate_images_for_scenes,
+import streamlit as st
+
+try:
+    import utils
+except Exception as e:
+    st.error("Failed to import utils.py. Open 'Manage app' → logs for the full error.")
+    st.exception(e)
+    st.stop()
+
+# Resolve required functions (supports older/newer naming)
+generate_script = getattr(utils, "generate_script", None)
+split_script_into_scenes = getattr(utils, "split_script_into_scenes", None)
+generate_prompts = getattr(utils, "generate_prompts", None)
+
+# images function name might differ depending on which patch you applied
+generate_images_for_scenes = (
+    getattr(utils, "generate_images_for_scenes", None)
+    or getattr(utils, "generate_images", None)
 )
+
+missing = [
+    name for name, fn in {
+        "generate_script": generate_script,
+        "split_script_into_scenes": split_script_into_scenes,
+        "generate_prompts": generate_prompts,
+        "generate_images_for_scenes (or generate_images)": generate_images_for_scenes,
+    }.items()
+    if fn is None
+]
+
+if missing:
+    st.error("Your utils.py is missing required functions:")
+    for m in missing:
+        st.write(f"- {m}")
+    st.info("Fix utils.py to include these functions, then redeploy.")
+    st.stop()
+
 
 # ----------------------------
 # Security (simple password gate)
