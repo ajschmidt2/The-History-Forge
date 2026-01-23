@@ -395,21 +395,29 @@ def _gemini_image_model(default: str = "gemini-2.5-flash-image") -> str:
 from PIL import Image
 from io import BytesIO
 
-def generate_images_for_scenes(scenes, model_name="gemini-2.0-flash-image-preview"):
+def generate_images_for_scenes(
+    scenes,
+    aspect_ratio="16:9",
+    model_name="gemini-2.0-flash-image-preview",
+):
     """
     Generate a PIL.Image for each scene using Gemini image generation.
+    Accepts aspect_ratio (e.g., '16:9', '9:16') so callers can control framing.
     Returns a list of PIL.Image objects (or None if generation fails).
     """
     images = []
 
     for scene in scenes:
         try:
+            # If your scene already has a prompt, just append AR guidance.
+            prompt = getattr(scene, "prompt", str(scene))
+            prompt = f"{prompt}\n\nFraming: aspect ratio {aspect_ratio}. Compose for this ratio."
+
             response = genai_client.models.generate_content(
                 model=model_name,
-                contents=[scene.prompt],
+                contents=[prompt],
             )
 
-            # Gemini returns image bytes inside inline_data
             img = None
             for part in response.candidates[0].content.parts:
                 if hasattr(part, "inline_data") and part.inline_data:
@@ -424,8 +432,6 @@ def generate_images_for_scenes(scenes, model_name="gemini-2.0-flash-image-previe
             images.append(None)
 
     return images
-
-
 
 def _placeholder_image(text: str):
     from PIL import Image, ImageDraw
