@@ -236,7 +236,22 @@ def _visuals_tab(cfg: dict) -> None:
             left, right = st.columns([2, 2], gap="large")
             with left:
                 st.markdown("**Scene excerpt**")
-                st.write(sc.script_excerpt)
+                excerpt = getattr(sc, "script_excerpt", None)
+
+            if not excerpt:
+                # Fallbacks depending on your scene schema
+                excerpt = getattr(sc, "narration", None) or getattr(sc, "text", None)
+            
+            if not excerpt:
+                # Last resort: derive from prompt (not ideal, but avoids crash)
+                p = getattr(sc, "prompt", "")
+                excerpt = p[:200] + ("..." if len(p) > 200 else "") if p else ""
+            
+            if excerpt:
+                st.write(excerpt)
+            else:
+                st.caption("No script excerpt available for this scene.")
+
                 st.markdown("**Visual intent**")
                 st.write(sc.visual_intent)
 
