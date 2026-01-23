@@ -430,6 +430,7 @@ def generate_images_for_scenes(scenes: List[SceneArtifact], aspect_ratio: str) -
                     image_prompt=sc.image_prompt,
                     image=img,
                 )
+            )
     except Exception as e:
         # Provider missing — placeholders for all
         for sc in scenes:
