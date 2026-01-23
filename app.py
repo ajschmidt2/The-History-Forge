@@ -224,7 +224,15 @@ def _visuals_tab(cfg: dict) -> None:
         return
 
     for idx, sc in enumerate(scenes, start=1):
-        with st.expander(f"Scene {idx}: {sc.title}", expanded=(idx == 1)):
+       scene_title = getattr(sc, "title", None)
+
+    if not scene_title:
+        # Fallback: derive a short title from the prompt or text
+        source_text = getattr(sc, "prompt", "") or getattr(sc, "text", "")
+        scene_title = source_text[:60].strip() + "..." if source_text else "Visual Scene"
+
+    with st.expander(f"Scene {idx}: {scene_title}", expanded=(idx == 1)):
+
             left, right = st.columns([2, 2], gap="large")
             with left:
                 st.markdown("**Scene excerpt**")
