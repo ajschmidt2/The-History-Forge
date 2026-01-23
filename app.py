@@ -9,6 +9,33 @@ Run:
     pip install -r requirements.txt
     streamlit run app.py
 """
+import streamlit as st
+
+def check_password():
+    """Simple password protection"""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    st.title("🔒 The History Forge")
+    st.write("Enter password to continue")
+
+    password = st.text_input("Password", type="password")
+
+    if st.button("Log in"):
+        if password == st.secrets["app_password"]:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password")
+
+    return False
+
+
+if not check_password():
+    st.stop()
 
 from __future__ import annotations
 
