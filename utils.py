@@ -316,37 +316,36 @@ def generate_prompts(
             prompts.append(prompt)
         return prompts
 
+from io import BytesIO
+from PIL import Image
 
-# ----------------------------
-# Image generation
-# ----------------------------
 def generate_images_for_scenes(
-    scenes: List[Dict[str, Any]],
-    aspect_ratio: str = "16:9",
-    model_name: str = "gemini-2.0-flash-image-preview",
+    scenes,
+    aspect_ratio="16:9",
+    model_name="gemini-2.5-flash-preview-image",  # <-- matches your screenshot
     **kwargs,
-) -> List[Optional[Image.Image]]:
+):
     """
-    Generates one PIL.Image per scene using Gemini.
-
-    Expects each scene dict to have `prompt` OR `visual_intent`/`text`.
-    Returns list of PIL Images (or None on failure).
+    Generates one PIL.Image per scene using google-genai.
+    Forces IMAGE response modality so Gemini actually returns bytes.
     """
     provider, client = _gemini_client()
     if client is None:
         return [None for _ in scenes]
 
-    images: List[Optional[Image.Image]] = []
+    images = []
 
     for sc in scenes:
-        # Determine prompt
-        prompt = sc.get("prompt", "").strip()
-        if not prompt:
-            vi = sc.get("visual_intent", "").strip()
-            text = sc.get("text", "").strip()
-            prompt = vi or text or "A cinematic historical scene."
+        # Build a prompt from whatever fields exist
+        prompt = ""
+        if isinstance(sc, dict):
+            prompt = (sc.get("prompt") or sc.get("visual_intent") or sc.get("text") or "").strip()
+        else:
+            prompt = str(getattr(sc, "prompt", "") or getattr(sc, "visual_intent", "") or getattr(sc, "text", "") or sc).strip()
 
-        # Add AR guidance (works even if model doesn’t have explicit AR parameter)
+        if not prompt:
+            prompt = "A cinematic historical scene."
+
         prompt = (
             f"{prompt}\n\n"
             f"Framing: compose for aspect ratio {aspect_ratio}. "
@@ -354,34 +353,40 @@ def generate_images_for_scenes(
         )
 
         try:
+            # Preferred: google-genai
             if provider == "google-genai":
-                # google-genai style
+                from google.genai import types
+
                 resp = client.models.generate_content(
                     model=model_name,
                     contents=[prompt],
+                    config=types.GenerateContentConfig(
+                        response_modalities=["IMAGE"]  # <-- critical
+                    ),
                 )
 
                 img = None
-                # Extract inline bytes
+
+                # Some responses return inline_data; others return file_data
                 for cand in getattr(resp, "candidates", []) or []:
                     content = getattr(cand, "content", None)
                     parts = getattr(content, "parts", []) if content else []
                     for part in parts:
                         inline = getattr(part, "inline_data", None)
                         if inline and getattr(inline, "data", None):
-                            raw = inline.data
-                            img = Image.open(BytesIO(raw)).convert("RGB")
+                            img = Image.open(BytesIO(inline.data)).convert("RGB")
                             break
+
+                        file_data = getattr(part, "file_data", None)
+                        # file_data usually requires fetching; if present, we’ll just skip gracefully
                     if img is not None:
                         break
 
                 images.append(img)
 
             else:
-                # google-generativeai style
-                # Some versions use generate_content; images may come back as inline_data in parts.
+                # Fallback older SDK (may not reliably return image bytes)
                 resp = client.GenerativeModel(model_name).generate_content(prompt)
-
                 img = None
                 candidates = getattr(resp, "candidates", None)
                 if candidates:
@@ -389,13 +394,13 @@ def generate_images_for_scenes(
                     for part in parts:
                         inline = getattr(part, "inline_data", None)
                         if inline and getattr(inline, "data", None):
-                            raw = inline.data
-                            img = Image.open(BytesIO(raw)).convert("RGB")
+                            img = Image.open(BytesIO(inline.data)).convert("RGB")
                             break
-
                 images.append(img)
 
-        except Exception:
+        except Exception as e:
+            # Helpful logging for Streamlit Cloud logs
+            print(f"[Gemini image gen failed] model={model_name} err={type(e).__name__}: {e}")
             images.append(None)
 
     return images
