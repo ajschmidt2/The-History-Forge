@@ -162,22 +162,40 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
     return scenes
 
 
-def generate_prompts_for_scenes(scenes: List[Scene], tone: str, style: str = "photorealistic cinematic") -> List[Scene]:
+def generate_prompts_for_scenes(
+    scenes: List[Scene],
+    tone: str,
+    style: str = "Photorealistic cinematic",
+) -> List[Scene]:
     if not scenes:
         return scenes
 
     client = _openai_client()
+    # Normalize style into a prompt-friendly phrase
+    style_phrase = style.strip()
+
     if client is None:
         for s in scenes:
             s.image_prompt = (
-                f"{style}. {tone} tone. {s.visual_intent}\n"
+                f"{style_phrase}. {tone} tone. {s.visual_intent}\n"
                 f"Scene excerpt: {s.script_excerpt}\n"
                 "No text, no captions, no watermarks. High detail."
             )
         return scenes
 
     packed = [{"index": s.index, "title": s.title, "text": s.script_excerpt, "visual_intent": s.visual_intent} for s in scenes]
-    payload = {"tone": tone, "style": style, "task": "Write one image prompt per scene.", "output": {"format": "json", "field": "prompts"}, "scenes": packed}
+    payload = {
+        "tone": tone,
+        "style": style_phrase,
+        "task": "Write one image prompt per scene.",
+        "output": {"format": "json", "field": "prompts"},
+        "scenes": packed,
+        "constraints": [
+            "No text overlays, captions, logos, or watermarks.",
+            "Specify subject, setting, era cues, lighting, atmosphere, and camera feel.",
+            "Match the chosen style strongly."
+        ],
+    }
 
     resp = client.chat.completions.create(
         model="gpt-4.1-mini",
@@ -197,7 +215,7 @@ def generate_prompts_for_scenes(scenes: List[Scene], tone: str, style: str = "ph
         p = str(prompts[i]).strip() if i < len(prompts) else ""
         if not p:
             p = (
-                f"{style}. {tone} tone. {s.visual_intent}\n"
+                f"{style_phrase}. {tone} tone. {s.visual_intent}\n"
                 f"Scene excerpt: {s.script_excerpt}\n"
                 "No text, no captions, no watermarks. High detail."
             )
@@ -214,10 +232,36 @@ def _is_retryable(err: Exception) -> bool:
     return any(k in msg for k in ["429", "too many requests", "quota", "rate limit", "503", "temporarily", "timeout"])
 
 
+# ✅ Guaranteed AR enforcement
+def _crop_to_aspect(img: Image.Image, aspect_ratio: str) -> Image.Image:
+    ar_map = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1)}
+    w, h = img.size
+    a, b = ar_map.get(aspect_ratio, (16, 9))
+    target = a / b
+    current = w / h
+
+    # already close enough
+    if abs(current - target) < 0.01:
+        return img
+
+    # center-crop
+    if current > target:
+        # too wide -> crop width
+        new_w = int(h * target)
+        left = (w - new_w) // 2
+        return img.crop((left, 0, left + new_w, h))
+    else:
+        # too tall -> crop height
+        new_h = int(w / target)
+        top = (h - new_h) // 2
+        return img.crop((0, top, w, top + new_h))
+
+
 def generate_image_for_scene(
     scene: Scene,
     aspect_ratio: str = "16:9",
-    model_name: str = "gemini-2.5-flash-image",  # ✅ FIXED MODEL
+    visual_style: str = "Photorealistic cinematic",
+    model_name: str = "gemini-2.5-flash-image",
 ) -> Scene:
     provider, client = _gemini_client()
     if client is None:
@@ -225,12 +269,14 @@ def generate_image_for_scene(
 
     print(f"[Gemini provider] {provider} model={model_name}")
 
-    prompt = (scene.image_prompt or scene.visual_intent or scene.script_excerpt or "").strip()
-    if not prompt:
-        prompt = "A cinematic historical scene."
+    base = (scene.image_prompt or scene.visual_intent or scene.script_excerpt or "").strip()
+    if not base:
+        base = "A cinematic historical scene."
 
+    # Reinforce style + AR in the prompt (still helpful even with crop)
     prompt = (
-        f"{prompt}\n\n"
+        f"Style: {visual_style}.\n"
+        f"{base}\n\n"
         f"Framing: compose for aspect ratio {aspect_ratio}. "
         "No text, no captions, no watermarks."
     )
@@ -242,10 +288,20 @@ def generate_image_for_scene(
             if provider == "google-genai":
                 from google.genai import types  # type: ignore
 
+                # Best-effort: some SDK versions may support aspect_ratio in config.
+                # If unsupported, we fall back to cropping.
+                try:
+                    cfg = types.GenerateContentConfig(
+                        response_modalities=["IMAGE"],
+                        aspect_ratio=aspect_ratio,  # may or may not be supported
+                    )
+                except TypeError:
+                    cfg = types.GenerateContentConfig(response_modalities=["IMAGE"])
+
                 resp = client.models.generate_content(
                     model=model_name,
                     contents=[prompt],
-                    config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+                    config=cfg,
                 )
 
                 for cand in getattr(resp, "candidates", []) or []:
@@ -256,6 +312,10 @@ def generate_image_for_scene(
                         if inline and getattr(inline, "data", None):
                             raw = inline.data
                             img = Image.open(BytesIO(raw)).convert("RGB")
+
+                            # ✅ GUARANTEE aspect ratio after generation
+                            img = _crop_to_aspect(img, aspect_ratio)
+
                             out = BytesIO()
                             img.save(out, format="PNG")
                             png_bytes = out.getvalue()
@@ -268,7 +328,6 @@ def generate_image_for_scene(
                     raise RuntimeError("No image bytes returned")
 
             else:
-                # Older SDK fallback
                 resp = client.GenerativeModel(model_name).generate_content(prompt)
                 candidates = getattr(resp, "candidates", None)
                 if candidates:
@@ -278,6 +337,7 @@ def generate_image_for_scene(
                         if inline and getattr(inline, "data", None):
                             raw = inline.data
                             img = Image.open(BytesIO(raw)).convert("RGB")
+                            img = _crop_to_aspect(img, aspect_ratio)
                             out = BytesIO()
                             img.save(out, format="PNG")
                             png_bytes = out.getvalue()
