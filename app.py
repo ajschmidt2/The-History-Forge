@@ -344,13 +344,23 @@ def _visuals_tab(cfg: Dict[str, Any]) -> None:
             with colA:
                 if st.button(f"🔄 Regenerate image (Scene {idx})", key=f"regen_{idx}", use_container_width=True):
                     # regenerate just this image
-                    one = generate_images_for_scenes([sc], aspect_ratio=cfg["aspect_ratio"])
-                    if isinstance(one, list) and one and one[0] is not None:
+                try:
+                    one = generate_images_for_scenes(
+                        [sc],
+                        aspect_ratio=cfg["aspect_ratio"],
+                    )
+                
+                    if one and one[0] is not None:
                         sc["image"] = one[0]
                         st.success("Image regenerated.")
                         st.rerun()
                     else:
-                        st.error("Image regeneration failed. Check logs / rate limits.")
+                        st.error("Gemini returned no image bytes (IMAGE modality missing or blocked).")
+                
+                except Exception as e:
+                    st.error("Image regeneration failed.")
+                    st.exception(e)
+
             with colB:
                 refine = st.text_input(
                     f"Refine prompt (Scene {idx})",
