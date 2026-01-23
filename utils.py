@@ -392,59 +392,39 @@ def _gemini_image_model(default: str = "gemini-2.5-flash-image") -> str:
     return str(st.secrets.get("gemini_image_model", default))
 
 
-def generate_images_for_scenes(scenes: List[SceneArtifact], aspect_ratio: str) -> List[SceneArtifact]:
-    """Generate (or regenerate) images for the given scenes.
+from PIL import Image
+from io import BytesIO
 
-    Uses Gemini native image generation. If calls fail, creates placeholders.
+def generate_images_for_scenes(scenes, model_name="gemini-2.0-flash-image-preview"):
     """
-    out: List[SceneArtifact] = []
-    try:
-        from PIL import Image
+    Generate a PIL.Image for each scene using Gemini image generation.
+    Returns a list of PIL.Image objects (or None if generation fails).
+    """
+    images = []
 
-        client = _gemini_client()
-        model = _gemini_image_model()
+    for scene in scenes:
+        try:
+            response = genai_client.models.generate_content(
+                model=model_name,
+                contents=[scene.prompt],
+            )
 
-        for sc in scenes:
+            # Gemini returns image bytes inside inline_data
             img = None
-            try:
-                response = client.models.generate_content(
-                    model=model,
-                    contents=[sc.image_prompt],
-                )
-                # The SDK returns mixed parts; image parts are inline_data.
-                for part in getattr(response, "parts", []) or []:
-                    if getattr(part, "inline_data", None) is not None:
-                        img = part.as_image()
-                        break
-                if img is None:
-                    img = _placeholder_image(f"No image part returned for Scene {sc.idx}")
-            except Exception as e:
-                img = _placeholder_image(f"Image generation failed: {e}")
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    raw_bytes = part.inline_data.data
+                    img = Image.open(BytesIO(raw_bytes)).convert("RGB")
+                    break
 
-            out.append(
-                SceneArtifact(
-                    idx=sc.idx,
-                    title=sc.title,
-                    script_excerpt=sc.script_excerpt,
-                    visual_intent=sc.visual_intent,
-                    image_prompt=sc.image_prompt,
-                    image=img,
-                )
-            )
-    except Exception as e:
-        # Provider missing — placeholders for all
-        for sc in scenes:
-            out.append(
-                SceneArtifact(
-                    idx=sc.idx,
-                    title=sc.title,
-                    script_excerpt=sc.script_excerpt,
-                    visual_intent=sc.visual_intent,
-                    image_prompt=sc.image_prompt,
-                    image=_placeholder_image(f"Gemini unavailable: {e}"),
-                )
-            )
-    return out
+            images.append(img)
+
+        except Exception as e:
+            print(f"Image generation failed: {e}")
+            images.append(None)
+
+    return images
+
 
 
 def _placeholder_image(text: str):
