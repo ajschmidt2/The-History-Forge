@@ -1,11 +1,11 @@
-# utils.py
 import os
-import json
 import re
+import json
 import time
 import random
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, List, Optional, Tuple
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple, Union
 
 from PIL import Image
 
@@ -14,10 +14,6 @@ from PIL import Image
 # Secrets
 # ----------------------------
 def _get_secret(name: str, default: str = "") -> str:
-    """
-    Get from Streamlit secrets if available; otherwise from environment variables.
-    Never raises at import time.
-    """
     try:
         import streamlit as st  # type: ignore
         if hasattr(st, "secrets") and name in st.secrets:
@@ -45,10 +41,6 @@ def _openai_client():
 # Gemini client (images)
 # ----------------------------
 def _gemini_client() -> Tuple[Optional[str], Any]:
-    """
-    Returns (provider_name, client_obj).
-    Prefers google-genai.
-    """
     key = _get_secret("gemini_api_key", "").strip()
     if not key:
         return None, None
@@ -61,7 +53,7 @@ def _gemini_client() -> Tuple[Optional[str], Any]:
     except Exception:
         pass
 
-    # Fallback: google-generativeai (older)
+    # Fallback: older SDK
     try:
         import google.generativeai as genai_old  # type: ignore
         genai_old.configure(api_key=key)
@@ -70,6 +62,25 @@ def _gemini_client() -> Tuple[Optional[str], Any]:
         pass
 
     return None, None
+
+
+# ----------------------------
+# Scene dataclass
+# ----------------------------
+@dataclass
+class Scene:
+    index: int
+    title: str
+    script_excerpt: str
+    visual_intent: str
+    image_prompt: str = ""
+    image_bytes: Optional[bytes] = None  # PNG bytes (streamlit-safe)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        # Don’t embed raw bytes in JSON export (keep it lightweight)
+        d["image_bytes"] = bool(self.image_bytes)
+        return d
 
 
 # ----------------------------
@@ -110,133 +121,103 @@ def generate_script(topic: str, length: str, tone: str) -> str:
         "No headings. No bullet lists."
     )
 
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            temperature=0.7,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        return f"Script generation failed: {type(e).__name__}: {e}"
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.7,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content.strip()
 
 
 # ----------------------------
 # Scene splitting
 # ----------------------------
-def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Dict[str, Any]]:
+def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
     script = (script or "").strip()
     if not script:
         return []
 
     client = _openai_client()
     if client is None:
+        # fallback: paragraph split
         paras = [p.strip() for p in re.split(r"\n\s*\n", script) if p.strip()]
         paras = paras[:max_scenes] if paras else [script[:600]]
-        return [
-            {
-                "title": f"Scene {i}",
-                "text": p,
-                "visual_intent": f"Create a cinematic historical visual matching this excerpt: {p[:180]}...",
-            }
-            for i, p in enumerate(paras, start=1)
-        ]
+        out = []
+        for i, p in enumerate(paras, start=1):
+            out.append(
+                Scene(
+                    index=i,
+                    title=f"Scene {i}",
+                    script_excerpt=p,
+                    visual_intent=f"Create a cinematic historical visual matching this excerpt: {p[:180]}...",
+                )
+            )
+        return out
 
-    system = "You are a video director breaking narration into visual scenes. Return ONLY valid JSON."
     payload = {
-        "task": "Split the script into visual scenes.",
+        "task": "Split narration into scenes for visuals.",
         "max_scenes": max_scenes,
         "return": {"format": "json", "field": "scenes"},
         "scene_schema": {"title": "string", "text": "1–3 sentences", "visual_intent": "one sentence"},
         "script": script,
     }
 
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            temperature=0.3,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(payload)},
-            ],
-        )
-        data = json.loads(resp.choices[0].message.content)
-        scenes = data.get("scenes", [])
-        if not isinstance(scenes, list):
-            scenes = []
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.3,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": "Return ONLY valid JSON."},
+            {"role": "user", "content": json.dumps(payload)},
+        ],
+    )
+    data = json.loads(resp.choices[0].message.content)
+    raw = data.get("scenes", [])
+    if not isinstance(raw, list):
+        raw = []
 
-        out: List[Dict[str, Any]] = []
-        for i, sc in enumerate(scenes[:max_scenes], start=1):
-            title = str(sc.get("title", f"Scene {i}"))
-            text = str(sc.get("text", "")).strip()
-            vi = str(sc.get("visual_intent", "")).strip() or f"Create a cinematic historical visual matching this excerpt: {text[:180]}..."
-            out.append({"title": title, "text": text, "visual_intent": vi})
-        return out
+    scenes: List[Scene] = []
+    for i, sc in enumerate(raw[:max_scenes], start=1):
+        title = str(sc.get("title", f"Scene {i}")).strip() or f"Scene {i}"
+        text = str(sc.get("text", "")).strip()
+        vi = str(sc.get("visual_intent", "")).strip()
 
-    except Exception:
-        paras = [p.strip() for p in re.split(r"\n\s*\n", script) if p.strip()]
-        paras = paras[:max_scenes] if paras else [script[:600]]
-        return [
-            {
-                "title": f"Scene {i}",
-                "text": p,
-                "visual_intent": f"Create a cinematic historical visual matching this excerpt: {p[:180]}...",
-            }
-            for i, p in enumerate(paras, start=1)
-        ]
+        if not text:
+            # safe fallback so you never get NoneType errors
+            text = script[:240].strip()
+
+        if not vi:
+            vi = f"Create a cinematic historical visual matching this excerpt: {text[:180]}..."
+
+        scenes.append(Scene(index=i, title=title, script_excerpt=text, visual_intent=vi))
+
+    return scenes
 
 
 # ----------------------------
-# Prompt generation
+# Prompt generation for scenes
 # ----------------------------
-def generate_prompts(
-    scenes: Union[List[Dict[str, Any]], List[Any]],
-    tone: str,
-    style: str = "photorealistic cinematic",
-) -> List[str]:
+def generate_prompts_for_scenes(scenes: List[Scene], tone: str, style: str = "photorealistic cinematic") -> List[Scene]:
     if not scenes:
-        return []
+        return scenes
 
     client = _openai_client()
     if client is None:
-        prompts: List[str] = []
-        for sc in scenes:
-            if isinstance(sc, dict):
-                vi = sc.get("visual_intent", "")
-                text = sc.get("text", "")
-            else:
-                vi, text = "", str(sc)
-            prompts.append(
-                f"{style}. {tone} tone. {vi}\n"
-                f"Scene excerpt: {text}\n"
+        for s in scenes:
+            s.image_prompt = (
+                f"{style}. {tone} tone. {s.visual_intent}\n"
+                f"Scene excerpt: {s.script_excerpt}\n"
                 "No text, no captions, no watermarks. High detail."
             )
-        return prompts
+        return scenes
 
-    system = (
-        "You are an expert image prompt engineer for historical visuals. "
-        "Make prompts highly specific: subject, setting, era, lighting, camera feel, atmosphere. "
-        "No text overlays. No captions. No watermarks. Return ONLY valid JSON."
-    )
-
-    packed = []
-    for i, sc in enumerate(scenes, start=1):
-        if isinstance(sc, dict):
-            packed.append(
-                {
-                    "index": i,
-                    "title": sc.get("title", f"Scene {i}"),
-                    "text": sc.get("text", ""),
-                    "visual_intent": sc.get("visual_intent", ""),
-                }
-            )
-        else:
-            packed.append({"index": i, "title": f"Scene {i}", "text": str(sc), "visual_intent": ""})
-
+    packed = [
+        {"index": s.index, "title": s.title, "text": s.script_excerpt, "visual_intent": s.visual_intent}
+        for s in scenes
+    ]
     payload = {
         "tone": tone,
         "style": style,
@@ -245,45 +226,37 @@ def generate_prompts(
         "scenes": packed,
     }
 
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            temperature=0.6,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(payload)},
-            ],
-        )
-        data = json.loads(resp.choices[0].message.content)
-        prompts = data.get("prompts", [])
-        if not isinstance(prompts, list):
-            prompts = []
-        while len(prompts) < len(scenes):
-            prompts.append("")
-        return [str(p).strip() for p in prompts[: len(scenes)]]
-    except Exception:
-        # fallback
-        prompts: List[str] = []
-        for sc in scenes:
-            if isinstance(sc, dict):
-                vi = sc.get("visual_intent", "")
-                text = sc.get("text", "")
-            else:
-                vi, text = "", str(sc)
-            prompts.append(
-                f"{style}. {tone} tone. {vi}\n"
-                f"Scene excerpt: {text}\n"
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.6,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": "Return ONLY valid JSON."},
+            {"role": "user", "content": json.dumps(payload)},
+        ],
+    )
+    data = json.loads(resp.choices[0].message.content)
+    prompts = data.get("prompts", [])
+    if not isinstance(prompts, list):
+        prompts = []
+
+    for i, s in enumerate(scenes):
+        p = str(prompts[i]).strip() if i < len(prompts) else ""
+        if not p:
+            p = (
+                f"{style}. {tone} tone. {s.visual_intent}\n"
+                f"Scene excerpt: {s.script_excerpt}\n"
                 "No text, no captions, no watermarks. High detail."
             )
-        return prompts
+        s.image_prompt = p
+
+    return scenes
 
 
 # ----------------------------
-# Image generation (Gemini)
+# Image generation (one scene at a time)
 # ----------------------------
 def _sleep_backoff(attempt: int) -> None:
-    # Exponential backoff with jitter
     time.sleep(min(20.0, (2 ** attempt)) + random.random())
 
 
@@ -292,110 +265,96 @@ def _is_retryable(err: Exception) -> bool:
     return any(k in msg for k in ["429", "too many requests", "quota", "rate limit", "503", "temporarily", "timeout"])
 
 
-def generate_images_for_scenes(
-    scenes: List[Dict[str, Any]],
+def generate_image_for_scene(
+    scene: Scene,
     aspect_ratio: str = "16:9",
-    model_name: str = "gemini-2.5-flash-preview-image",  # <-- matches your screenshot
-    **kwargs,
-) -> List[Optional[Image.Image]]:
-    """
-    Generates one PIL image per scene using google-genai.
-    Forces response_modalities=["IMAGE"] so you actually get image bytes.
-    """
+    model_name: str = "gemini-2.5-flash-preview-image",  # matches what you showed
+) -> Scene:
     provider, client = _gemini_client()
     if client is None:
-        return [None for _ in scenes]
+        return scene
 
     print(f"[Gemini provider] {provider} model={model_name}")
 
-    images: List[Optional[Image.Image]] = []
+    prompt = (scene.image_prompt or scene.visual_intent or scene.script_excerpt or "").strip()
+    if not prompt:
+        prompt = "A cinematic historical scene."
 
-    for sc in scenes:
-        base_prompt = (sc.get("prompt") or sc.get("visual_intent") or sc.get("text") or "").strip()
-        if not base_prompt:
-            base_prompt = "A cinematic historical scene."
+    prompt = (
+        f"{prompt}\n\n"
+        f"Framing: compose for aspect ratio {aspect_ratio}. "
+        "No text, no captions, no watermarks."
+    )
 
-        prompt = (
-            f"{base_prompt}\n\n"
-            f"Framing: compose for aspect ratio {aspect_ratio}. "
-            "No text, no captions, no watermarks."
-        )
+    png_bytes: Optional[bytes] = None
+    last_err: Optional[Exception] = None
 
-        img: Optional[Image.Image] = None
+    for attempt in range(4):
+        try:
+            if provider == "google-genai":
+                from google.genai import types  # type: ignore
 
-        # retry for transient failures / occasional 429 bursts
-        last_err: Optional[Exception] = None
-        for attempt in range(4):
-            try:
-                if provider == "google-genai":
-                    from google.genai import types  # type: ignore
+                resp = client.models.generate_content(
+                    model=model_name,
+                    contents=[prompt],
+                    config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+                )
 
-                    resp = client.models.generate_content(
-                        model=model_name,
-                        contents=[prompt],
-                        config=types.GenerateContentConfig(
-                            response_modalities=["IMAGE"],  # critical
-                        ),
-                    )
+                # Extract inline bytes
+                for cand in getattr(resp, "candidates", []) or []:
+                    content = getattr(cand, "content", None)
+                    parts = getattr(content, "parts", []) if content else []
+                    for part in parts:
+                        inline = getattr(part, "inline_data", None)
+                        if inline and getattr(inline, "data", None):
+                            raw = inline.data
+                            # Normalize to PNG bytes so Streamlit can display reliably
+                            img = Image.open(BytesIO(raw)).convert("RGB")
+                            out = BytesIO()
+                            img.save(out, format="PNG")
+                            png_bytes = out.getvalue()
+                            break
+                    if png_bytes:
+                        break
 
-                    # Extract inline_data bytes
-                    for cand in getattr(resp, "candidates", []) or []:
-                        content = getattr(cand, "content", None)
-                        parts = getattr(content, "parts", []) if content else []
-                        for part in parts:
-                            inline = getattr(part, "inline_data", None)
-                            if inline and getattr(inline, "data", None):
-                                img = Image.open(BytesIO(inline.data)).convert("RGB")
-                                break
-                        if img is not None:
+                if not png_bytes:
+                    print("[Gemini returned no image bytes] No inline_data.data in response")
+                    raise RuntimeError("No image bytes returned")
+
+            else:
+                # Older SDK fallback (less reliable)
+                resp = client.GenerativeModel(model_name).generate_content(prompt)
+                candidates = getattr(resp, "candidates", None)
+                if candidates:
+                    parts = candidates[0].content.parts
+                    for part in parts:
+                        inline = getattr(part, "inline_data", None)
+                        if inline and getattr(inline, "data", None):
+                            raw = inline.data
+                            img = Image.open(BytesIO(raw)).convert("RGB")
+                            out = BytesIO()
+                            img.save(out, format="PNG")
+                            png_bytes = out.getvalue()
                             break
 
-                    # If still no image, print parts types to logs for debugging
-                    if img is None:
-                        try:
-                            parts_info = []
-                            for cand in getattr(resp, "candidates", []) or []:
-                                content = getattr(cand, "content", None)
-                                parts = getattr(content, "parts", []) if content else []
-                                parts_info.append([type(p).__name__ for p in parts])
-                            print(f"[Gemini returned no image parts] model={model_name} parts={parts_info}")
-                        except Exception as e:
-                            print(f"[Gemini debug failed] {e}")
+                if not png_bytes:
+                    print("[Gemini returned no image bytes] Older SDK path returned no bytes")
+                    raise RuntimeError("No image bytes returned (older SDK path)")
 
-                    # If Gemini returned no bytes, treat as non-retryable unless you want 1 retry
-                    # (we’ll allow one retry because sometimes the first attempt returns text)
-                    if img is None:
-                        raise RuntimeError("No inline image bytes returned (no inline_data.data)")
+            break  # success
 
-                else:
-                    # Older SDK fallback (less reliable for images)
-                    resp = client.GenerativeModel(model_name).generate_content(prompt)
-                    candidates = getattr(resp, "candidates", None)
-                    if candidates:
-                        parts = candidates[0].content.parts
-                        for part in parts:
-                            inline = getattr(part, "inline_data", None)
-                            if inline and getattr(inline, "data", None):
-                                img = Image.open(BytesIO(inline.data)).convert("RGB")
-                                break
-                    if img is None:
-                        raise RuntimeError("No inline image bytes returned (older SDK path)")
+        except Exception as e:
+            last_err = e
+            print(f"[Gemini image gen failed] attempt={attempt+1} {type(e).__name__}: {e}")
+            if _is_retryable(e) and attempt < 3:
+                _sleep_backoff(attempt)
+                continue
+            # Also retry once if response came back text-only (no bytes)
+            if "no image bytes" in str(e).lower() and attempt < 1:
+                _sleep_backoff(attempt)
+                continue
+            break
 
-                # success
-                break
-
-            except Exception as e:
-                last_err = e
-                print(f"[Gemini image gen failed] attempt={attempt+1} err={type(e).__name__}: {e}")
-                if _is_retryable(e) and attempt < 3:
-                    _sleep_backoff(attempt)
-                    continue
-                # also retry once for "no image bytes" because sometimes first response is text
-                if "no inline image bytes" in str(e).lower() and attempt < 1:
-                    _sleep_backoff(attempt)
-                    continue
-                break
-
-        images.append(img)
-
-    return images
+    # Write result back to scene
+    scene.image_bytes = png_bytes
+    return scene
