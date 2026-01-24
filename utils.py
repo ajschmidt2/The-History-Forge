@@ -24,6 +24,10 @@ def _get_secret(name: str, default: str = "") -> str:
     return os.getenv(name, os.getenv(name.upper(), default))
 
 
+def get_secret(name: str, default: str = "") -> str:
+    return _get_secret(name, default)
+
+
 # ----------------------------
 # Clients
 # ----------------------------
@@ -74,6 +78,8 @@ class Scene:
     image_bytes: Optional[bytes] = None  # PNG bytes (streamlit-safe)
     image_variations: List[Optional[bytes]] = field(default_factory=list)
     primary_image_index: int = 0
+    supabase_id: Optional[str] = None
+    status: str = "active"
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
