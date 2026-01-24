@@ -4,6 +4,7 @@ from datetime import datetime
 import zipfile
 import io
 import json
+import random
 
 from utils import (
     Scene,
@@ -30,14 +31,27 @@ def require_login() -> None:
         st.error("Incorrect password")
     st.stop()
 
-def build_export_zip(script: str, scenes: List[Scene]) -> bytes:
+def _get_primary_image(scene: Scene) -> bytes | None:
+    if scene.image_variations:
+        idx = max(0, min(scene.primary_image_index, len(scene.image_variations) - 1))
+        return scene.image_variations[idx]
+    return scene.image_bytes
+
+
+def build_export_zip(script: str, scenes: List[Scene], include_all_variations: bool) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
         z.writestr("script.txt", script or "")
         z.writestr("scenes.json", json.dumps([s.to_dict() for s in scenes], indent=2))
         for s in scenes:
-            if s.image_bytes:
-                z.writestr(f"images/scene_{s.index:02d}.png", s.image_bytes)
+            if include_all_variations and s.image_variations:
+                for i, img in enumerate(s.image_variations, start=1):
+                    if img:
+                        z.writestr(f"images/scene_{s.index:02d}/variation_{i:02d}.png", img)
+            else:
+                primary = _get_primary_image(s)
+                if primary:
+                    z.writestr(f"images/scene_{s.index:02d}.png", primary)
     return buf.getvalue()
 
 def main() -> None:
@@ -48,10 +62,27 @@ def main() -> None:
     st.caption("Generate a YouTube history script + scenes + prompts + images.")
 
     st.sidebar.header("⚙️ Controls")
-    topic = st.sidebar.text_input(
-        "Topic",
-        value=st.session_state.get("topic", "The mystery of Alexander the Great's tomb")
-    )
+    curated_topics = [
+        "The lost city of Atlantis and why it endures",
+        "The mystery of Alexander the Great's tomb",
+        "The night Pompeii vanished beneath ash",
+        "The real story behind the Trojan War",
+        "The rise and fall of the Library of Alexandria",
+        "The secret tunnels of ancient Rome",
+        "How the Black Death reshaped Europe",
+        "The treasure of the Knights Templar",
+        "The longest siege in medieval history",
+        "The spy who saved D-Day",
+        "The shipwreck that changed global trade",
+        "The assassination that sparked World War I",
+    ]
+    topic_default = st.session_state.get("topic", curated_topics[1])
+    topic = st.sidebar.text_input("Topic", value=topic_default, key="topic_input")
+    if st.sidebar.button("🎲 I'm Feeling Lucky", use_container_width=True):
+        lucky_topic = random.choice(curated_topics)
+        st.session_state.topic_input = lucky_topic
+        st.session_state.topic = lucky_topic
+        st.rerun()
     length = st.sidebar.selectbox(
         "Length",
         ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
@@ -91,6 +122,12 @@ def main() -> None:
         step=1,
         help="This sets how many scenes (and therefore how many images) are generated (max 75)."
     )
+    variations_per_scene = st.sidebar.selectbox(
+        "Variations per scene",
+        [1, 2],
+        index=0,
+        help="Create multiple image options per scene."
+    )
 
     st.sidebar.divider()
     if st.sidebar.button("🧹 Reset app state (use after redeploy)", use_container_width=True):
@@ -125,28 +162,45 @@ def main() -> None:
             
             # Pass 1
             for s in scenes:
-                s2 = generate_image_for_scene(
-                    s,
-                    aspect_ratio=aspect_ratio,
-                    visual_style=visual_style,
-                )
-                if not s2.image_bytes:
-                    failed_idxs.append(s2.index)
-                scenes_out.append(s2)
+                variations = []
+                for _ in range(variations_per_scene):
+                    s2 = generate_image_for_scene(
+                        s,
+                        aspect_ratio=aspect_ratio,
+                        visual_style=visual_style,
+                    )
+                    variations.append(s2.image_bytes)
+                s.image_variations = variations
+                s.primary_image_index = 0
+                s.image_bytes = variations[0] if variations else None
+                if any(img is None for img in variations):
+                    failed_idxs.append(s.index)
+                scenes_out.append(s)
             
             # Pass 2 (retry failures once)
             if failed_idxs:
                 status.update(label=f"4/4 Retrying {len(failed_idxs)} failed images…")
                 for i in range(len(scenes_out)):
                     if scenes_out[i].index in failed_idxs:
-                        scenes_out[i] = generate_image_for_scene(
-                            scenes_out[i],
-                            aspect_ratio=aspect_ratio,
-                            visual_style=visual_style,
-                        )
+                        updated_variations = []
+                        for img in scenes_out[i].image_variations:
+                            if img:
+                                updated_variations.append(img)
+                                continue
+                            s2 = generate_image_for_scene(
+                                scenes_out[i],
+                                aspect_ratio=aspect_ratio,
+                                visual_style=visual_style,
+                            )
+                            updated_variations.append(s2.image_bytes)
+                        scenes_out[i].image_variations = updated_variations
+                        primary = _get_primary_image(scenes_out[i])
+                        scenes_out[i].image_bytes = primary
             
             # Count remaining failures
-            failures = sum(1 for s in scenes_out if not s.image_bytes)
+            failures = sum(
+                1 for s in scenes_out if any(img is None for img in s.image_variations)
+            )
             
             st.session_state.scenes = scenes_out
             if failures:
@@ -186,10 +240,35 @@ def main() -> None:
                     st.markdown("**Image prompt**")
                     st.code(s.image_prompt or "—", language="text")
 
-                    if s.image_bytes:
-                        st.image(s.image_bytes, caption=f"Scene {s.index} ({aspect_ratio})", use_container_width=True)
+                    primary = _get_primary_image(s)
+                    if primary:
+                        st.image(primary, caption=f"Scene {s.index} ({aspect_ratio})", use_container_width=True)
                     else:
                         st.error("Image missing for this scene. Check logs for '[Gemini image gen failed]'.")
+
+                    if s.image_variations:
+                        st.markdown("**Variations**")
+                        cols = st.columns(min(len(s.image_variations), 3))
+                        for idx, img in enumerate(s.image_variations):
+                            with cols[idx % len(cols)]:
+                                if img:
+                                    st.image(
+                                        img,
+                                        caption=f"Variation {idx + 1}",
+                                        use_container_width=True,
+                                    )
+                                else:
+                                    st.warning(f"Variation {idx + 1} missing.")
+                                if st.button(
+                                    "Set as primary",
+                                    key=f"primary_{s.index}_{idx}",
+                                    use_container_width=True,
+                                    disabled=idx == s.primary_image_index,
+                                ):
+                                    s.primary_image_index = idx
+                                    s.image_bytes = img
+                                    st.session_state.scenes = scenes
+                                    st.rerun()
 
                     refine = st.text_input(
                         f"Refine prompt (Scene {s.index})",
@@ -207,17 +286,16 @@ def main() -> None:
                                 st.rerun()
 
                     with c2:
-                        if st.button("🔄 Regenerate image", key=f"regen_{s.index}", use_container_width=True):
+                        if st.button("🔄 Regenerate primary image", key=f"regen_{s.index}", use_container_width=True):
                             try:
                                 updated = generate_image_for_scene(
                                     s,
                                     aspect_ratio=aspect_ratio,
                                     visual_style=visual_style,
                                 )
-                                for i in range(len(scenes)):
-                                    if scenes[i].index == s.index:
-                                        scenes[i] = updated
-                                        break
+                                if s.image_variations:
+                                    s.image_variations[s.primary_image_index] = updated.image_bytes
+                                s.image_bytes = updated.image_bytes
                                 st.session_state.scenes = scenes
                                 if updated.image_bytes:
                                     st.success("Image regenerated.")
@@ -236,7 +314,13 @@ def main() -> None:
         if not script or not scenes:
             st.info("Generate a package first.")
         else:
-            zip_bytes = build_export_zip(script, scenes)
+            export_mode = st.radio(
+                "Image export options",
+                ["Primary images only", "All variations"],
+                horizontal=True,
+            )
+            include_all_variations = export_mode == "All variations"
+            zip_bytes = build_export_zip(script, scenes, include_all_variations)
             st.download_button(
                 "⬇️ Download Package (ZIP)",
                 data=zip_bytes,

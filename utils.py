@@ -3,7 +3,7 @@ import re
 import json
 import time
 import random
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Optional, Tuple
 from io import BytesIO
 
@@ -67,10 +67,14 @@ class Scene:
     visual_intent: str
     image_prompt: str = ""
     image_bytes: Optional[bytes] = None  # PNG bytes (streamlit-safe)
+    image_variations: List[Optional[bytes]] = field(default_factory=list)
+    primary_image_index: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["image_bytes"] = bool(self.image_bytes)
+        d["image_variations"] = [bool(b) for b in self.image_variations]
+        d["primary_image_index"] = self.primary_image_index
         return d
 
 
