@@ -184,6 +184,8 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
     if not script:
         return []
 
+    max_scenes = min(max_scenes, 75)
+
     # 1) Start with deterministic fallback that ALWAYS produces exactly N
     fallback = _fallback_chunk_scenes(script, max_scenes)
 
