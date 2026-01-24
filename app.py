@@ -6,6 +6,8 @@ import io
 import json
 import random
 
+from utils import Scene, generate_script, split_script_into_scenes, generate_prompts_for_scenes, generate_image_for_scene
+
 LUCKY_TOPICS = [
     "The day a volcano ended a civilization overnight",
     "A forgotten battle decided by weather, not soldiers",
@@ -18,15 +20,6 @@ LUCKY_TOPICS = [
     "A siege where defenders used an impossible trick to survive",
     "A single wrong turn that rewrote an empire’s future",
 ]
-
-
-from utils import (
-    Scene,
-    generate_script,
-    split_script_into_scenes,
-    generate_prompts_for_scenes,
-    generate_image_for_scene,
-)
 
 def require_login() -> None:
     pw = st.secrets.get("app_password", "").strip()
