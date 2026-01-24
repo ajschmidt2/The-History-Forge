@@ -10,9 +10,6 @@ from io import BytesIO
 from PIL import Image
 
 
-# ----------------------------
-# Secrets
-# ----------------------------
 def _get_secret(name: str, default: str = "") -> str:
     try:
         import streamlit as st  # type: ignore
@@ -23,29 +20,19 @@ def _get_secret(name: str, default: str = "") -> str:
     return os.getenv(name, os.getenv(name.upper(), default))
 
 
-# ----------------------------
-# OpenAI client (text)
-# ----------------------------
 def _openai_client():
     key = _get_secret("openai_api_key", "").strip()
     if not key:
         return None
-    try:
-        from openai import OpenAI  # openai>=1.x
-        return OpenAI(api_key=key)
-    except Exception:
-        return None
+    from openai import OpenAI  # openai>=1.x
+    return OpenAI(api_key=key)
 
 
-# ----------------------------
-# Gemini client (images)
-# ----------------------------
 def _gemini_client() -> Tuple[Optional[str], Any]:
     key = _get_secret("gemini_api_key", "").strip()
     if not key:
         return None, None
 
-    # Preferred: google-genai
     try:
         from google import genai  # type: ignore
         client = genai.Client(api_key=key)
@@ -53,7 +40,6 @@ def _gemini_client() -> Tuple[Optional[str], Any]:
     except Exception:
         pass
 
-    # Fallback: older SDK
     try:
         import google.generativeai as genai_old  # type: ignore
         genai_old.configure(api_key=key)
@@ -64,9 +50,6 @@ def _gemini_client() -> Tuple[Optional[str], Any]:
     return None, None
 
 
-# ----------------------------
-# Scene dataclass
-# ----------------------------
 @dataclass
 class Scene:
     index: int
@@ -74,18 +57,14 @@ class Scene:
     script_excerpt: str
     visual_intent: str
     image_prompt: str = ""
-    image_bytes: Optional[bytes] = None  # PNG bytes (streamlit-safe)
+    image_bytes: Optional[bytes] = None  # PNG bytes
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        # Don’t embed raw bytes in JSON export (keep it lightweight)
         d["image_bytes"] = bool(self.image_bytes)
         return d
 
 
-# ----------------------------
-# Script generation
-# ----------------------------
 def generate_script(topic: str, length: str, tone: str) -> str:
     topic = (topic or "").strip()
     if not topic:
@@ -132,9 +111,6 @@ def generate_script(topic: str, length: str, tone: str) -> str:
     return resp.choices[0].message.content.strip()
 
 
-# ----------------------------
-# Scene splitting
-# ----------------------------
 def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
     script = (script or "").strip()
     if not script:
@@ -142,20 +118,17 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
 
     client = _openai_client()
     if client is None:
-        # fallback: paragraph split
         paras = [p.strip() for p in re.split(r"\n\s*\n", script) if p.strip()]
         paras = paras[:max_scenes] if paras else [script[:600]]
-        out = []
-        for i, p in enumerate(paras, start=1):
-            out.append(
-                Scene(
-                    index=i,
-                    title=f"Scene {i}",
-                    script_excerpt=p,
-                    visual_intent=f"Create a cinematic historical visual matching this excerpt: {p[:180]}...",
-                )
+        return [
+            Scene(
+                index=i,
+                title=f"Scene {i}",
+                script_excerpt=p,
+                visual_intent=f"Create a cinematic historical visual matching this excerpt: {p[:180]}...",
             )
-        return out
+            for i, p in enumerate(paras, start=1)
+        ]
 
     payload = {
         "task": "Split narration into scenes for visuals.",
@@ -174,6 +147,7 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
             {"role": "user", "content": json.dumps(payload)},
         ],
     )
+
     data = json.loads(resp.choices[0].message.content)
     raw = data.get("scenes", [])
     if not isinstance(raw, list):
@@ -182,24 +156,12 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
     scenes: List[Scene] = []
     for i, sc in enumerate(raw[:max_scenes], start=1):
         title = str(sc.get("title", f"Scene {i}")).strip() or f"Scene {i}"
-        text = str(sc.get("text", "")).strip()
-        vi = str(sc.get("visual_intent", "")).strip()
-
-        if not text:
-            # safe fallback so you never get NoneType errors
-            text = script[:240].strip()
-
-        if not vi:
-            vi = f"Create a cinematic historical visual matching this excerpt: {text[:180]}..."
-
+        text = str(sc.get("text", "")).strip() or script[:240].strip()
+        vi = str(sc.get("visual_intent", "")).strip() or f"Create a cinematic historical visual matching this excerpt: {text[:180]}..."
         scenes.append(Scene(index=i, title=title, script_excerpt=text, visual_intent=vi))
-
     return scenes
 
 
-# ----------------------------
-# Prompt generation for scenes
-# ----------------------------
 def generate_prompts_for_scenes(scenes: List[Scene], tone: str, style: str = "photorealistic cinematic") -> List[Scene]:
     if not scenes:
         return scenes
@@ -214,17 +176,8 @@ def generate_prompts_for_scenes(scenes: List[Scene], tone: str, style: str = "ph
             )
         return scenes
 
-    packed = [
-        {"index": s.index, "title": s.title, "text": s.script_excerpt, "visual_intent": s.visual_intent}
-        for s in scenes
-    ]
-    payload = {
-        "tone": tone,
-        "style": style,
-        "task": "Write one image prompt per scene.",
-        "output": {"format": "json", "field": "prompts"},
-        "scenes": packed,
-    }
+    packed = [{"index": s.index, "title": s.title, "text": s.script_excerpt, "visual_intent": s.visual_intent} for s in scenes]
+    payload = {"tone": tone, "style": style, "task": "Write one image prompt per scene.", "output": {"format": "json", "field": "prompts"}, "scenes": packed}
 
     resp = client.chat.completions.create(
         model="gpt-4.1-mini",
@@ -249,13 +202,9 @@ def generate_prompts_for_scenes(scenes: List[Scene], tone: str, style: str = "ph
                 "No text, no captions, no watermarks. High detail."
             )
         s.image_prompt = p
-
     return scenes
 
 
-# ----------------------------
-# Image generation (one scene at a time)
-# ----------------------------
 def _sleep_backoff(attempt: int) -> None:
     time.sleep(min(20.0, (2 ** attempt)) + random.random())
 
@@ -268,7 +217,7 @@ def _is_retryable(err: Exception) -> bool:
 def generate_image_for_scene(
     scene: Scene,
     aspect_ratio: str = "16:9",
-    model_name: str = "gemini-2.5-flash-preview-image",  # matches what you showed
+    model_name: str = "gemini-2.5-flash-image",  # ✅ FIXED MODEL
 ) -> Scene:
     provider, client = _gemini_client()
     if client is None:
@@ -287,7 +236,6 @@ def generate_image_for_scene(
     )
 
     png_bytes: Optional[bytes] = None
-    last_err: Optional[Exception] = None
 
     for attempt in range(4):
         try:
@@ -300,7 +248,6 @@ def generate_image_for_scene(
                     config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
                 )
 
-                # Extract inline bytes
                 for cand in getattr(resp, "candidates", []) or []:
                     content = getattr(cand, "content", None)
                     parts = getattr(content, "parts", []) if content else []
@@ -308,7 +255,6 @@ def generate_image_for_scene(
                         inline = getattr(part, "inline_data", None)
                         if inline and getattr(inline, "data", None):
                             raw = inline.data
-                            # Normalize to PNG bytes so Streamlit can display reliably
                             img = Image.open(BytesIO(raw)).convert("RGB")
                             out = BytesIO()
                             img.save(out, format="PNG")
@@ -322,7 +268,7 @@ def generate_image_for_scene(
                     raise RuntimeError("No image bytes returned")
 
             else:
-                # Older SDK fallback (less reliable)
+                # Older SDK fallback
                 resp = client.GenerativeModel(model_name).generate_content(prompt)
                 candidates = getattr(resp, "candidates", None)
                 if candidates:
@@ -341,20 +287,14 @@ def generate_image_for_scene(
                     print("[Gemini returned no image bytes] Older SDK path returned no bytes")
                     raise RuntimeError("No image bytes returned (older SDK path)")
 
-            break  # success
+            break
 
         except Exception as e:
-            last_err = e
             print(f"[Gemini image gen failed] attempt={attempt+1} {type(e).__name__}: {e}")
             if _is_retryable(e) and attempt < 3:
                 _sleep_backoff(attempt)
                 continue
-            # Also retry once if response came back text-only (no bytes)
-            if "no image bytes" in str(e).lower() and attempt < 1:
-                _sleep_backoff(attempt)
-                continue
             break
 
-    # Write result back to scene
     scene.image_bytes = png_bytes
     return scene
