@@ -159,8 +159,8 @@ def main() -> None:
             script = generate_script(topic=topic, length=length, tone=tone)
             st.session_state.script = script
 
-            status.update(label=f"2/4 Splitting into {num_images} scenes…")
-            scenes = split_script_into_scenes(script, max_scenes=num_images)
+            status.update(label=f"2/4 Splitting into {num_scenes} scenes…")
+            scenes = split_script_into_scenes(script, max_scenes=num_scenes)
             st.session_state.scenes = scenes
 
             status.update(label="3/4 Writing prompts…")
