@@ -598,7 +598,16 @@ def main() -> None:
 
                     primary = _get_primary_image(s)
                     if primary:
-                        st.image(primary, caption=f"Scene {s.index} ({aspect_ratio})", use_container_width=True)
+                        st.image(primary, caption=f"Scene {s.index} ({aspect_ratio})", width=200)
+                        enlarge_key = f"show_primary_{s.index}"
+                        if st.button("Enlarge", key=f"enlarge_{s.index}"):
+                            st.session_state[enlarge_key] = True
+                        if st.session_state.get(enlarge_key):
+                            st.image(
+                                primary,
+                                caption=f"Scene {s.index} ({aspect_ratio})",
+                                use_container_width=True,
+                            )
                     else:
                         st.error("Image missing for this scene. Check logs for '[Gemini image gen failed]'.")
 
