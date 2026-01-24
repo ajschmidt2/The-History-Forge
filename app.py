@@ -82,6 +82,7 @@ def main() -> None:
         lucky_topic = random.choice(curated_topics)
         st.session_state.topic_input = lucky_topic
         st.session_state.topic = lucky_topic
+        st.rerun()
     length = st.sidebar.selectbox(
         "Length",
         ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
