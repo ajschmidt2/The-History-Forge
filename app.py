@@ -132,10 +132,10 @@ def _upload_asset_bytes(client: Client, bucket: str, path: str, data: bytes) -> 
         return False
 
 
-def _sync_scene_order(client: Client, scenes: List[Scene]) -> None:
+def _sync_scene_order(scenes: List[Scene], client: Client | None = None) -> None:
     for idx, scene in enumerate(scenes, start=1):
         scene.index = idx
-        if scene.supabase_id:
+        if client and scene.supabase_id:
             client.table("scenes").update({"order_index": idx}).eq("id", scene.supabase_id).execute()
 
 
@@ -279,13 +279,18 @@ def main() -> None:
         "The shipwreck that changed global trade",
         "The assassination that sparked World War I",
     ]
+    def _set_lucky_topic():
+        lucky_topic = random.choice(curated_topics)
+        st.session_state["topic_input"] = lucky_topic
+        st.session_state["topic"] = lucky_topic
+
     topic_default = st.session_state.get("topic", curated_topics[1])
     topic = st.sidebar.text_input("Topic", value=topic_default, key="topic_input")
-    if st.sidebar.button("🎲 I'm Feeling Lucky", use_container_width=True):
-        lucky_topic = random.choice(curated_topics)
-        st.session_state.topic_input = lucky_topic
-        st.session_state.topic = lucky_topic
-        st.rerun()
+    st.sidebar.button(
+        "🎲 I'm Feeling Lucky",
+        use_container_width=True,
+        on_click=_set_lucky_topic,
+    )
     length = st.sidebar.selectbox(
         "Length",
         ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
@@ -543,8 +548,7 @@ def main() -> None:
                     with action_cols[0]:
                         if st.button("⬆️ Move up", key=f"up_{s.index}", use_container_width=True, disabled=s.index == 1):
                             scenes[s.index - 2], scenes[s.index - 1] = scenes[s.index - 1], scenes[s.index - 2]
-                            if supabase:
-                                _sync_scene_order(supabase, scenes)
+                            _sync_scene_order(scenes, supabase)
                             st.session_state.scenes = scenes
                             st.rerun()
                     with action_cols[1]:
@@ -555,8 +559,7 @@ def main() -> None:
                             disabled=s.index == len(scenes),
                         ):
                             scenes[s.index - 1], scenes[s.index] = scenes[s.index], scenes[s.index - 1]
-                            if supabase:
-                                _sync_scene_order(supabase, scenes)
+                            _sync_scene_order(scenes, supabase)
                             st.session_state.scenes = scenes
                             st.rerun()
                     with action_cols[2]:
@@ -599,17 +602,23 @@ def main() -> None:
                     else:
                         st.error("Image missing for this scene. Check logs for '[Gemini image gen failed]'.")
 
-                    if s.image_variations:
+                    if s.image_variations and len(s.image_variations) > 1:
                         st.markdown("**Variations**")
-                        cols = st.columns(min(len(s.image_variations), 3))
+                        selected_key = f"selected_variation_{s.index}"
+                        if selected_key not in st.session_state:
+                            st.session_state[selected_key] = s.primary_image_index
+
+                        cols = st.columns(min(len(s.image_variations), 4))
                         for idx, img in enumerate(s.image_variations):
                             with cols[idx % len(cols)]:
                                 if img:
-                                    st.image(
-                                        img,
-                                        caption=f"Variation {idx + 1}",
+                                    st.image(img, caption=f"Variation {idx + 1}", width=160)
+                                    if st.button(
+                                        "View larger",
+                                        key=f"view_{s.index}_{idx}",
                                         use_container_width=True,
-                                    )
+                                    ):
+                                        st.session_state[selected_key] = idx
                                 else:
                                     st.warning(f"Variation {idx + 1} missing.")
                                 if st.button(
@@ -635,6 +644,16 @@ def main() -> None:
                                             supabase.table("assets").update({"generation_meta": meta}).eq("id", asset["id"]).execute()
                                     st.session_state.scenes = scenes
                                     st.rerun()
+
+                        selected_idx = st.session_state.get(selected_key, s.primary_image_index)
+                        if 0 <= selected_idx < len(s.image_variations):
+                            selected_img = s.image_variations[selected_idx]
+                            if selected_img:
+                                st.image(
+                                    selected_img,
+                                    caption=f"Selected variation {selected_idx + 1}",
+                                    use_container_width=True,
+                                )
 
                     refine = st.text_input(
                         f"Refine prompt (Scene {s.index})",
