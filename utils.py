@@ -184,9 +184,12 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
     if not script:
         return []
 
+    # 1) Start with deterministic fallback that ALWAYS produces exactly N
+    fallback = _fallback_chunk_scenes(script, max_scenes)
+
     client = _openai_client()
     if client is None:
-        return _fallback_chunk_scenes(script, max_scenes)
+        return fallback
 
     payload = {
         "task": "Split narration into scenes for visuals.",
@@ -196,7 +199,6 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
         "script": script,
     }
 
-    scenes: List[Scene] = []
     try:
         resp = client.chat.completions.create(
             model="gpt-4.1-mini",
@@ -207,65 +209,44 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
                 {"role": "user", "content": json.dumps(payload)},
             ],
         )
+
         data = json.loads(resp.choices[0].message.content)
         raw = data.get("scenes", [])
         if not isinstance(raw, list):
             raw = []
 
-        for i, sc in enumerate(raw[:max_scenes], start=1):
-            title = str(sc.get("title", f"Scene {i}")).strip() or f"Scene {i}"
-            text = str(sc.get("text", "")).strip()
-            vi = str(sc.get("visual_intent", "")).strip()
+        # 2) Overlay model results onto fallback (keeping exact length)
+        for i in range(min(len(raw), max_scenes)):
+            sc = raw[i] if isinstance(raw[i], dict) else {}
+            title = str(sc.get("title", fallback[i].title)).strip() or fallback[i].title
+            text = str(sc.get("text", fallback[i].script_excerpt)).strip() or fallback[i].script_excerpt
+            vi = str(sc.get("visual_intent", fallback[i].visual_intent)).strip() or fallback[i].visual_intent
 
-            if not text:
-                continue
-
-            if not vi:
-                vi = f"Create a strong historical visual that matches this excerpt: {text[:180]}..."
-
-            scenes.append(Scene(index=i, title=title, script_excerpt=text, visual_intent=vi))
+            fallback[i] = Scene(
+                index=i + 1,
+                title=title,
+                script_excerpt=text,
+                visual_intent=vi,
+                image_prompt=fallback[i].image_prompt,
+                image_bytes=fallback[i].image_bytes,
+            )
 
     except Exception:
-        scenes = []
+        # If OpenAI fails or returns weird JSON, we still return fallback
+        pass
 
-    # ✅ ENFORCE EXACT COUNT
-    if len(scenes) != max_scenes:
-        fallback = _fallback_chunk_scenes(script, max_scenes)
-        # If model gave us *some*, prefer its first items, then pad with fallback
-        if scenes:
-            out = []
-            used = set()
-            for s in scenes:
-                out.append(Scene(
-                    index=len(out)+1,
-                    title=s.title or f"Scene {len(out)+1}",
-                    script_excerpt=s.script_excerpt,
-                    visual_intent=s.visual_intent,
-                ))
-                used.add(s.script_excerpt)
-
-            for fb in fallback:
-                if len(out) >= max_scenes:
-                    break
-                if fb.script_excerpt in used:
-                    continue
-                out.append(Scene(
-                    index=len(out)+1,
-                    title=fb.title,
-                    script_excerpt=fb.script_excerpt,
-                    visual_intent=fb.visual_intent,
-                ))
-            scenes = out
-        else:
-            scenes = fallback
-
-    # renumber cleanly
-    for i, s in enumerate(scenes, start=1):
+    # 3) Guarantee numbering + exact length
+    fallback = fallback[:max_scenes]
+    for i, s in enumerate(fallback, start=1):
         s.index = i
         if not s.title:
             s.title = f"Scene {i}"
-    return scenes
+        if not s.script_excerpt:
+            s.script_excerpt = script[:240].strip()
+        if not s.visual_intent:
+            s.visual_intent = f"Create a strong historical visual matching: {s.script_excerpt[:180]}..."
 
+    return fallback
 
 # ----------------------------
 # Prompt generation (ENFORCE one prompt per scene)
