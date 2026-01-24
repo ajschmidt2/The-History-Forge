@@ -279,13 +279,18 @@ def main() -> None:
         "The shipwreck that changed global trade",
         "The assassination that sparked World War I",
     ]
+    def _set_lucky_topic():
+        lucky_topic = random.choice(curated_topics)
+        st.session_state["topic_input"] = lucky_topic
+        st.session_state["topic"] = lucky_topic
+
     topic_default = st.session_state.get("topic", curated_topics[1])
     topic = st.sidebar.text_input("Topic", value=topic_default, key="topic_input")
-    if st.sidebar.button("🎲 I'm Feeling Lucky", use_container_width=True):
-        lucky_topic = random.choice(curated_topics)
-        st.session_state.topic_input = lucky_topic
-        st.session_state.topic = lucky_topic
-        st.rerun()
+    st.sidebar.button(
+        "🎲 I'm Feeling Lucky",
+        use_container_width=True,
+        on_click=_set_lucky_topic,
+    )
     length = st.sidebar.selectbox(
         "Length",
         ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
