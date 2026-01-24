@@ -48,10 +48,52 @@ def main() -> None:
     st.caption("Generate a YouTube history script + scenes + prompts + images.")
 
     st.sidebar.header("⚙️ Controls")
-    topic = st.sidebar.text_input("Topic", value=st.session_state.get("topic", "The mystery of Alexander the Great's tomb"))
-    length = st.sidebar.selectbox("Length", ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"], index=1)
-    tone = st.sidebar.selectbox("Tone", ["Cinematic", "Mysterious", "Educational", "Eerie"], index=0)
-    aspect_ratio = st.sidebar.selectbox("Image aspect ratio", ["16:9", "9:16", "1:1"], index=0)
+    topic = st.sidebar.text_input(
+        "Topic",
+        value=st.session_state.get("topic", "The mystery of Alexander the Great's tomb")
+    )
+    length = st.sidebar.selectbox(
+        "Length",
+        ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
+        index=1
+    )
+    tone = st.sidebar.selectbox(
+        "Tone",
+        ["Cinematic", "Mysterious", "Educational", "Eerie"],
+        index=0
+    )
+
+    aspect_ratio = st.sidebar.selectbox(
+        "Image aspect ratio",
+        ["16:9", "9:16", "1:1"],
+        index=0
+    )
+
+    # ✅ NEW: style selector
+    visual_style = st.sidebar.selectbox(
+        "Image style",
+        [
+            "Photorealistic cinematic",
+            "Illustrated cinematic",
+            "Painterly",
+            "Comic / graphic novel",
+            "Vintage archival photo",
+            "3D render",
+            "Watercolor illustration",
+            "Charcoal / pencil sketch",
+        ],
+        index=0
+    )
+
+    # ✅ NEW: number of images to create (maps to scene count)
+    num_images = st.sidebar.slider(
+        "Number of images to create",
+        min_value=1,
+        max_value=12,
+        value=8,
+        step=1,
+        help="This sets how many scenes (and therefore how many images) are generated."
+    )
 
     st.sidebar.divider()
     if st.sidebar.button("🧹 Reset app state (use after redeploy)", use_container_width=True):
@@ -66,24 +108,36 @@ def main() -> None:
 
     if generate_all:
         st.session_state.topic = topic
+
         with st.status("Generating…", expanded=True) as status:
             status.update(label="1/4 Writing script…")
             script = generate_script(topic=topic, length=length, tone=tone)
             st.session_state.script = script
 
             status.update(label="2/4 Splitting into scenes…")
-            scenes = split_script_into_scenes(script, max_scenes=8)
+            scenes = split_script_into_scenes(script, max_scenes=num_images)  # ✅ NEW
             st.session_state.scenes = scenes
 
             status.update(label="3/4 Writing prompts…")
-            scenes = generate_prompts_for_scenes(scenes, tone=tone)
+            scenes = generate_prompts_for_scenes(
+                scenes,
+                tone=tone,
+                style=visual_style,              # ✅ NEW
+            )
             st.session_state.scenes = scenes
 
             status.update(label="4/4 Generating images…")
             scenes_out = []
             for s in scenes:
-                scenes_out.append(generate_image_for_scene(s, aspect_ratio=aspect_ratio))
+                scenes_out.append(
+                    generate_image_for_scene(
+                        s,
+                        aspect_ratio=aspect_ratio,
+                        visual_style=visual_style,   # ✅ NEW (helps reinforce style)
+                    )
+                )
             st.session_state.scenes = scenes_out
+
             status.update(label="Done ✅", state="complete")
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
@@ -117,7 +171,7 @@ def main() -> None:
                     st.code(s.image_prompt or "—", language="text")
 
                     if s.image_bytes:
-                        st.image(s.image_bytes, caption=f"Scene {s.index}", use_container_width=True)
+                        st.image(s.image_bytes, caption=f"Scene {s.index} ({aspect_ratio})", use_container_width=True)
                     else:
                         st.warning("No image generated for this scene yet.")
 
@@ -139,7 +193,11 @@ def main() -> None:
                     with c2:
                         if st.button("🔄 Regenerate image", key=f"regen_{s.index}", use_container_width=True):
                             try:
-                                updated = generate_image_for_scene(s, aspect_ratio=aspect_ratio)
+                                updated = generate_image_for_scene(
+                                    s,
+                                    aspect_ratio=aspect_ratio,
+                                    visual_style=visual_style,
+                                )
                                 for i in range(len(scenes)):
                                     if scenes[i].index == s.index:
                                         scenes[i] = updated
