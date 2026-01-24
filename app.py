@@ -121,7 +121,9 @@ def main() -> None:
 
             status.update(label="4/4 Generating images…")
             scenes_out = []
-            failures = 0
+            failed_idxs = []
+            
+            # Pass 1
             for s in scenes:
                 s2 = generate_image_for_scene(
                     s,
@@ -129,8 +131,29 @@ def main() -> None:
                     visual_style=visual_style,
                 )
                 if not s2.image_bytes:
-                    failures += 1
+                    failed_idxs.append(s2.index)
                 scenes_out.append(s2)
+            
+            # Pass 2 (retry failures once)
+            if failed_idxs:
+                status.update(label=f"4/4 Retrying {len(failed_idxs)} failed images…")
+                for i in range(len(scenes_out)):
+                    if scenes_out[i].index in failed_idxs:
+                        scenes_out[i] = generate_image_for_scene(
+                            scenes_out[i],
+                            aspect_ratio=aspect_ratio,
+                            visual_style=visual_style,
+                        )
+            
+            # Count remaining failures
+            failures = sum(1 for s in scenes_out if not s.image_bytes)
+            
+            st.session_state.scenes = scenes_out
+            if failures:
+                status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
+            else:
+                status.update(label="Done ✅", state="complete")
+
 
             st.session_state.scenes = scenes_out
             if failures:
