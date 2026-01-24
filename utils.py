@@ -7,6 +7,7 @@ from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Optional, Tuple
 from io import BytesIO
 
+import requests
 from PIL import Image
 
 
@@ -54,6 +55,10 @@ def _gemini_client() -> Tuple[Optional[str], Any]:
         pass
 
     return None, None
+
+
+def _elevenlabs_api_key() -> str:
+    return _get_secret("elevenlabs_api_key", "").strip()
 
 
 # ----------------------------
@@ -496,3 +501,44 @@ def generate_image_for_scene(
 
     scene.image_bytes = png_bytes
     return scene
+
+
+# ----------------------------
+# Voiceover generation (ElevenLabs)
+# ----------------------------
+def generate_voiceover(
+    script: str,
+    voice_id: str,
+    output_format: str = "mp3",
+    model_id: str = "eleven_multilingual_v2",
+) -> Tuple[Optional[bytes], Optional[str]]:
+    script = (script or "").strip()
+    if not script:
+        return None, "Script is empty."
+
+    api_key = _elevenlabs_api_key()
+    if not api_key:
+        return None, "[Missing elevenlabs_api_key] Add it in Streamlit Secrets."
+
+    voice_id = (voice_id or "").strip()
+    if not voice_id:
+        return None, "Voice ID is required."
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "xi-api-key": api_key,
+        "accept": "audio/mpeg" if output_format == "mp3" else "audio/wav",
+        "content-type": "application/json",
+    }
+    payload = {
+        "text": script,
+        "model_id": model_id,
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        if resp.status_code >= 400:
+            return None, f"ElevenLabs error {resp.status_code}: {resp.text}"
+        return resp.content, None
+    except Exception as exc:
+        return None, f"ElevenLabs request failed: {exc}"
