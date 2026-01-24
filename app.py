@@ -86,10 +86,10 @@ def main() -> None:
     num_images = st.sidebar.slider(
         "Number of images to create",
         min_value=1,
-        max_value=12,
+        max_value=75,
         value=8,
         step=1,
-        help="This sets how many scenes (and therefore how many images) are generated."
+        help="This sets how many scenes (and therefore how many images) are generated (max 75)."
     )
 
     st.sidebar.divider()
