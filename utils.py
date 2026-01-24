@@ -421,24 +421,29 @@ def generate_image_for_scene(
     visual_style: str = "Photorealistic cinematic",
     model_name: str = "gemini-2.5-flash-image",
 ) -> Scene:
-    # ... keep everything the same up to png_bytes ...
-    # at the end, instead of: scene.image_bytes = png_bytes
-    if png_bytes:
-        if scene.image_variations is None:
-            scene.image_variations = []
-        scene.image_variations.append(png_bytes)
-    return scene
+    provider, client = _gemini_client()
+    if client is None:
+        return scene
 
-    base = (scene.image_prompt or scene.visual_intent or scene.script_excerpt or "").strip()
+    png_bytes: Optional[bytes] = None  # ✅ MUST be here
+
+    base = (
+        scene.image_prompt
+        or scene.visual_intent
+        or scene.script_excerpt
+        or ""
+    ).strip()
+
     if not base:
         base = "A cinematic historical scene."
 
-    # Keep prompt concise; too long can reduce compliance
     prompt = (
         f"Style: {visual_style}.\n"
         f"{base}\n"
         f"Compose for {aspect_ratio}. No text, logos, captions, or watermarks."
     )
+
+    # then your try/except loops start here
 
     png_bytes: Optional[bytes] = None
     last_error: Optional[str] = None
