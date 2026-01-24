@@ -66,13 +66,25 @@ class Scene:
     script_excerpt: str
     visual_intent: str
     image_prompt: str = ""
-    image_bytes: Optional[bytes] = None  # PNG bytes (streamlit-safe)
+
+    # NEW: multiple variations
+    image_variations: Optional[List[bytes]] = None  # list of PNG bytes
+    primary_image_idx: int = 0  # which variation is "selected"
+
+    # Back-compat convenience
+    @property
+    def image_bytes(self) -> Optional[bytes]:
+        if not self.image_variations:
+            return None
+        if 0 <= self.primary_image_idx < len(self.image_variations):
+            return self.image_variations[self.primary_image_idx]
+        return self.image_variations[0]
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
-        d["image_bytes"] = bool(self.image_bytes)
+        d["has_images"] = bool(self.image_variations)
+        d["num_variations"] = len(self.image_variations or [])
         return d
-
 
 # ----------------------------
 # Script generation
@@ -409,9 +421,13 @@ def generate_image_for_scene(
     visual_style: str = "Photorealistic cinematic",
     model_name: str = "gemini-2.5-flash-image",
 ) -> Scene:
-    provider, client = _gemini_client()
-    if client is None:
-        return scene
+    # ... keep everything the same up to png_bytes ...
+    # at the end, instead of: scene.image_bytes = png_bytes
+    if png_bytes:
+        if scene.image_variations is None:
+            scene.image_variations = []
+        scene.image_variations.append(png_bytes)
+    return scene
 
     base = (scene.image_prompt or scene.visual_intent or scene.script_excerpt or "").strip()
     if not base:
