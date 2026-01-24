@@ -12,6 +12,7 @@ from utils import (
     split_script_into_scenes,
     generate_prompts_for_scenes,
     generate_image_for_scene,
+    generate_voiceover,
 )
 
 def require_login() -> None:
@@ -38,11 +39,18 @@ def _get_primary_image(scene: Scene) -> bytes | None:
     return scene.image_bytes
 
 
-def build_export_zip(script: str, scenes: List[Scene], include_all_variations: bool) -> bytes:
+def build_export_zip(
+    script: str,
+    scenes: List[Scene],
+    include_all_variations: bool,
+    voiceover_bytes: bytes | None,
+) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
         z.writestr("script.txt", script or "")
         z.writestr("scenes.json", json.dumps([s.to_dict() for s in scenes], indent=2))
+        if voiceover_bytes:
+            z.writestr("voiceover.mp3", voiceover_bytes)
         for s in scenes:
             if include_all_variations and s.image_variations:
                 for i, img in enumerate(s.image_variations, start=1):
@@ -128,6 +136,10 @@ def main() -> None:
         index=0,
         help="Create multiple image options per scene."
     )
+    st.sidebar.divider()
+    enable_voiceover = st.sidebar.toggle("Generate narration voiceover", value=False)
+    voice_id_default = st.session_state.get("voice_id", "r6YelDxIe1A40lDuW365")
+    voice_id = st.sidebar.text_input("ElevenLabs voice ID", value=voice_id_default)
 
     st.sidebar.divider()
     if st.sidebar.button("🧹 Reset app state (use after redeploy)", use_container_width=True):
@@ -144,19 +156,20 @@ def main() -> None:
         st.session_state.topic = topic
 
         with st.status("Generating…", expanded=True) as status:
-            status.update(label="1/4 Writing script…")
+            status.update(label="1/5 Writing script…")
             script = generate_script(topic=topic, length=length, tone=tone)
             st.session_state.script = script
+            st.session_state.voice_id = voice_id
 
-            status.update(label=f"2/4 Splitting into {num_images} scenes…")
+            status.update(label=f"2/5 Splitting into {num_images} scenes…")
             scenes = split_script_into_scenes(script, max_scenes=num_images)
             st.session_state.scenes = scenes
 
-            status.update(label="3/4 Writing prompts…")
+            status.update(label="3/5 Writing prompts…")
             scenes = generate_prompts_for_scenes(scenes, tone=tone, style=visual_style)
             st.session_state.scenes = scenes
 
-            status.update(label="4/4 Generating images…")
+            status.update(label="4/5 Generating images…")
             scenes_out = []
             failed_idxs = []
             
@@ -179,7 +192,7 @@ def main() -> None:
             
             # Pass 2 (retry failures once)
             if failed_idxs:
-                status.update(label=f"4/4 Retrying {len(failed_idxs)} failed images…")
+                status.update(label=f"4/5 Retrying {len(failed_idxs)} failed images…")
                 for i in range(len(scenes_out)):
                     if scenes_out[i].index in failed_idxs:
                         updated_variations = []
@@ -203,6 +216,16 @@ def main() -> None:
             )
             
             st.session_state.scenes = scenes_out
+            if enable_voiceover:
+                status.update(label="5/5 Generating voiceover…")
+                voiceover_bytes, voiceover_error = generate_voiceover(
+                    script=script,
+                    voice_id=voice_id,
+                    output_format="mp3",
+                )
+                st.session_state.voiceover_bytes = voiceover_bytes
+                st.session_state.voiceover_error = voiceover_error
+
             if failures:
                 status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
             else:
@@ -311,16 +334,23 @@ def main() -> None:
         st.subheader("Export")
         script = st.session_state.get("script", "")
         scenes: List[Scene] = st.session_state.get("scenes", [])
+        voiceover_bytes = st.session_state.get("voiceover_bytes") if enable_voiceover else None
+        voiceover_error = st.session_state.get("voiceover_error") if enable_voiceover else None
         if not script or not scenes:
             st.info("Generate a package first.")
         else:
+            if enable_voiceover:
+                if voiceover_bytes:
+                    st.audio(voiceover_bytes, format="audio/mp3")
+                elif voiceover_error:
+                    st.error(f"Voiceover failed: {voiceover_error}")
             export_mode = st.radio(
                 "Image export options",
                 ["Primary images only", "All variations"],
                 horizontal=True,
             )
             include_all_variations = export_mode == "All variations"
-            zip_bytes = build_export_zip(script, scenes, include_all_variations)
+            zip_bytes = build_export_zip(script, scenes, include_all_variations, voiceover_bytes)
             st.download_button(
                 "⬇️ Download Package (ZIP)",
                 data=zip_bytes,
@@ -334,6 +364,7 @@ def main() -> None:
 **Streamlit Cloud → Secrets**
 - `openai_api_key`
 - `gemini_api_key`
+- `elevenlabs_api_key`
 - optional: `app_password`
 
 If images fail, check logs for:
