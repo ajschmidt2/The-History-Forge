@@ -5,6 +5,20 @@ import zipfile
 import io
 import json
 
+LUCKY_TOPICS = [
+    "The day a volcano ended a civilization overnight",
+    "A forgotten battle decided by weather, not soldiers",
+    "The real story behind the Dancing Plague of 1518",
+    "A spy who changed the outcome of a war with one message",
+    "A ship that vanished and reappeared decades later (what really happened)",
+    "The lost library that may have contained the ancient world’s greatest knowledge",
+    "The con artist who fooled kings and started a scandal",
+    "The ‘unknown’ invention that quietly changed modern life",
+    "A siege where defenders used an impossible trick to survive",
+    "A single wrong turn that rewrote an empire’s future",
+]
+
+
 from utils import (
     Scene,
     generate_script,
@@ -36,8 +50,20 @@ def build_export_zip(script: str, scenes: List[Scene]) -> bytes:
         z.writestr("script.txt", script or "")
         z.writestr("scenes.json", json.dumps([s.to_dict() for s in scenes], indent=2))
         for s in scenes:
-            if s.image_bytes:
-                z.writestr(f"images/scene_{s.index:02d}.png", s.image_bytes)
+            if s.image_variations:
+                # Export primary image
+                z.writestr(
+                    f"images/scene_{s.index:02d}_primary.png",
+                    s.image_bytes,
+                )
+
+                # Export all variations
+                for i, img_bytes in enumerate(s.image_variations, start=1):
+                    z.writestr(
+                        f"images/scene_{s.index:02d}_var_{i}.png",
+                        img_bytes,
+                    )
+
     return buf.getvalue()
 
 def main() -> None:
@@ -47,11 +73,26 @@ def main() -> None:
     st.title("🔥 The History Forge")
     st.caption("Generate a YouTube history script + scenes + prompts + images.")
 
-    st.sidebar.header("⚙️ Controls")
-    topic = st.sidebar.text_input(
-        "Topic",
-        value=st.session_state.get("topic", "The mystery of Alexander the Great's tomb")
-    )
+    st.sidebar.subheader("🧠 Topic")
+    topic_col1, topic_col2 = st.sidebar.columns([3, 2])
+    with topic_col1:
+        topic = st.text_input(
+            "Put your own topic",
+            value=st.session_state.get("topic", ""),
+            placeholder="e.g., The mystery of Alexander the Great’s tomb",
+            label_visibility="collapsed",
+        )
+    with topic_col2:
+        if st.button("🍀 I’m feeling lucky", use_container_width=True):
+            import random
+            picked = random.choice(LUCKY_TOPICS)
+            st.session_state.topic = picked
+            st.rerun()
+    
+    # Ensure we always have something
+    if not topic.strip():
+        topic = st.session_state.get("topic", "The mystery of Alexander the Great's tomb")
+
     length = st.sidebar.selectbox(
         "Length",
         ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
@@ -83,13 +124,20 @@ def main() -> None:
         index=0
     )
 
-    num_images = st.sidebar.slider(
-        "Number of images to create",
+    num_scenes = st.sidebar.slider(
+        "Number of scenes (images = scenes)",
         min_value=1,
-        max_value=12,
-        value=8,
+        max_value=60,   # bump higher if you want
+        value=10,
         step=1,
-        help="This sets how many scenes (and therefore how many images) are generated."
+        help="Creates one image per scene by default."
+    )
+
+    variations_per_scene = st.sidebar.selectbox(
+    "Image variations per scene",
+    [1, 2],
+    index=0,
+    help="2 variations doubles image generation time and quota usage."
     )
 
     st.sidebar.divider()
@@ -120,46 +168,38 @@ def main() -> None:
             st.session_state.scenes = scenes
 
             status.update(label="4/4 Generating images…")
+
             scenes_out = []
-            failed_idxs = []
+            failed = 0
             
-            # Pass 1
             for s in scenes:
-                s2 = generate_image_for_scene(
-                    s,
-                    aspect_ratio=aspect_ratio,
-                    visual_style=visual_style,
-                )
-                if not s2.image_bytes:
-                    failed_idxs.append(s2.index)
-                scenes_out.append(s2)
+                # clear prior variations for a clean run
+                s.image_variations = []
+                s.primary_image_idx = 0
             
-            # Pass 2 (retry failures once)
-            if failed_idxs:
-                status.update(label=f"4/4 Retrying {len(failed_idxs)} failed images…")
-                for i in range(len(scenes_out)):
-                    if scenes_out[i].index in failed_idxs:
-                        scenes_out[i] = generate_image_for_scene(
-                            scenes_out[i],
-                            aspect_ratio=aspect_ratio,
-                            visual_style=visual_style,
-                        )
+                for v in range(variations_per_scene):
+                    s = generate_image_for_scene(
+                        s,
+                        aspect_ratio=aspect_ratio,
+                        visual_style=visual_style,
+                    )
+                    if not s.image_variations or len(s.image_variations) < (v + 1):
+                        failed += 1
             
-            # Count remaining failures
-            failures = sum(1 for s in scenes_out if not s.image_bytes)
+                scenes_out.append(s)
+            
+            # Optional: one retry pass for failures
+            if failed:
+                status.update(label=f"4/4 Retrying some failed images…")
+                for s in scenes_out:
+                    # retry only scenes missing any image
+                    if not s.image_variations:
+                        for v in range(variations_per_scene):
+                            s = generate_image_for_scene(s, aspect_ratio=aspect_ratio, visual_style=visual_style)
             
             st.session_state.scenes = scenes_out
-            if failures:
-                status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
-            else:
-                status.update(label="Done ✅", state="complete")
+            status.update(label="Done ✅", state="complete")
 
-
-            st.session_state.scenes = scenes_out
-            if failures:
-                status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
-            else:
-                status.update(label="Done ✅", state="complete")
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
 
@@ -192,10 +232,21 @@ def main() -> None:
                     st.markdown("**Image prompt**")
                     st.code(s.image_prompt or "—", language="text")
 
-                    if s.image_bytes:
-                        st.image(s.image_bytes, caption=f"Scene {s.index} ({aspect_ratio})", use_container_width=True)
+                    if s.image_variations:
+                        st.markdown("**Variations**")
+                        cols = st.columns(min(4, len(s.image_variations)))
+                        for i, img_b in enumerate(s.image_variations):
+                            with cols[i % len(cols)]:
+                                st.image(img_b, use_container_width=True)
+                                if st.button("Set primary", key=f"primary_{s.index}_{i}", use_container_width=True):
+                                    s.primary_image_idx = i
+                                    st.session_state.scenes = scenes
+                                    st.rerun()
+                    
+                        st.markdown("**Selected (primary) image**")
+                        st.image(s.image_bytes, caption=f"Scene {s.index} primary", use_container_width=True)
                     else:
-                        st.error("Image missing for this scene. Check logs for '[Gemini image gen failed]'.")
+                        st.error("No image generated for this scene.")
 
                     refine = st.text_input(
                         f"Refine prompt (Scene {s.index})",
