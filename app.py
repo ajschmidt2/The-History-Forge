@@ -62,14 +62,12 @@ def main() -> None:
         ["Cinematic", "Mysterious", "Educational", "Eerie"],
         index=0
     )
-
     aspect_ratio = st.sidebar.selectbox(
         "Image aspect ratio",
         ["16:9", "9:16", "1:1"],
         index=0
     )
 
-    # ✅ NEW: style selector
     visual_style = st.sidebar.selectbox(
         "Image style",
         [
@@ -85,7 +83,6 @@ def main() -> None:
         index=0
     )
 
-    # ✅ NEW: number of images to create (maps to scene count)
     num_images = st.sidebar.slider(
         "Number of images to create",
         min_value=1,
@@ -114,31 +111,32 @@ def main() -> None:
             script = generate_script(topic=topic, length=length, tone=tone)
             st.session_state.script = script
 
-            status.update(label="2/4 Splitting into scenes…")
-            scenes = split_script_into_scenes(script, max_scenes=num_images)  # ✅ NEW
+            status.update(label=f"2/4 Splitting into {num_images} scenes…")
+            scenes = split_script_into_scenes(script, max_scenes=num_images)
             st.session_state.scenes = scenes
 
             status.update(label="3/4 Writing prompts…")
-            scenes = generate_prompts_for_scenes(
-                scenes,
-                tone=tone,
-                style=visual_style,              # ✅ NEW
-            )
+            scenes = generate_prompts_for_scenes(scenes, tone=tone, style=visual_style)
             st.session_state.scenes = scenes
 
             status.update(label="4/4 Generating images…")
             scenes_out = []
+            failures = 0
             for s in scenes:
-                scenes_out.append(
-                    generate_image_for_scene(
-                        s,
-                        aspect_ratio=aspect_ratio,
-                        visual_style=visual_style,   # ✅ NEW (helps reinforce style)
-                    )
+                s2 = generate_image_for_scene(
+                    s,
+                    aspect_ratio=aspect_ratio,
+                    visual_style=visual_style,
                 )
-            st.session_state.scenes = scenes_out
+                if not s2.image_bytes:
+                    failures += 1
+                scenes_out.append(s2)
 
-            status.update(label="Done ✅", state="complete")
+            st.session_state.scenes = scenes_out
+            if failures:
+                status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
+            else:
+                status.update(label="Done ✅", state="complete")
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
 
@@ -159,6 +157,7 @@ def main() -> None:
         if not scenes:
             st.info("Generate a package to see scenes and images here.")
         else:
+            st.caption(f"Scenes generated: {len(scenes)} (target: {num_images})")
             for s in scenes:
                 with st.expander(f"Scene {s.index}: {s.title}", expanded=(s.index == 1)):
                     st.markdown("**Scene excerpt**")
@@ -173,7 +172,7 @@ def main() -> None:
                     if s.image_bytes:
                         st.image(s.image_bytes, caption=f"Scene {s.index} ({aspect_ratio})", use_container_width=True)
                     else:
-                        st.warning("No image generated for this scene yet.")
+                        st.error("Image missing for this scene. Check logs for '[Gemini image gen failed]'.")
 
                     refine = st.text_input(
                         f"Refine prompt (Scene {s.index})",
@@ -203,7 +202,10 @@ def main() -> None:
                                         scenes[i] = updated
                                         break
                                 st.session_state.scenes = scenes
-                                st.success("Image regenerated.")
+                                if updated.image_bytes:
+                                    st.success("Image regenerated.")
+                                else:
+                                    st.error("Regeneration failed (no bytes returned). Check logs.")
                                 st.rerun()
                             except Exception as e:
                                 st.error("Image regeneration failed.")
@@ -234,8 +236,8 @@ def main() -> None:
 - optional: `app_password`
 
 If images fail, check logs for:
-- `[Gemini provider]`
 - `[Gemini image gen failed]`
+- `[Gemini image gen final] FAILED`
 """.strip()
         )
 
