@@ -1,327 +1,355 @@
-"""History Video Generator (Streamlit).
-
-Gemini-inspired, artifact-first UI:
-* Script and visuals are treated as editable artifacts (not chat logs).
-* Progressive status updates ("steps") build trust without exposing prompts.
-* Per-scene regeneration and inline refinements reduce frustration.
-
-Run:
-    pip install -r requirements.txt
-    streamlit run app.py
-"""
-
-from __future__ import annotations
-
-import io
-import zipfile
+# app.py
+import streamlit as st
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-import streamlit as st
-
-from utils import (
-    DEFAULT_ASPECT_RATIO,
-    DEFAULT_NUM_SCENES,
-    SceneArtifact,
-    compile_export_bundle,
-    generate_images_for_scenes,
-    generate_script,
-    plan_scenes,
-    refine_script,
-    refine_scene_prompt,
-)
+import utils  # import the whole module so the app still loads even if function names change slightly
 
 
-APP_TITLE = "History Video Generator"
+# ----------------------------
+# Simple password gate (optional)
+# ----------------------------
+def require_login() -> None:
+    """
+    If you set `app_password` in Streamlit secrets, users must enter it to use the app.
+    If not set, the app runs without a login gate.
+    """
+    pw = st.secrets.get("app_password", "").strip() if hasattr(st, "secrets") else ""
+    if not pw:
+        return
+
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return
+
+    st.title("🔒 The History Forge")
+    st.caption("Enter password to continue")
+
+    entered = st.text_input("Password", type="password")
+    if st.button("Log in", use_container_width=True):
+        if entered == pw:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Incorrect password")
+
+    st.stop()
 
 
-def _init_state() -> None:
-    st.session_state.setdefault("script", "")
-    st.session_state.setdefault("scenes", [])  # List[SceneArtifact]
-    st.session_state.setdefault("last_topic", "")
+# ----------------------------
+# Scene normalization helpers
+# ----------------------------
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
 
 
-def _sidebar_controls() -> dict:
-    """All user controls live in the sidebar for a frictionless main canvas."""
-    with st.sidebar:
-        st.header("Controls")
-        topic = st.text_input(
-            "Topic / Title",
-            placeholder="e.g., The Battle of Olustee — Florida’s Bloodiest Civil War Battle",
+def normalize_scenes(raw_scenes: Any, script: str = "") -> List[Dict[str, Any]]:
+    """
+    Forces a stable schema for every scene so UI never crashes:
+
+    scene = {
+      "index": int,
+      "title": str,
+      "text": str,              # excerpt / narration snippet
+      "visual_intent": str,
+      "prompt": str,
+      "image": PIL.Image | None
+    }
+    """
+    if raw_scenes is None:
+        return []
+
+    # common shapes: {"scenes":[...]}, list, str, dict, pydantic model(s)
+    if isinstance(raw_scenes, dict) and "scenes" in raw_scenes and isinstance(raw_scenes["scenes"], list):
+        raw_scenes = raw_scenes["scenes"]
+    elif isinstance(raw_scenes, (str, dict)):
+        raw_scenes = [raw_scenes]
+
+    if not isinstance(raw_scenes, list):
+        raw_scenes = [raw_scenes]
+
+    out: List[Dict[str, Any]] = []
+    for i, sc in enumerate(raw_scenes, start=1):
+        title = _get(sc, "title", "") or ""
+        text = _get(sc, "text", "") or _get(sc, "script_excerpt", "") or _get(sc, "excerpt", "") or _get(sc, "narration", "") or ""
+        visual_intent = _get(sc, "visual_intent", "") or ""
+
+        prompt = _get(sc, "prompt", "") or _get(sc, "image_prompt", "") or ""
+        img = _get(sc, "image", None)
+
+        # fallback title
+        if not title:
+            seed = (text or prompt or "").strip()
+            title = (seed[:60] + "...") if len(seed) > 60 else (seed if seed else "Visual Scene")
+
+        # fallback text (derive chunk from script if needed)
+        if not text and script:
+            approx = max(180, min(360, len(script) // max(1, 6)))
+            start = min(len(script), (i - 1) * approx)
+            text = script[start : start + approx].strip()
+
+        # fallback visual intent
+        if not visual_intent:
+            if text:
+                visual_intent = f"Create a cinematic historical visual matching this excerpt: {text[:180]}..."
+            else:
+                visual_intent = f"Visualize: {title}"
+
+        out.append(
+            {
+                "index": i,
+                "title": title,
+                "text": text,
+                "visual_intent": visual_intent,
+                "prompt": prompt,
+                "image": img,
+            }
         )
+    return out
 
-        length_option = st.selectbox(
-            "Length",
-            [
-                "Short (~60 seconds)",
-                "Standard (8–10 minutes)",
-                "Long (20–30 minutes)",
-            ],
-            index=1,
-        )
 
-        tone = st.selectbox(
-            "Tone",
-            ["Cinematic", "Mysterious", "Educational", "Eerie"],
-            index=0,
-        )
+# ----------------------------
+# Export helper
+# ----------------------------
+def export_zip(script: str, scenes: List[Dict[str, Any]]) -> bytes:
+    import io, json, zipfile
 
-        st.divider()
-        st.subheader("Visuals")
-        aspect_ratio = st.selectbox(
-            "Aspect ratio",
-            ["16:9", "9:16", "1:1"],
-            index=["16:9", "9:16", "1:1"].index(DEFAULT_ASPECT_RATIO),
-        )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr("script.txt", script or "")
+        z.writestr("scenes.json", json.dumps(scenes, indent=2, default=str))
 
-        visual_style = st.selectbox(
-            "Style preset",
-            [
-                "Photorealistic cinematic",
-                "Illustrated documentary",
-                "Painterly",
-                "Vintage archival",
-            ],
-            index=0,
-        )
+        for sc in scenes:
+            img = sc.get("image")
+            if img is None:
+                continue
+            try:
+                img_buf = io.BytesIO()
+                img.save(img_buf, format="PNG")
+                z.writestr(f"images/scene_{sc['index']:02d}.png", img_buf.getvalue())
+            except Exception:
+                pass
 
-        num_scenes = st.slider("Number of scenes", 3, 12, DEFAULT_NUM_SCENES)
-        generate_images = st.toggle("Generate images", value=True)
+    return buf.getvalue()
 
-        st.divider()
-        st.subheader("Quality")
-        strict_accuracy = st.toggle(
-            "Strict historical fidelity",
-            value=True,
-            help="When on, the planner avoids anachronisms and prefers neutral, plausible details.",
-        )
-        no_people = st.toggle(
-            "No people",
-            value=False,
-            help="Useful for B-roll style visuals and avoiding faces.",
-        )
 
-        st.divider()
-        generate_btn = st.button("Generate package", type="primary", use_container_width=True)
+# ----------------------------
+# UI
+# ----------------------------
+def sidebar_config() -> Dict[str, Any]:
+    st.sidebar.header("⚙️ Controls")
+
+    topic = st.sidebar.text_input(
+        "Topic",
+        value=st.session_state.get("topic", "The mystery of Alexander the Great's tomb"),
+    )
+
+    length = st.sidebar.selectbox(
+        "Length",
+        ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
+        index=1,
+    )
+
+    tone = st.sidebar.selectbox(
+        "Tone",
+        ["Cinematic", "Mysterious", "Educational", "Eerie"],
+        index=0,
+    )
+
+    aspect_ratio = st.sidebar.selectbox("Image aspect ratio", ["16:9", "9:16", "1:1"], index=0)
+
+    st.sidebar.divider()
+    generate = st.sidebar.button("✨ Generate Package", type="primary", use_container_width=True)
+
+    st.sidebar.divider()
+    debug_mode = st.sidebar.toggle("Debug mode (show API errors)", value=True)
 
     return {
         "topic": topic,
-        "length_option": length_option,
+        "length": length,
         "tone": tone,
         "aspect_ratio": aspect_ratio,
-        "visual_style": visual_style,
-        "num_scenes": num_scenes,
-        "generate_images": generate_images,
-        "strict_accuracy": strict_accuracy,
-        "no_people": no_people,
-        "generate_btn": generate_btn,
+        "generate": generate,
+        "debug_mode": debug_mode,
     }
 
 
-def _generate_all(cfg: dict) -> None:
-    """One-click generation with progressive status updates."""
-    topic = (cfg.get("topic") or "").strip()
-    if not topic:
-        st.warning("Enter a topic/title in the sidebar to generate.")
-        return
+def generate_all(cfg: Dict[str, Any]) -> None:
+    st.session_state.topic = cfg["topic"]
 
-    status = st.status("Working…", expanded=True)
-    try:
-        status.write("Structuring story arc")
-        script = generate_script(topic, cfg["length_option"], cfg["tone"], strict_accuracy=cfg["strict_accuracy"])
-
+    with st.status("Generating…", expanded=True) as status:
+        status.update(label="1/4 Writing script…")
+        script = utils.generate_script(cfg["topic"], cfg["length"], cfg["tone"])
         st.session_state.script = script
-        st.session_state.last_topic = topic
 
-        status.update(label="Planning scenes", state="running")
-        scenes = plan_scenes(
-            script=script,
-            topic=topic,
-            tone=cfg["tone"],
-            visual_style=cfg["visual_style"],
-            aspect_ratio=cfg["aspect_ratio"],
-            num_scenes=cfg["num_scenes"],
-            strict_accuracy=cfg["strict_accuracy"],
-            no_people=cfg["no_people"],
-        )
+        status.update(label="2/4 Splitting into scenes…")
+        raw_scenes = utils.split_script_into_scenes(script)
+        scenes = normalize_scenes(raw_scenes, script=script)
+
+        status.update(label="3/4 Writing image prompts…")
+        prompts = utils.generate_prompts(scenes, cfg["tone"])
+        if isinstance(prompts, list):
+            for i, p in enumerate(prompts):
+                if i < len(scenes):
+                    scenes[i]["prompt"] = str(p).strip()
+
+        status.update(label="4/4 Generating images…")
+        imgs = utils.generate_images_for_scenes(scenes, aspect_ratio=cfg["aspect_ratio"])
+        if isinstance(imgs, list):
+            for i, im in enumerate(imgs):
+                if i < len(scenes):
+                    scenes[i]["image"] = im
+
         st.session_state.scenes = scenes
-
-        if cfg["generate_images"]:
-            status.update(label="Generating images", state="running")
-            st.session_state.scenes = generate_images_for_scenes(scenes, aspect_ratio=cfg["aspect_ratio"])
-
-        status.update(label="Done", state="complete")
-    except Exception as e:
-        status.update(label="Something went wrong", state="error")
-        st.exception(e)
+        status.update(label="Done ✅", state="complete")
 
 
-def _script_tab(cfg: dict) -> None:
+def script_tab() -> None:
     st.subheader("Narration Script")
-
-    if not st.session_state.script:
+    script = st.session_state.get("script", "")
+    if not script:
         st.info("Generate a package to see the script here.")
         return
 
-    st.text_area(
-        "Script artifact",
-        value=st.session_state.script,
-        height=420,
-        key="script_editor",
-    )
+    st.text_area("Script (editable)", value=script, height=420, key="script_editor")
 
-    col1, col2 = st.columns([2, 3], gap="large")
+    col1, col2 = st.columns([1, 1])
     with col1:
-        if st.button("Save edits to script", use_container_width=True):
+        if st.button("💾 Save edits to script", use_container_width=True):
             st.session_state.script = st.session_state.script_editor
             st.success("Saved.")
-
     with col2:
-        refine_instruction = st.text_input(
-            "Refine script (optional)",
-            placeholder="e.g., Make the hook punchier and tighten the ending CTA.",
+        zip_bytes = export_zip(st.session_state.get("script", ""), st.session_state.get("scenes", []))
+        st.download_button(
+            "⬇️ Export Package (ZIP)",
+            data=zip_bytes,
+            file_name=f"history_forge_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
+            use_container_width=True,
         )
-        if st.button("Apply refinement", use_container_width=True) and refine_instruction.strip():
-            with st.status("Refining script…", expanded=False):
-                st.session_state.script = refine_script(
-                    script=st.session_state.script,
-                    instruction=refine_instruction.strip(),
-                    tone=cfg["tone"],
-                )
-            st.success("Refined. (You can refine again.)")
 
 
-def _visuals_tab(cfg: dict) -> None:
+def visuals_tab(cfg: Dict[str, Any]) -> None:
     st.subheader("Scenes & Visuals")
-    scenes: list[SceneArtifact] = st.session_state.scenes
-
+    scenes: List[Dict[str, Any]] = st.session_state.get("scenes", [])
     if not scenes:
         st.info("Generate a package to see scenes and images here.")
         return
 
-    for idx, sc in enumerate(scenes, start=1):
-        with st.expander(f"Scene {idx}: {sc.title}", expanded=(idx == 1)):
-            left, right = st.columns([2, 2], gap="large")
-            with left:
-                st.markdown("**Scene excerpt**")
-                st.write(sc.script_excerpt)
-                st.markdown("**Visual intent**")
-                st.write(sc.visual_intent)
+    for sc in scenes:
+        idx = sc.get("index", 0)
+        title = sc.get("title", f"Scene {idx}")
 
-                st.markdown("**Image prompt**")
-                st.code(sc.image_prompt, language="text")
+        with st.expander(f"Scene {idx}: {title}", expanded=(idx == 1)):
+            st.markdown("**Scene excerpt**")
+            if sc.get("text"):
+                st.write(sc["text"])
+            else:
+                st.caption("No excerpt available for this scene.")
 
-                refine_p = st.text_input(
-                    f"Refine prompt for Scene {idx}",
-                    key=f"refine_prompt_{idx}",
-                    placeholder="e.g., add more fog, stronger rim light, and keep era-accurate uniforms.",
+            st.markdown("**Visual intent**")
+            if sc.get("visual_intent"):
+                st.write(sc["visual_intent"])
+            else:
+                st.caption("No visual intent available for this scene.")
+
+            st.markdown("**Image prompt**")
+            if sc.get("prompt"):
+                st.code(sc["prompt"], language="text")
+            else:
+                st.caption("No prompt available for this scene (yet).")
+
+            img = sc.get("image")
+            if img is not None:
+                st.image(img, caption=f"Scene {idx} image", use_container_width=True)
+            else:
+                st.warning("No image generated for this scene (yet).")
+
+            colA, colB = st.columns([1, 2])
+
+            with colB:
+                refine = st.text_input(
+                    f"Refine prompt (Scene {idx})",
+                    value="",
+                    key=f"refine_{idx}",
+                    placeholder="e.g., closer shot, warmer lighting, fog, cinematic shadows…",
                 )
-                btn_cols = st.columns(2)
-                with btn_cols[0]:
-                    if st.button("Apply prompt refinement", key=f"apply_prompt_{idx}", use_container_width=True) and refine_p.strip():
-                        sc2 = refine_scene_prompt(
-                            scene=sc,
-                            instruction=refine_p.strip(),
-                            tone=cfg["tone"],
-                            visual_style=cfg["visual_style"],
-                            aspect_ratio=cfg["aspect_ratio"],
-                            strict_accuracy=cfg["strict_accuracy"],
-                            no_people=cfg["no_people"],
-                        )
-                        scenes[idx - 1] = sc2
-                        st.session_state.scenes = scenes
+                if st.button(f"✏️ Apply refinement (Scene {idx})", key=f"apply_ref_{idx}", use_container_width=True):
+                    if refine.strip():
+                        base = sc.get("prompt", "").strip() or sc.get("visual_intent", "").strip() or sc.get("text", "").strip()
+                        sc["prompt"] = (base + "\n\nRefinement: " + refine.strip()).strip()
                         st.success("Prompt updated.")
+                        st.rerun()
 
-                with btn_cols[1]:
-                    if st.button("Regenerate image", key=f"regen_img_{idx}", use_container_width=True):
-                        with st.status(f"Generating image for Scene {idx}…", expanded=False):
-                            scenes[idx - 1] = generate_images_for_scenes([scenes[idx - 1]], aspect_ratio=cfg["aspect_ratio"])[0]
-                            st.session_state.scenes = scenes
-                        st.success("Image regenerated.")
+            with colA:
+                if st.button(f"🔄 Regenerate image (Scene {idx})", key=f"regen_{idx}", use_container_width=True):
+                    # prevent accidental double-click hammering
+                    import time
+                    now = time.time()
+                    last = st.session_state.get("last_regen_time", 0.0)
+                    if now - last < 2.0:
+                        st.warning("Please wait a moment between regenerations.")
+                        st.stop()
+                    st.session_state["last_regen_time"] = now
 
-            with right:
-                if sc.image is None:
-                    st.info("No image yet. Toggle ‘Generate images’ and run, or click Regenerate image.")
-                else:
-                    st.image(sc.image, caption=f"Scene {idx} image", use_container_width=True)
+                    try:
+                        one = utils.generate_images_for_scenes([sc], aspect_ratio=cfg["aspect_ratio"])
 
+                        if cfg["debug_mode"]:
+                            st.write("Debug: returned type =", type(one).__name__)
+                            st.write("Debug: returned len =", (len(one) if isinstance(one, list) else "n/a"))
+                            st.write("Debug: first item type =", (type(one[0]).__name__ if isinstance(one, list) and one else "n/a"))
 
-def _export_tab(cfg: dict) -> None:
-    st.subheader("Export")
+                        if isinstance(one, list) and one and one[0] is not None:
+                            sc["image"] = one[0]
+                            st.success("Image regenerated.")
+                            st.rerun()
+                        else:
+                            st.error("Gemini returned no image bytes. Open Manage app → Logs for the exact error details.")
 
-    if not st.session_state.script or not st.session_state.scenes:
-        st.info("Generate a package first.")
-        return
-
-    bundle = compile_export_bundle(
-        topic=st.session_state.last_topic or "history-video",
-        script=st.session_state.script,
-        scenes=st.session_state.scenes,
-        meta={
-            "tone": cfg["tone"],
-            "length": cfg["length_option"],
-            "aspect_ratio": cfg["aspect_ratio"],
-            "visual_style": cfg["visual_style"],
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
-        },
-    )
-
-    bio = io.BytesIO()
-    with zipfile.ZipFile(bio, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path, data in bundle.items():
-            zf.writestr(path, data)
-    bio.seek(0)
-
-    st.download_button(
-        "Download ZIP package (script + prompts + images)",
-        data=bio,
-        file_name=f"{(st.session_state.last_topic or 'history-video').strip().replace(' ', '_')}_package.zip",
-        mime="application/zip",
-        use_container_width=True,
-    )
-
-    st.caption("Tip: This ZIP is editor-friendly: a script file, a JSON scene list, and per-scene PNG images.")
+                    except Exception as e:
+                        st.error("Image regeneration threw an exception:")
+                        st.exception(e)
 
 
 def main() -> None:
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
-    _init_state()
+    st.set_page_config(page_title="The History Forge", layout="wide")
+    require_login()
 
-    st.title("🎬 History Video Generator")
-    st.caption("One click → narration script + scene-matched images. Artifact-first UI.")
+    st.title("🔥 The History Forge")
+    st.caption("Generate a complete history YouTube package: script + scenes + visual prompts + images.")
 
-    cfg = _sidebar_controls()
-    if cfg["generate_btn"]:
-        _generate_all(cfg)
+    cfg = sidebar_config()
 
-    create_tab, script_tab, visuals_tab, export_tab = st.tabs(
-        ["Create", "Script", "Visuals", "Export"]
-    )
+    if cfg["generate"]:
+        generate_all(cfg)
 
-    with create_tab:
-        st.subheader("Create")
+    tab1, tab2 = st.tabs(["📝 Script", "🖼️ Scenes & Visuals"])
+    with tab1:
+        script_tab()
+    with tab2:
+        visuals_tab(cfg)
+
+    with st.sidebar.expander("ℹ️ Setup checklist", expanded=False):
         st.markdown(
-            "Use the sidebar to set your topic, tone, length, and visuals—then click **Generate package**."
-        )
-        if st.session_state.last_topic:
-            st.success(f"Latest package: {st.session_state.last_topic}")
-        st.markdown("---")
-        st.markdown("### What you get")
-        st.markdown(
-            "- A clean narration script (no stage directions)\n"
-            "- Scene-by-scene breakdown\n"
-            "- An image prompt per scene\n"
-            "- Generated images (optional toggle)\n"
-            "- Exportable ZIP for your editor"
+            """
+**Streamlit Cloud → Secrets**
+- `openai_api_key` (script + prompts)
+- `gemini_api_key` (images)
+- optional: `app_password` (login gate)
+
+If images still fail, check **Manage app → Logs** for the `[Gemini …]` debug lines.
+            """.strip()
         )
 
-    with script_tab:
-        _script_tab(cfg)
-
-    with visuals_tab:
-        _visuals_tab(cfg)
-
-    with export_tab:
-        _export_tab(cfg)
+    if st.sidebar.button("Log out", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
 
 
 if __name__ == "__main__":
