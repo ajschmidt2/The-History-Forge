@@ -508,5 +508,9 @@ def generate_image_for_scene(
     if not png_bytes and last_error:
         print(f"[Gemini image gen final] FAILED: {last_error}")
 
-    scene.image_bytes = png_bytes
+    if png_bytes:
+    if scene.image_variations is None:
+        scene.image_variations = []
+    scene.image_variations.append(png_bytes)
+
     return scene
