@@ -78,7 +78,6 @@ class Scene:
     image_bytes: Optional[bytes] = None  # PNG bytes (streamlit-safe)
     image_variations: List[Optional[bytes]] = field(default_factory=list)
     primary_image_index: int = 0
-    supabase_id: Optional[str] = None
     status: str = "active"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -491,15 +490,22 @@ def generate_image_for_scene(
     if client is None:
         return scene
 
-    base = (scene.image_prompt or scene.visual_intent or scene.script_excerpt or "").strip()
+    base = (scene.image_prompt or "").strip()
     if not base:
-        base = "A cinematic historical scene."
+        base = "Create a cinematic historical visual."
+
+    context = (
+        f"Visual intent: {scene.visual_intent}\n"
+        f"Scene excerpt: {scene.script_excerpt}\n"
+        "No text overlays, captions, logos, or watermarks."
+    ).strip()
 
     # Keep prompt concise; too long can reduce compliance
     prompt = (
         f"Style: {visual_style}.\n"
-        f"{base}\n"
-        f"Compose for {aspect_ratio}. No text, logos, captions, or watermarks."
+        f"{base}\n\n"
+        f"{context}\n"
+        f"Compose for {aspect_ratio}."
     )
 
     png_bytes: Optional[bytes] = None
