@@ -68,6 +68,9 @@ def _init_supabase() -> Client | None:
                 if auth and getattr(auth, "user", None):
                     st.session_state.supabase_owner_id = auth.user.id
             except Exception as exc:
+                st.warning(
+                    "Supabase sign-in failed. The app will run without a Supabase owner session."
+                )
                 st.session_state.supabase_auth_error = str(exc)
         st.session_state.supabase_client = client
     return st.session_state.supabase_client
@@ -133,10 +136,6 @@ def _upload_asset_bytes(client: Client, bucket: str, path: str, data: bytes) -> 
         return True
     except Exception:
         return False
-
-
-def _record_supabase_error(context: str, exc: Exception) -> None:
-    st.session_state.supabase_last_error = f"{context}: {exc}"
 
 
 def _sync_scene_order(scenes: List[Scene], client: Client | None = None) -> None:
@@ -808,9 +807,6 @@ If images fail, check logs for:
         auth_error = st.session_state.get("supabase_auth_error")
         if auth_error:
             st.warning(f"Supabase auth error: {auth_error}")
-        last_error = st.session_state.get("supabase_last_error")
-        if last_error:
-            st.warning(f"Supabase data error: {last_error}")
 
 if __name__ == "__main__":
     main()
