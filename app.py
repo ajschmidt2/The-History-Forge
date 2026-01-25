@@ -70,7 +70,23 @@ def _as_uuid(value: Any | None) -> str | None:
         return None
 
 
-def _resolve_story_id(story_row: Dict[str, Any], cfg: Dict[str, str]) -> str | None:
+def _as_int_id(value: Any | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        return int(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def _resolve_story_id(story_row: Dict[str, Any], cfg: Dict[str, str]) -> str | int | None:
     preferred_field = cfg.get("story_id_field") or None
     field_candidates = [
         preferred_field,
@@ -81,9 +97,13 @@ def _resolve_story_id(story_row: Dict[str, Any], cfg: Dict[str, str]) -> str | N
     for field in field_candidates:
         if not field:
             continue
-        value = _as_uuid(story_row.get(field))
-        if value:
+        raw_value = story_row.get(field)
+        value = _as_uuid(raw_value)
+        if value is not None:
             return value
+        int_value = _as_int_id(raw_value)
+        if int_value is not None:
+            return int_value
     return None
 
 
@@ -129,7 +149,7 @@ def _load_latest_story(client: Client) -> Dict[str, Any] | None:
     return None
 
 
-def _load_story_scenes(client: Client, story_id: str) -> List[Dict[str, Any]]:
+def _load_story_scenes(client: Client, story_id: str | int) -> List[Dict[str, Any]]:
     resp = (
         client.table("scenes")
         .select("*")
@@ -255,10 +275,10 @@ def main() -> None:
         if story:
             settings = story.get("settings") or {}
             story_id = _resolve_story_id(story, supabase_cfg)
-            if not story_id:
+            if story_id is None:
                 st.session_state.supabase_last_error = (
-                    "Latest story has no valid UUID id. "
-                    "Set SUPABASE_STORY_ID_FIELD to the UUID column name."
+                    "Latest story has no valid ID. "
+                    "Set SUPABASE_STORY_ID_FIELD to the stories ID column name."
                 )
             else:
                 st.session_state.story_id = story_id
@@ -521,10 +541,10 @@ def main() -> None:
                 except Exception as exc:
                     st.session_state.supabase_last_error = f"Insert story: {exc}"
                     story_id = None
-                if not story_id and story_row:
+                if story_id is None and story_row:
                     st.session_state.supabase_last_error = (
-                        "Insert story: missing valid UUID id in response. "
-                        "Set SUPABASE_STORY_ID_FIELD to the UUID column name."
+                        "Insert story: missing valid id in response. "
+                        "Set SUPABASE_STORY_ID_FIELD to the stories ID column name."
                     )
                 if story_id:
                     st.session_state.story_id = story_id
@@ -851,7 +871,7 @@ def main() -> None:
 - `SUPABASE_EMAIL`
 - `SUPABASE_PASSWORD`
 - optional: `SUPABASE_OWNER_ID` (UUID if auth is unavailable)
-- optional: `SUPABASE_STORY_ID_FIELD` (UUID column in stories table)
+- optional: `SUPABASE_STORY_ID_FIELD` (ID column in stories table, UUID or integer)
 - optional: `SUPABASE_STORAGE_BUCKET` (default: `scene-assets`)
 
 If images fail, check logs for:
