@@ -45,6 +45,8 @@ def require_login() -> None:
 def _get_supabase_config() -> Dict[str, str]:
     return {
         "url": st.secrets.get("SUPABASE_URL", "").strip() or get_secret("SUPABASE_URL", "").strip(),
+        "service_role_key": st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        or get_secret("SUPABASE_SERVICE_ROLE_KEY", "").strip(),
         "anon_key": st.secrets.get("SUPABASE_ANON_KEY", "").strip() or get_secret("SUPABASE_ANON_KEY", "").strip(),
         "email": st.secrets.get("SUPABASE_EMAIL", "").strip() or get_secret("SUPABASE_EMAIL", "").strip(),
         "password": st.secrets.get("SUPABASE_PASSWORD", "").strip() or get_secret("SUPABASE_PASSWORD", "").strip(),
@@ -56,10 +58,11 @@ def _get_supabase_config() -> Dict[str, str]:
 
 def _init_supabase() -> Client | None:
     cfg = _get_supabase_config()
-    if not cfg["url"] or not cfg["anon_key"]:
+    service_role_key = cfg["service_role_key"] or cfg["anon_key"]
+    if not cfg["url"] or not service_role_key:
         return None
     if "supabase_client" not in st.session_state:
-        client = create_client(cfg["url"], cfg["anon_key"])
+        client = create_client(cfg["url"], service_role_key)
         if cfg["email"] and cfg["password"]:
             try:
                 auth = client.auth.sign_in_with_password(
@@ -791,7 +794,8 @@ def main() -> None:
 - `elevenlabs_api_key`
 - optional: `APP_PASSCODE` (or legacy `app_password`)
 - `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (preferred)
+- `SUPABASE_ANON_KEY` (fallback)
 - `SUPABASE_EMAIL`
 - `SUPABASE_PASSWORD`
 - optional: `SUPABASE_STORAGE_BUCKET` (default: `scene-assets`)
