@@ -47,6 +47,28 @@ youtube_history_generator/
     └── secrets.toml      # API keys (never commit real secrets)
 ```
 
+## Generate visuals from your own script (copy/paste helper)
+
+If you already have a finished narration script and just want visuals, you can
+copy/paste this helper from `utils.py` into your own script or project. It
+splits the script into scenes, writes image prompts, generates images, and
+returns the list of `Scene` objects plus a failure count.
+
+```python
+from utils import generate_visuals_from_script
+
+scenes, failures = generate_visuals_from_script(
+    script=my_script_text,
+    num_images=8,
+    tone="Cinematic",
+    visual_style="Photorealistic cinematic",
+    aspect_ratio="16:9",
+    variations_per_scene=1,
+)
+
+# Each Scene includes .image_prompt, .image_bytes, and .image_variations.
+```
+
 ## Setup
 
 1. **Clone the repository** or copy these files into your own project.

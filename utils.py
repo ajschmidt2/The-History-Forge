@@ -344,6 +344,59 @@ def generate_prompts_for_scenes(
     return scenes
 
 
+def generate_visuals_from_script(
+    script: str,
+    num_images: int,
+    tone: str,
+    visual_style: str,
+    aspect_ratio: str,
+    variations_per_scene: int,
+) -> Tuple[List[Scene], int]:
+    scenes = split_script_into_scenes(script, max_scenes=num_images)
+    scenes = generate_prompts_for_scenes(scenes, tone=tone, style=visual_style)
+
+    scenes_out: List[Scene] = []
+    failed_idxs: List[int] = []
+
+    for scene in scenes:
+        variations: List[Optional[bytes]] = []
+        for _ in range(max(1, variations_per_scene)):
+            updated = generate_image_for_scene(
+                scene,
+                aspect_ratio=aspect_ratio,
+                visual_style=visual_style,
+            )
+            variations.append(updated.image_bytes)
+        scene.image_variations = variations
+        scene.primary_image_index = 0
+        scene.image_bytes = variations[0] if variations else None
+        if any(img is None for img in variations):
+            failed_idxs.append(scene.index)
+        scenes_out.append(scene)
+
+    if failed_idxs:
+        for scene in scenes_out:
+            if scene.index not in failed_idxs:
+                continue
+            updated_variations: List[Optional[bytes]] = []
+            for img in scene.image_variations:
+                if img:
+                    updated_variations.append(img)
+                    continue
+                updated = generate_image_for_scene(
+                    scene,
+                    aspect_ratio=aspect_ratio,
+                    visual_style=visual_style,
+                )
+                updated_variations.append(updated.image_bytes)
+            scene.image_variations = updated_variations
+            primary = updated_variations[scene.primary_image_index] if updated_variations else None
+            scene.image_bytes = primary
+
+    failures = sum(1 for scene in scenes_out if any(img is None for img in scene.image_variations))
+    return scenes_out, failures
+
+
 # ----------------------------
 # Aspect ratio enforcement (guaranteed)
 # ----------------------------

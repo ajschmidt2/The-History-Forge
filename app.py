@@ -18,6 +18,7 @@ from utils import (
     generate_image_for_scene,
     generate_voiceover,
     get_secret,
+    generate_visuals_from_script,
 )
 
 def require_login() -> None:
@@ -436,59 +437,24 @@ def main() -> None:
             st.session_state.voice_id = voice_id
 
             status.update(label=f"2/5 Splitting into {num_images} scenes…")
-            scenes = split_script_into_scenes(script, max_scenes=num_images)
-            st.session_state.scenes = scenes
+            st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
 
             status.update(label="3/5 Writing prompts…")
-            scenes = generate_prompts_for_scenes(scenes, tone=tone, style=visual_style)
-            st.session_state.scenes = scenes
+            st.session_state.scenes = generate_prompts_for_scenes(
+                st.session_state.scenes,
+                tone=tone,
+                style=visual_style,
+            )
 
             status.update(label="4/5 Generating images…")
-            scenes_out = []
-            failed_idxs = []
-            
-            # Pass 1
-            for s in scenes:
-                variations = []
-                for _ in range(variations_per_scene):
-                    s2 = generate_image_for_scene(
-                        s,
-                        aspect_ratio=aspect_ratio,
-                        visual_style=visual_style,
-                    )
-                    variations.append(s2.image_bytes)
-                s.image_variations = variations
-                s.primary_image_index = 0
-                s.image_bytes = variations[0] if variations else None
-                if any(img is None for img in variations):
-                    failed_idxs.append(s.index)
-                scenes_out.append(s)
-            
-            # Pass 2 (retry failures once)
-            if failed_idxs:
-                status.update(label=f"4/5 Retrying {len(failed_idxs)} failed images…")
-                for i in range(len(scenes_out)):
-                    if scenes_out[i].index in failed_idxs:
-                        updated_variations = []
-                        for img in scenes_out[i].image_variations:
-                            if img:
-                                updated_variations.append(img)
-                                continue
-                            s2 = generate_image_for_scene(
-                                scenes_out[i],
-                                aspect_ratio=aspect_ratio,
-                                visual_style=visual_style,
-                            )
-                            updated_variations.append(s2.image_bytes)
-                        scenes_out[i].image_variations = updated_variations
-                        primary = _get_primary_image(scenes_out[i])
-                        scenes_out[i].image_bytes = primary
-            
-            # Count remaining failures
-            failures = sum(
-                1 for s in scenes_out if any(img is None for img in s.image_variations)
+            scenes_out, failures = generate_visuals_from_script(
+                script=script,
+                num_images=num_images,
+                tone=tone,
+                visual_style=visual_style,
+                aspect_ratio=aspect_ratio,
+                variations_per_scene=variations_per_scene,
             )
-            
             st.session_state.scenes = scenes_out
             if enable_voiceover:
                 status.update(label="5/5 Generating voiceover…")
