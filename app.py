@@ -103,6 +103,7 @@ def main() -> None:
 
     topic_default = st.session_state.get("topic", curated_topics[1])
     topic = st.sidebar.text_input("Topic", value=topic_default, key="topic_input")
+    st.session_state["active_story_title"] = topic
     st.sidebar.button(
         "🎲 I'm Feeling Lucky",
         use_container_width=True,
@@ -123,6 +124,7 @@ def main() -> None:
         ["16:9", "9:16", "1:1"],
         index=0
     )
+    st.session_state["aspect_ratio"] = aspect_ratio
 
     visual_style = st.sidebar.selectbox(
         "Image style",
@@ -138,6 +140,7 @@ def main() -> None:
         ],
         index=0
     )
+    st.session_state["visual_style"] = visual_style
 
     num_images = st.sidebar.slider(
         "Number of images to create",
