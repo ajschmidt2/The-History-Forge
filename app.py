@@ -140,12 +140,12 @@ def tab_paste_script() -> None:
     st.subheader("Paste your own script")
     st.caption("Paste an existing script and use it as the source for scenes, prompts, images, and export.")
 
-    st.session_state.script_text = st.text_area(
+    st.text_area(
         "Script",
         value=st.session_state.script_text,
         height=320,
         placeholder="Paste your script here...",
-        key="script_text_area",
+        key="script_text",
     )
 
     cols = st.columns([1, 3])
@@ -210,7 +210,7 @@ def tab_generate_script() -> None:
         value=st.session_state.script_text,
         height=320,
         placeholder="Generated script will appear here...",
-        key="generated_script_text",
+        key="script_text",
     )
     st.session_state.script_text = generated_text
     st.session_state.script = generated_text
