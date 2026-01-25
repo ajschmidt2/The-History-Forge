@@ -454,6 +454,7 @@ def main() -> None:
                 visual_style=visual_style,
                 aspect_ratio=aspect_ratio,
                 variations_per_scene=variations_per_scene,
+                scenes=st.session_state.scenes,
             )
             st.session_state.scenes = scenes_out
             if enable_voiceover:

@@ -332,13 +332,18 @@ def generate_prompts_for_scenes(
 
     for i, s in enumerate(scenes):
         p = prompts[i].strip()
+        context = (
+            f"Visual intent: {s.visual_intent}\n"
+            f"Scene excerpt: {s.script_excerpt}\n"
+            "No text overlays, captions, logos, or watermarks. High detail."
+        )
         if not p:
             p = (
                 f"Style: {style_phrase}. Tone: {tone}.\n"
-                f"{s.visual_intent}\n"
-                f"Scene excerpt: {s.script_excerpt}\n"
-                "No text overlays, captions, logos, or watermarks. High detail."
+                f"{context}"
             )
+        else:
+            p = f"{p}\n\n{context}"
         s.image_prompt = p
 
     return scenes
@@ -351,9 +356,11 @@ def generate_visuals_from_script(
     visual_style: str,
     aspect_ratio: str,
     variations_per_scene: int,
+    scenes: Optional[List[Scene]] = None,
 ) -> Tuple[List[Scene], int]:
-    scenes = split_script_into_scenes(script, max_scenes=num_images)
-    scenes = generate_prompts_for_scenes(scenes, tone=tone, style=visual_style)
+    if scenes is None:
+        scenes = split_script_into_scenes(script, max_scenes=num_images)
+        scenes = generate_prompts_for_scenes(scenes, tone=tone, style=visual_style)
 
     scenes_out: List[Scene] = []
     failed_idxs: List[int] = []
