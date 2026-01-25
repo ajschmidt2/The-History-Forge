@@ -807,6 +807,11 @@ If images fail, check logs for:
         last_error = st.session_state.get("supabase_last_error")
         if last_error:
             st.warning(f"Supabase data error: {last_error}")
+            if "row-level security" in last_error or "row level security" in last_error:
+                st.info(
+                    "RLS blocked the insert. Add an INSERT policy for the table(s) that allows "
+                    "`owner_id = auth.uid()` for the signed-in user."
+                )
 
 if __name__ == "__main__":
     main()
