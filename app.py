@@ -68,6 +68,9 @@ def _init_supabase() -> Client | None:
                 if auth and getattr(auth, "user", None):
                     st.session_state.supabase_owner_id = auth.user.id
             except Exception as exc:
+                st.warning(
+                    "Supabase sign-in failed. The app will run without a Supabase owner session."
+                )
                 st.session_state.supabase_auth_error = str(exc)
         st.session_state.supabase_client = client
     return st.session_state.supabase_client
