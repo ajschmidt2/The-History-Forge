@@ -167,7 +167,8 @@ def main() -> None:
 
     st.sidebar.divider()
     generate_all = st.sidebar.button("✨ Generate Package", type="primary", use_container_width=True)
-    generate_from_paste = st.sidebar.button("📋 Generate visuals from pasted script", use_container_width=True)
+    split_pasted_script = st.sidebar.button("🧩 Split pasted script into scenes", use_container_width=True)
+    generate_paste_visuals = st.sidebar.button("🎨 Create prompts + images", use_container_width=True)
     debug_mode = st.sidebar.toggle("Debug mode", value=True)
 
     with st.sidebar.expander("📄 Paste your script (optional)"):
@@ -180,7 +181,8 @@ def main() -> None:
         if st.button("Use pasted script", use_container_width=True):
             st.session_state.pasted_script = pasted_script
             st.session_state.script = pasted_script
-            st.success("Pasted script loaded. Now generate visuals.")
+            st.session_state.visuals_script = pasted_script
+            st.success("Pasted script loaded. Now split into scenes.")
 
     if generate_all:
         st.session_state.topic = topic
@@ -189,6 +191,7 @@ def main() -> None:
             status.update(label="1/5 Writing script…")
             script = generate_script(topic=topic, length=length, tone=tone)
             st.session_state.script = script
+            st.session_state.visuals_script = script
             st.session_state.voice_id = voice_id
 
             status.update(label=f"2/5 Splitting into {num_images} scenes…")
@@ -239,7 +242,7 @@ def main() -> None:
             "voice_id": voice_id,
         }
 
-    if generate_from_paste:
+    if split_pasted_script:
         script = (
             st.session_state.get("pasted_script_input", "")
             or st.session_state.get("pasted_script", "")
@@ -249,18 +252,33 @@ def main() -> None:
         else:
             st.session_state.topic = "Pasted script"
             st.session_state.script = script
+            st.session_state.visuals_script = script
             with st.status("Generating…", expanded=True) as status:
-                status.update(label=f"1/3 Splitting pasted script into {num_images} scenes…")
+                status.update(label=f"1/1 Splitting pasted script into {num_images} scenes…")
                 st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
+                status.update(label="Scenes ready ✅", state="complete")
 
-                status.update(label="2/3 Writing prompts…")
+    if generate_paste_visuals:
+        script = (
+            st.session_state.get("visuals_script", "")
+            or st.session_state.get("pasted_script_input", "")
+            or st.session_state.get("pasted_script", "")
+        ).strip()
+        scenes: List[Scene] = st.session_state.get("scenes", [])
+        if not script:
+            st.sidebar.error("Paste a script first.")
+        elif not scenes:
+            st.sidebar.error("Split the script into scenes first.")
+        else:
+            with st.status("Generating…", expanded=True) as status:
+                status.update(label="1/2 Writing prompts…")
                 st.session_state.scenes = generate_prompts_for_scenes(
-                    st.session_state.scenes,
+                    scenes,
                     tone=tone,
                     style=visual_style,
                 )
 
-                status.update(label="3/3 Generating images…")
+                status.update(label="2/2 Generating images…")
                 scenes_out, failures = generate_visuals_from_script(
                     script=script,
                     num_images=num_images,
@@ -292,6 +310,15 @@ def main() -> None:
 
     with tab_visuals:
         st.subheader("Scenes & Visuals")
+        visuals_script = st.session_state.get("visuals_script") or st.session_state.get("script", "")
+        if visuals_script:
+            with st.expander("Script used for image generation", expanded=True):
+                st.text_area(
+                    "Visuals script (read-only)",
+                    value=visuals_script,
+                    height=220,
+                    disabled=True,
+                )
         scenes: List[Scene] = sorted(st.session_state.get("scenes", []), key=lambda s: s.index)
         if not scenes:
             st.info("Generate a package to see scenes and images here.")
