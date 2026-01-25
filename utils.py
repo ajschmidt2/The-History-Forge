@@ -187,7 +187,11 @@ def _fallback_chunk_scenes(script: str, target_n: int) -> List[Scene]:
                 index=i,
                 title=f"Scene {i}",
                 script_excerpt=txt2,
-                visual_intent=f"Create a strong historical visual that matches this excerpt: {txt2[:180]}...",
+                visual_intent=(
+                    "Create a strong historical visual that matches this excerpt. "
+                    "Identify the likely time period, location, and key setting details from the excerpt: "
+                    f"{txt2[:180]}..."
+                ),
             )
         )
     return scenes
@@ -264,7 +268,10 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
         if not s.script_excerpt:
             s.script_excerpt = script[:240].strip()
         if not s.visual_intent:
-            s.visual_intent = f"Create a strong historical visual matching: {s.script_excerpt[:180]}..."
+            s.visual_intent = (
+                "Create a strong historical visual. Identify the time period and location from the excerpt: "
+                f"{s.script_excerpt[:180]}..."
+            )
 
     return fallback
 
@@ -300,12 +307,17 @@ def generate_prompts_for_scenes(
     payload = {
         "tone": tone,
         "style": style_phrase,
-        "task": "Write one image prompt per scene. Return exactly one prompt per scene in the same order.",
+        "task": (
+            "Write one image prompt per scene. Return exactly one prompt per scene in the same order. "
+            "Each prompt must name the time period and location inferred from the excerpt, plus concrete "
+            "setting details (architecture, clothing, props) that match the story."
+        ),
         "output": {"format": "json", "field": "prompts"},
         "scenes": packed,
         "constraints": [
             "No text overlays, captions, logos, or watermarks.",
             "Be specific about subject, setting, era cues, lighting, mood, camera feel.",
+            "Explicitly state the era/time period and setting grounded in the excerpt.",
             "Match the selected style strongly."
         ],
     }
@@ -338,6 +350,8 @@ def generate_prompts_for_scenes(
         context = (
             f"Visual intent: {s.visual_intent}\n"
             f"Scene excerpt: {s.script_excerpt}\n"
+            "Include the time period and location inferred from the excerpt. "
+            "Call out architecture, clothing, and props that fit the era. "
             "No text overlays, captions, logos, or watermarks. High detail."
         )
         if not p:
