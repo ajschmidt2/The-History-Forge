@@ -4,7 +4,7 @@ from typing import Any, Iterable
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
-from app import require_login, _get_primary_image, _sync_scene_order
+from app import require_login, _get_primary_image, _sync_scene_order, init_state
 from utils import Scene, generate_image_for_scene
 
 
@@ -247,6 +247,8 @@ def render_scene_card(scene: Scene) -> None:
             updated = generate_image_for_scene(scene, aspect_ratio=aspect_ratio, visual_style=visual_style)
             scene.image_bytes = updated.image_bytes
             if scene.image_bytes:
+                if scene.image_variations is None:
+                    scene.image_variations = []
                 scene.image_variations.append(scene.image_bytes)
                 scene.primary_image_index = len(scene.image_variations) - 1
             scene.image_error = updated.image_error
@@ -313,6 +315,7 @@ def main() -> None:
     st.set_page_config(page_title="Storyboard", layout="wide")
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
     require_login()
+    init_state()
 
     render_sidebar()
 

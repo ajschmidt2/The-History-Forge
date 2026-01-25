@@ -101,7 +101,6 @@ def init_state() -> None:
             "The Day the Titanic Was Found",
         ],
     )
-    st.session_state["visual_style"] = visual_style
 
 
 
@@ -146,6 +145,7 @@ def tab_paste_script() -> None:
         value=st.session_state.script_text,
         height=320,
         placeholder="Paste your script here...",
+        key="script_text_area",
     )
 
     cols = st.columns([1, 3])
@@ -205,6 +205,16 @@ def tab_generate_script() -> None:
         st.session_state.active_story_title = st.session_state.topic
         st.toast("Script generated.")
 
+    generated_text = st.text_area(
+        "Generated Script",
+        value=st.session_state.script_text,
+        height=320,
+        placeholder="Generated script will appear here...",
+        key="generated_script_text",
+    )
+    st.session_state.script_text = generated_text
+    st.session_state.script = generated_text
+
 
 def tab_create_scenes() -> None:
     st.subheader("Create scenes")
@@ -218,25 +228,31 @@ def tab_create_scenes() -> None:
     with c1:
         target_scenes = st.number_input("Target scenes", min_value=3, max_value=60, value=12, step=1)
     with c2:
+        style_options = [
+            "Photorealistic cinematic",
+            "Illustrated cinematic",
+            "Painterly",
+            "Comic / graphic novel",
+            "Vintage archival photo",
+            "3D render",
+            "Watercolor illustration",
+            "Charcoal / pencil sketch",
+        ]
+        current_style = st.session_state.get("visual_style", style_options[0])
+        style_index = style_options.index(current_style) if current_style in style_options else 0
         st.session_state.visual_style = st.selectbox(
             "Visual style",
-            [
-                "Photorealistic cinematic",
-                "Illustrated cinematic",
-                "Painterly",
-                "Comic / graphic novel",
-                "Vintage archival photo",
-                "3D render",
-                "Watercolor illustration",
-                "Charcoal / pencil sketch",
-            ],
-            index=0,
+            style_options,
+            index=style_index,
         )
 
+    aspect_options = ["16:9", "9:16", "1:1"]
+    current_aspect = st.session_state.get("aspect_ratio", aspect_options[0])
+    aspect_index = aspect_options.index(current_aspect) if current_aspect in aspect_options else 0
     st.session_state.aspect_ratio = st.selectbox(
         "Image aspect ratio",
-        ["16:9", "9:16", "1:1"],
-        index=0,
+        aspect_options,
+        index=aspect_index,
     )
 
     if st.button("Split into scenes", type="primary", use_container_width=True):
@@ -330,6 +346,7 @@ def tab_create_images() -> None:
 
     if st.button("Generate images for all scenes", type="primary", use_container_width=True):
         with st.spinner("Generating images..."):
+            errors: List[str] = []
             for i, sc in enumerate(st.session_state.scenes):
                 sid = get_scene_key(sc, i)
                 sc.image_prompt = st.session_state.scene_prompts.get(sid, sc.image_prompt)
@@ -345,6 +362,10 @@ def tab_create_images() -> None:
                     )
                     if updated.image_bytes:
                         _store_scene_image(sc, updated.image_bytes)
+                    if updated.image_error:
+                        errors.append(f"{scene_title(sc, i)}: {updated.image_error}")
+            if errors:
+                st.warning("Image generation issues:\n" + "\n".join(errors))
         st.toast("Image generation complete.")
 
     st.divider()
