@@ -61,11 +61,17 @@ def _init_supabase() -> Client | None:
     if "supabase_client" not in st.session_state:
         client = create_client(cfg["url"], cfg["anon_key"])
         if cfg["email"] and cfg["password"]:
-            auth = client.auth.sign_in_with_password(
-                {"email": cfg["email"], "password": cfg["password"]}
-            )
-            if auth and getattr(auth, "user", None):
-                st.session_state.supabase_owner_id = auth.user.id
+            try:
+                auth = client.auth.sign_in_with_password(
+                    {"email": cfg["email"], "password": cfg["password"]}
+                )
+                if auth and getattr(auth, "user", None):
+                    st.session_state.supabase_owner_id = auth.user.id
+            except Exception as exc:
+                st.warning(
+                    "Supabase sign-in failed. The app will run without a Supabase owner session."
+                )
+                st.session_state.supabase_auth_error = str(exc)
         st.session_state.supabase_client = client
     return st.session_state.supabase_client
 
