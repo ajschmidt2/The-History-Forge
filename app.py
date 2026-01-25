@@ -61,11 +61,14 @@ def _init_supabase() -> Client | None:
     if "supabase_client" not in st.session_state:
         client = create_client(cfg["url"], cfg["anon_key"])
         if cfg["email"] and cfg["password"]:
-            auth = client.auth.sign_in_with_password(
-                {"email": cfg["email"], "password": cfg["password"]}
-            )
-            if auth and getattr(auth, "user", None):
-                st.session_state.supabase_owner_id = auth.user.id
+            try:
+                auth = client.auth.sign_in_with_password(
+                    {"email": cfg["email"], "password": cfg["password"]}
+                )
+                if auth and getattr(auth, "user", None):
+                    st.session_state.supabase_owner_id = auth.user.id
+            except Exception as exc:
+                st.session_state.supabase_auth_error = str(exc)
         st.session_state.supabase_client = client
     return st.session_state.supabase_client
 
@@ -132,10 +135,10 @@ def _upload_asset_bytes(client: Client, bucket: str, path: str, data: bytes) -> 
         return False
 
 
-def _sync_scene_order(client: Client, scenes: List[Scene]) -> None:
+def _sync_scene_order(scenes: List[Scene], client: Client | None = None) -> None:
     for idx, scene in enumerate(scenes, start=1):
         scene.index = idx
-        if scene.supabase_id:
+        if client and scene.supabase_id:
             client.table("scenes").update({"order_index": idx}).eq("id", scene.supabase_id).execute()
 
 
@@ -279,13 +282,18 @@ def main() -> None:
         "The shipwreck that changed global trade",
         "The assassination that sparked World War I",
     ]
+    def _set_lucky_topic():
+        lucky_topic = random.choice(curated_topics)
+        st.session_state["topic_input"] = lucky_topic
+        st.session_state["topic"] = lucky_topic
+
     topic_default = st.session_state.get("topic", curated_topics[1])
     topic = st.sidebar.text_input("Topic", value=topic_default, key="topic_input")
-    if st.sidebar.button("🎲 I'm Feeling Lucky", use_container_width=True):
-        lucky_topic = random.choice(curated_topics)
-        st.session_state.topic_input = lucky_topic
-        st.session_state.topic = lucky_topic
-        st.rerun()
+    st.sidebar.button(
+        "🎲 I'm Feeling Lucky",
+        use_container_width=True,
+        on_click=_set_lucky_topic,
+    )
     length = st.sidebar.selectbox(
         "Length",
         ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
@@ -452,18 +460,22 @@ def main() -> None:
                     "script": script,
                     "voice_id": voice_id,
                 }
-                story_resp = (
-                    supabase.table("stories")
-                    .insert(
-                        {
-                            "owner_id": owner_id,
-                            "title": topic or "Untitled Story",
-                            "settings": settings,
-                        }
+                try:
+                    story_resp = (
+                        supabase.table("stories")
+                        .insert(
+                            {
+                                "owner_id": owner_id,
+                                "title": topic or "Untitled Story",
+                                "settings": settings,
+                            }
+                        )
+                        .execute()
                     )
-                    .execute()
-                )
-                story_id = story_resp.data[0]["id"] if story_resp.data else None
+                    story_id = story_resp.data[0]["id"] if story_resp.data else None
+                except Exception as exc:
+                    st.session_state.supabase_last_error = f"Insert story: {exc}"
+                    story_id = None
                 if story_id:
                     st.session_state.story_id = story_id
                     st.session_state.story_settings = settings
@@ -478,8 +490,12 @@ def main() -> None:
                                 "status": s.status,
                             }
                         )
-                    scenes_resp = supabase.table("scenes").insert(scenes_insert).execute()
-                    if scenes_resp.data:
+                    try:
+                        scenes_resp = supabase.table("scenes").insert(scenes_insert).execute()
+                    except Exception as exc:
+                        st.session_state.supabase_last_error = f"Insert scenes: {exc}"
+                        scenes_resp = None
+                    if scenes_resp and scenes_resp.data:
                         for s, row in zip(st.session_state.scenes, scenes_resp.data):
                             s.supabase_id = row.get("id")
                         st.session_state.scenes = st.session_state.scenes
@@ -495,18 +511,21 @@ def main() -> None:
                             path = f"{story_id}/{s.supabase_id}/image_{idx + 1:02d}.png"
                             uploaded = _upload_asset_bytes(supabase, supabase_cfg["bucket"], path, img)
                             if uploaded:
-                                supabase.table("assets").insert(
-                                    {
-                                        "scene_id": s.supabase_id,
-                                        "owner_id": owner_id,
-                                        "type": "image",
-                                        "url": path,
-                                        "generation_meta": {
-                                            "variation_index": idx,
-                                            "is_primary": idx == s.primary_image_index,
-                                        },
-                                    }
-                                ).execute()
+                                try:
+                                    supabase.table("assets").insert(
+                                        {
+                                            "scene_id": s.supabase_id,
+                                            "owner_id": owner_id,
+                                            "type": "image",
+                                            "url": path,
+                                            "generation_meta": {
+                                                "variation_index": idx,
+                                                "is_primary": idx == s.primary_image_index,
+                                            },
+                                        }
+                                    ).execute()
+                                except Exception as exc:
+                                    st.session_state.supabase_last_error = f"Insert assets: {exc}"
 
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
@@ -543,8 +562,7 @@ def main() -> None:
                     with action_cols[0]:
                         if st.button("⬆️ Move up", key=f"up_{s.index}", use_container_width=True, disabled=s.index == 1):
                             scenes[s.index - 2], scenes[s.index - 1] = scenes[s.index - 1], scenes[s.index - 2]
-                            if supabase:
-                                _sync_scene_order(supabase, scenes)
+                            _sync_scene_order(scenes, supabase)
                             st.session_state.scenes = scenes
                             st.rerun()
                     with action_cols[1]:
@@ -555,8 +573,7 @@ def main() -> None:
                             disabled=s.index == len(scenes),
                         ):
                             scenes[s.index - 1], scenes[s.index] = scenes[s.index], scenes[s.index - 1]
-                            if supabase:
-                                _sync_scene_order(supabase, scenes)
+                            _sync_scene_order(scenes, supabase)
                             st.session_state.scenes = scenes
                             st.rerun()
                     with action_cols[2]:
@@ -595,21 +612,36 @@ def main() -> None:
 
                     primary = _get_primary_image(s)
                     if primary:
-                        st.image(primary, caption=f"Scene {s.index} ({aspect_ratio})", use_container_width=True)
+                        st.image(primary, caption=f"Scene {s.index} ({aspect_ratio})", width=200)
+                        enlarge_key = f"show_primary_{s.index}"
+                        if st.button("Enlarge", key=f"enlarge_{s.index}"):
+                            st.session_state[enlarge_key] = True
+                        if st.session_state.get(enlarge_key):
+                            st.image(
+                                primary,
+                                caption=f"Scene {s.index} ({aspect_ratio})",
+                                use_container_width=True,
+                            )
                     else:
                         st.error("Image missing for this scene. Check logs for '[Gemini image gen failed]'.")
 
-                    if s.image_variations:
+                    if s.image_variations and len(s.image_variations) > 1:
                         st.markdown("**Variations**")
-                        cols = st.columns(min(len(s.image_variations), 3))
+                        selected_key = f"selected_variation_{s.index}"
+                        if selected_key not in st.session_state:
+                            st.session_state[selected_key] = s.primary_image_index
+
+                        cols = st.columns(min(len(s.image_variations), 4))
                         for idx, img in enumerate(s.image_variations):
                             with cols[idx % len(cols)]:
                                 if img:
-                                    st.image(
-                                        img,
-                                        caption=f"Variation {idx + 1}",
+                                    st.image(img, caption=f"Variation {idx + 1}", width=160)
+                                    if st.button(
+                                        "View larger",
+                                        key=f"view_{s.index}_{idx}",
                                         use_container_width=True,
-                                    )
+                                    ):
+                                        st.session_state[selected_key] = idx
                                 else:
                                     st.warning(f"Variation {idx + 1} missing.")
                                 if st.button(
@@ -635,6 +667,16 @@ def main() -> None:
                                             supabase.table("assets").update({"generation_meta": meta}).eq("id", asset["id"]).execute()
                                     st.session_state.scenes = scenes
                                     st.rerun()
+
+                        selected_idx = st.session_state.get(selected_key, s.primary_image_index)
+                        if 0 <= selected_idx < len(s.image_variations):
+                            selected_img = s.image_variations[selected_idx]
+                            if selected_img:
+                                st.image(
+                                    selected_img,
+                                    caption=f"Selected variation {selected_idx + 1}",
+                                    use_container_width=True,
+                                )
 
                     refine = st.text_input(
                         f"Refine prompt (Scene {s.index})",
@@ -759,6 +801,17 @@ If images fail, check logs for:
 - `[Gemini image gen final] FAILED`
 """.strip()
         )
+        auth_error = st.session_state.get("supabase_auth_error")
+        if auth_error:
+            st.warning(f"Supabase auth error: {auth_error}")
+        last_error = st.session_state.get("supabase_last_error")
+        if last_error:
+            st.warning(f"Supabase data error: {last_error}")
+            if "row-level security" in last_error or "row level security" in last_error:
+                st.info(
+                    "RLS blocked the insert. Add an INSERT policy for the table(s) that allows "
+                    "`owner_id = auth.uid()` for the signed-in user."
+                )
 
 if __name__ == "__main__":
     main()
