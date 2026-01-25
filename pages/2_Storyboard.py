@@ -1,10 +1,10 @@
 import io
-from typing import Iterable
+from typing import Any, Iterable
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
-from app import require_login, _get_primary_image
+from app import require_login, _get_primary_image, _sync_scene_order
 from utils import Scene, generate_image_for_scene
 
 
@@ -201,6 +201,10 @@ def _scene_image_bytes(scene: Scene) -> bytes:
     return primary if primary else _placeholder_image()
 
 
+def _scene_prompt(scene: Scene) -> str:
+    return scene.image_prompt or ""
+
+
 def render_scene_card(scene: Scene) -> None:
     scene_id = f"scene_{scene.index}"
     prompt_key = f"prompt_{scene_id}"
@@ -224,7 +228,7 @@ def render_scene_card(scene: Scene) -> None:
     st.markdown(f"**{scene.title or 'Scene'}**")
 
     if prompt_key not in st.session_state:
-        st.session_state[prompt_key] = scene.image_prompt or ""
+        st.session_state[prompt_key] = _scene_prompt(scene)
 
     st.text_area(
         "Image prompt",
@@ -234,7 +238,7 @@ def render_scene_card(scene: Scene) -> None:
         placeholder="Enter image prompt...",
     )
 
-    a1, a2 = st.columns([1, 1])
+    a1, a2, a3 = st.columns([1, 1, 1])
     with a1:
         if st.button("Regenerate image", key=f"regen_{scene_id}", use_container_width=True):
             scene.image_prompt = st.session_state[prompt_key]
@@ -242,6 +246,9 @@ def render_scene_card(scene: Scene) -> None:
             visual_style = st.session_state.get("visual_style", "Photorealistic cinematic")
             updated = generate_image_for_scene(scene, aspect_ratio=aspect_ratio, visual_style=visual_style)
             scene.image_bytes = updated.image_bytes
+            if scene.image_bytes:
+                scene.image_variations.append(scene.image_bytes)
+                scene.primary_image_index = len(scene.image_variations) - 1
             scene.image_error = updated.image_error
             st.toast(f"Regenerating image for Scene {scene.index:02d}…")
             st.rerun()
@@ -249,9 +256,18 @@ def render_scene_card(scene: Scene) -> None:
         if st.button("Save prompt", key=f"save_{scene_id}", use_container_width=True):
             scene.image_prompt = st.session_state[prompt_key]
             st.toast(f"Saved prompt for Scene {scene.index:02d}")
+    with a3:
+        if st.button("Delete", key=f"delete_{scene_id}", use_container_width=True):
+            st.session_state.scenes = [s for s in st.session_state.scenes if s.index != scene.index]
+            _sync_scene_order(st.session_state.scenes)
+            st.rerun()
 
     if scene.image_error:
         st.warning(scene.image_error)
+
+    if scene.image_variations:
+        with st.expander("Variations"):
+            st.image([img for img in scene.image_variations if img], use_container_width=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -294,13 +310,13 @@ def render_scene_grid(scenes: Iterable[Scene]) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="History Forge", layout="wide")
+    st.set_page_config(page_title="Storyboard", layout="wide")
     st.markdown(DASHBOARD_CSS, unsafe_allow_html=True)
     require_login()
 
     render_sidebar()
 
-    story_title = st.session_state.get("active_story_title", "The Rise of Rome")
+    story_title = st.session_state.get("active_story_title", "Untitled Project")
     render_header(story_title)
 
     render_scene_grid(_iter_scenes())
