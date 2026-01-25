@@ -160,14 +160,27 @@ def main() -> None:
 
     st.sidebar.divider()
     if st.sidebar.button("🧹 Reset app state (use after redeploy)", use_container_width=True):
-        for k in ["script", "scenes", "topic", "authenticated", "script_editor"]:
+        for k in ["script", "scenes", "topic", "authenticated", "script_editor", "pasted_script"]:
             if k in st.session_state:
                 del st.session_state[k]
         st.rerun()
 
     st.sidebar.divider()
     generate_all = st.sidebar.button("✨ Generate Package", type="primary", use_container_width=True)
+    generate_from_paste = st.sidebar.button("📋 Generate visuals from pasted script", use_container_width=True)
     debug_mode = st.sidebar.toggle("Debug mode", value=True)
+
+    with st.sidebar.expander("📄 Paste your script (optional)"):
+        pasted_script = st.text_area(
+            "Paste a narration script here to generate scenes + images without rewriting it.",
+            value=st.session_state.get("pasted_script", ""),
+            height=200,
+            key="pasted_script_input",
+        )
+        if st.button("Use pasted script", use_container_width=True):
+            st.session_state.pasted_script = pasted_script
+            st.session_state.script = pasted_script
+            st.success("Pasted script loaded. Now generate visuals.")
 
     if generate_all:
         st.session_state.topic = topic
@@ -226,6 +239,39 @@ def main() -> None:
             "voice_id": voice_id,
         }
 
+    if generate_from_paste:
+        script = st.session_state.get("pasted_script", "").strip()
+        if not script:
+            st.sidebar.error("Paste a script first.")
+        else:
+            st.session_state.script = script
+            with st.status("Generating…", expanded=True) as status:
+                status.update(label=f"1/3 Splitting into {num_images} scenes…")
+                st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
+
+                status.update(label="2/3 Writing prompts…")
+                st.session_state.scenes = generate_prompts_for_scenes(
+                    st.session_state.scenes,
+                    tone=tone,
+                    style=visual_style,
+                )
+
+                status.update(label="3/3 Generating images…")
+                scenes_out, failures = generate_visuals_from_script(
+                    script=script,
+                    num_images=num_images,
+                    tone=tone,
+                    visual_style=visual_style,
+                    aspect_ratio=aspect_ratio,
+                    variations_per_scene=variations_per_scene,
+                    scenes=st.session_state.scenes,
+                )
+                st.session_state.scenes = scenes_out
+
+                if failures:
+                    status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
+                else:
+                    status.update(label="Done ✅", state="complete")
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
 
