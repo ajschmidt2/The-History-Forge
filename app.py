@@ -463,18 +463,22 @@ def main() -> None:
                     "script": script,
                     "voice_id": voice_id,
                 }
-                story_resp = (
-                    supabase.table("stories")
-                    .insert(
-                        {
-                            "owner_id": owner_id,
-                            "title": topic or "Untitled Story",
-                            "settings": settings,
-                        }
+                try:
+                    story_resp = (
+                        supabase.table("stories")
+                        .insert(
+                            {
+                                "owner_id": owner_id,
+                                "title": topic or "Untitled Story",
+                                "settings": settings,
+                            }
+                        )
+                        .execute()
                     )
-                    .execute()
-                )
-                story_id = story_resp.data[0]["id"] if story_resp.data else None
+                    story_id = story_resp.data[0]["id"] if story_resp.data else None
+                except Exception as exc:
+                    _record_supabase_error("Insert story", exc)
+                    story_id = None
                 if story_id:
                     st.session_state.story_id = story_id
                     st.session_state.story_settings = settings
@@ -489,8 +493,12 @@ def main() -> None:
                                 "status": s.status,
                             }
                         )
-                    scenes_resp = supabase.table("scenes").insert(scenes_insert).execute()
-                    if scenes_resp.data:
+                    try:
+                        scenes_resp = supabase.table("scenes").insert(scenes_insert).execute()
+                    except Exception as exc:
+                        _record_supabase_error("Insert scenes", exc)
+                        scenes_resp = None
+                    if scenes_resp and scenes_resp.data:
                         for s, row in zip(st.session_state.scenes, scenes_resp.data):
                             s.supabase_id = row.get("id")
                         st.session_state.scenes = st.session_state.scenes
@@ -506,18 +514,21 @@ def main() -> None:
                             path = f"{story_id}/{s.supabase_id}/image_{idx + 1:02d}.png"
                             uploaded = _upload_asset_bytes(supabase, supabase_cfg["bucket"], path, img)
                             if uploaded:
-                                supabase.table("assets").insert(
-                                    {
-                                        "scene_id": s.supabase_id,
-                                        "owner_id": owner_id,
-                                        "type": "image",
-                                        "url": path,
-                                        "generation_meta": {
-                                            "variation_index": idx,
-                                            "is_primary": idx == s.primary_image_index,
-                                        },
-                                    }
-                                ).execute()
+                                try:
+                                    supabase.table("assets").insert(
+                                        {
+                                            "scene_id": s.supabase_id,
+                                            "owner_id": owner_id,
+                                            "type": "image",
+                                            "url": path,
+                                            "generation_meta": {
+                                                "variation_index": idx,
+                                                "is_primary": idx == s.primary_image_index,
+                                            },
+                                        }
+                                    ).execute()
+                                except Exception as exc:
+                                    _record_supabase_error("Insert assets", exc)
 
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
