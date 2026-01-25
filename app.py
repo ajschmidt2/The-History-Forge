@@ -5,6 +5,7 @@ import zipfile
 import io
 import json
 import random
+import uuid
 
 import requests
 from supabase import create_client, Client
@@ -45,43 +46,99 @@ def require_login() -> None:
 def _get_supabase_config() -> Dict[str, str]:
     return {
         "url": st.secrets.get("SUPABASE_URL", "").strip() or get_secret("SUPABASE_URL", "").strip(),
+        "service_role_key": st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        or get_secret("SUPABASE_SERVICE_ROLE_KEY", "").strip(),
         "anon_key": st.secrets.get("SUPABASE_ANON_KEY", "").strip() or get_secret("SUPABASE_ANON_KEY", "").strip(),
         "email": st.secrets.get("SUPABASE_EMAIL", "").strip() or get_secret("SUPABASE_EMAIL", "").strip(),
         "password": st.secrets.get("SUPABASE_PASSWORD", "").strip() or get_secret("SUPABASE_PASSWORD", "").strip(),
+        "owner_id": st.secrets.get("SUPABASE_OWNER_ID", "").strip()
+        or get_secret("SUPABASE_OWNER_ID", "").strip(),
+        "story_id_field": st.secrets.get("SUPABASE_STORY_ID_FIELD", "").strip()
+        or get_secret("SUPABASE_STORY_ID_FIELD", "").strip(),
         "bucket": st.secrets.get("SUPABASE_STORAGE_BUCKET", "").strip()
         or get_secret("SUPABASE_STORAGE_BUCKET", "").strip()
         or "scene-assets",
     }
 
 
+def _as_uuid(value: Any | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _as_int_id(value: Any | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        return int(text)
+    except (ValueError, TypeError):
+        return None
+
+
+def _resolve_story_id(story_row: Dict[str, Any], cfg: Dict[str, str]) -> str | int | None:
+    preferred_field = cfg.get("story_id_field") or None
+    field_candidates = [
+        preferred_field,
+        "id",
+        "uuid",
+        "story_id",
+    ]
+    for field in field_candidates:
+        if not field:
+            continue
+        raw_value = story_row.get(field)
+        value = _as_uuid(raw_value)
+        if value is not None:
+            return value
+        int_value = _as_int_id(raw_value)
+        if int_value is not None:
+            return int_value
+    return None
+
+
 def _init_supabase() -> Client | None:
     cfg = _get_supabase_config()
-    if not cfg["url"] or not cfg["anon_key"]:
+    service_role_key = cfg["service_role_key"] or cfg["anon_key"]
+    if not cfg["url"] or not service_role_key:
         return None
     if "supabase_client" not in st.session_state:
-        client = create_client(cfg["url"], cfg["anon_key"])
+        client = create_client(cfg["url"], service_role_key)
         if cfg["email"] and cfg["password"]:
             try:
                 auth = client.auth.sign_in_with_password(
                     {"email": cfg["email"], "password": cfg["password"]}
                 )
                 if auth and getattr(auth, "user", None):
-                    st.session_state.supabase_owner_id = auth.user.id
+                    resolved = _as_uuid(auth.user.id)
+                    if resolved:
+                        st.session_state.supabase_owner_id = resolved
             except Exception as exc:
                 st.session_state.supabase_auth_error = str(exc)
         st.session_state.supabase_client = client
     return st.session_state.supabase_client
 
 
-def _get_owner_id(client: Client) -> str | None:
-    owner_id = st.session_state.get("supabase_owner_id")
+def _resolve_owner_id(client: Client, cfg: Dict[str, str]) -> str | None:
+    owner_id = _as_uuid(cfg.get("owner_id")) or _as_uuid(st.session_state.get("supabase_owner_id"))
     if owner_id:
         return owner_id
     user = client.auth.get_user()
     if user and getattr(user, "user", None):
-        owner_id = user.user.id
-        st.session_state.supabase_owner_id = owner_id
-        return owner_id
+        owner_id = _as_uuid(user.user.id)
+        if owner_id:
+            st.session_state.supabase_owner_id = owner_id
+            return owner_id
     return None
 
 
@@ -92,7 +149,7 @@ def _load_latest_story(client: Client) -> Dict[str, Any] | None:
     return None
 
 
-def _load_story_scenes(client: Client, story_id: str) -> List[Dict[str, Any]]:
+def _load_story_scenes(client: Client, story_id: str | int) -> List[Dict[str, Any]]:
     resp = (
         client.table("scenes")
         .select("*")
@@ -217,12 +274,19 @@ def main() -> None:
         story = _load_latest_story(supabase)
         if story:
             settings = story.get("settings") or {}
-            st.session_state.story_id = story["id"]
+            story_id = _resolve_story_id(story, supabase_cfg)
+            if story_id is None:
+                st.session_state.supabase_last_error = (
+                    "Latest story has no valid ID. "
+                    "Set SUPABASE_STORY_ID_FIELD to the stories ID column name."
+                )
+            else:
+                st.session_state.story_id = story_id
             st.session_state.script = settings.get("script", "")
             st.session_state.topic = settings.get("topic", "")
             st.session_state.voice_id = settings.get("voice_id", "")
             st.session_state.story_settings = settings
-            scene_rows = _load_story_scenes(supabase, story["id"])
+            scene_rows = _load_story_scenes(supabase, story_id) if story_id else []
             scene_ids = [row["id"] for row in scene_rows]
             assets = _load_scene_assets(supabase, scene_ids)
             assets_by_scene: Dict[str, List[Dict[str, Any]]] = {}
@@ -447,7 +511,7 @@ def main() -> None:
         }
 
         if supabase:
-            owner_id = _get_owner_id(supabase)
+            owner_id = _resolve_owner_id(supabase, supabase_cfg)
             if owner_id:
                 settings = {
                     "topic": topic,
@@ -472,10 +536,16 @@ def main() -> None:
                         )
                         .execute()
                     )
-                    story_id = story_resp.data[0]["id"] if story_resp.data else None
+                    story_row = story_resp.data[0] if story_resp.data else None
+                    story_id = _resolve_story_id(story_row, supabase_cfg) if story_row else None
                 except Exception as exc:
                     st.session_state.supabase_last_error = f"Insert story: {exc}"
                     story_id = None
+                if story_id is None and story_row:
+                    st.session_state.supabase_last_error = (
+                        "Insert story: missing valid id in response. "
+                        "Set SUPABASE_STORY_ID_FIELD to the stories ID column name."
+                    )
                 if story_id:
                     st.session_state.story_id = story_id
                     st.session_state.story_settings = settings
@@ -500,32 +570,37 @@ def main() -> None:
                             s.supabase_id = row.get("id")
                         st.session_state.scenes = st.session_state.scenes
 
-                    for s in st.session_state.scenes:
-                        if not s.supabase_id:
-                            continue
-                        if not s.image_variations:
-                            continue
-                        for idx, img in enumerate(s.image_variations):
-                            if not img:
+                        for s in st.session_state.scenes:
+                            if not s.supabase_id:
                                 continue
-                            path = f"{story_id}/{s.supabase_id}/image_{idx + 1:02d}.png"
-                            uploaded = _upload_asset_bytes(supabase, supabase_cfg["bucket"], path, img)
-                            if uploaded:
-                                try:
-                                    supabase.table("assets").insert(
-                                        {
-                                            "scene_id": s.supabase_id,
-                                            "owner_id": owner_id,
-                                            "type": "image",
-                                            "url": path,
-                                            "generation_meta": {
-                                                "variation_index": idx,
-                                                "is_primary": idx == s.primary_image_index,
-                                            },
-                                        }
-                                    ).execute()
-                                except Exception as exc:
-                                    st.session_state.supabase_last_error = f"Insert assets: {exc}"
+                            if not s.image_variations:
+                                continue
+                            for idx, img in enumerate(s.image_variations):
+                                if not img:
+                                    continue
+                                path = f"{story_id}/{s.supabase_id}/image_{idx + 1:02d}.png"
+                                uploaded = _upload_asset_bytes(supabase, supabase_cfg["bucket"], path, img)
+                                if uploaded:
+                                    try:
+                                        supabase.table("assets").insert(
+                                            {
+                                                "scene_id": s.supabase_id,
+                                                "owner_id": owner_id,
+                                                "type": "image",
+                                                "url": path,
+                                                "generation_meta": {
+                                                    "variation_index": idx,
+                                                    "is_primary": idx == s.primary_image_index,
+                                                },
+                                            }
+                                        ).execute()
+                                    except Exception as exc:
+                                        st.session_state.supabase_last_error = f"Insert assets: {exc}"
+            else:
+                st.session_state.supabase_last_error = (
+                    "Supabase owner id is missing or invalid. "
+                    "Set SUPABASE_OWNER_ID to a valid UUID."
+                )
 
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
@@ -701,7 +776,7 @@ def main() -> None:
                         if st.button("🔄 Regenerate primary image", key=f"regen_{s.index}", use_container_width=True):
                             try:
                                 if supabase and s.supabase_id:
-                                    owner_id = _get_owner_id(supabase)
+                                    owner_id = _resolve_owner_id(supabase, supabase_cfg)
                                     if owner_id:
                                         supabase.table("jobs").insert(
                                             {
@@ -721,7 +796,7 @@ def main() -> None:
                                     s.image_variations[s.primary_image_index] = updated.image_bytes
                                 s.image_bytes = updated.image_bytes
                                 if supabase and s.supabase_id and updated.image_bytes:
-                                    owner_id = _get_owner_id(supabase)
+                                    owner_id = _resolve_owner_id(supabase, supabase_cfg)
                                     if owner_id:
                                         path = f"{st.session_state.story_id}/{s.supabase_id}/image_{s.primary_image_index + 1:02d}.png"
                                         uploaded = _upload_asset_bytes(
@@ -791,9 +866,12 @@ def main() -> None:
 - `elevenlabs_api_key`
 - optional: `APP_PASSCODE` (or legacy `app_password`)
 - `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (preferred)
+- `SUPABASE_ANON_KEY` (fallback)
 - `SUPABASE_EMAIL`
 - `SUPABASE_PASSWORD`
+- optional: `SUPABASE_OWNER_ID` (UUID if auth is unavailable)
+- optional: `SUPABASE_STORY_ID_FIELD` (ID column in stories table, UUID or integer)
 - optional: `SUPABASE_STORAGE_BUCKET` (default: `scene-assets`)
 
 If images fail, check logs for:
