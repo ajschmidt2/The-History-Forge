@@ -240,13 +240,17 @@ def main() -> None:
         }
 
     if generate_from_paste:
-        script = st.session_state.get("pasted_script", "").strip()
+        script = (
+            st.session_state.get("pasted_script_input", "")
+            or st.session_state.get("pasted_script", "")
+        ).strip()
         if not script:
             st.sidebar.error("Paste a script first.")
         else:
+            st.session_state.topic = "Pasted script"
             st.session_state.script = script
             with st.status("Generating…", expanded=True) as status:
-                status.update(label=f"1/3 Splitting into {num_images} scenes…")
+                status.update(label=f"1/3 Splitting pasted script into {num_images} scenes…")
                 st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
 
                 status.update(label="2/3 Writing prompts…")
