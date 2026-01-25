@@ -1,14 +1,10 @@
 import streamlit as st
-from typing import List, Dict, Any
+from typing import List
 from datetime import datetime
 import zipfile
 import io
 import json
 import random
-import uuid
-
-import requests
-from supabase import create_client, Client
 
 from utils import (
     Scene,
@@ -18,6 +14,7 @@ from utils import (
     generate_image_for_scene,
     generate_voiceover,
     get_secret,
+    generate_visuals_from_script,
 )
 
 def require_login() -> None:
@@ -43,192 +40,9 @@ def require_login() -> None:
     st.stop()
 
 
-def _get_supabase_config() -> Dict[str, str]:
-    return {
-        "url": st.secrets.get("SUPABASE_URL", "").strip() or get_secret("SUPABASE_URL", "").strip(),
-        "service_role_key": st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-        or get_secret("SUPABASE_SERVICE_ROLE_KEY", "").strip(),
-        "anon_key": st.secrets.get("SUPABASE_ANON_KEY", "").strip() or get_secret("SUPABASE_ANON_KEY", "").strip(),
-        "email": st.secrets.get("SUPABASE_EMAIL", "").strip() or get_secret("SUPABASE_EMAIL", "").strip(),
-        "password": st.secrets.get("SUPABASE_PASSWORD", "").strip() or get_secret("SUPABASE_PASSWORD", "").strip(),
-        "owner_id": st.secrets.get("SUPABASE_OWNER_ID", "").strip()
-        or get_secret("SUPABASE_OWNER_ID", "").strip(),
-        "story_id_field": st.secrets.get("SUPABASE_STORY_ID_FIELD", "").strip()
-        or get_secret("SUPABASE_STORY_ID_FIELD", "").strip(),
-        "bucket": st.secrets.get("SUPABASE_STORAGE_BUCKET", "").strip()
-        or get_secret("SUPABASE_STORAGE_BUCKET", "").strip()
-        or "scene-assets",
-    }
-
-
-def _as_uuid(value: Any | None) -> str | None:
-    if not value:
-        return None
-    try:
-        return str(uuid.UUID(str(value)))
-    except (ValueError, TypeError, AttributeError):
-        return None
-
-
-def _as_int_id(value: Any | None) -> int | None:
-    if value is None:
-        return None
-    try:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return value
-        text = str(value).strip()
-        if not text:
-            return None
-        return int(text)
-    except (ValueError, TypeError):
-        return None
-
-
-def _resolve_story_id(story_row: Dict[str, Any], cfg: Dict[str, str]) -> str | int | None:
-    preferred_field = cfg.get("story_id_field") or None
-    field_candidates = [
-        preferred_field,
-        "id",
-        "uuid",
-        "story_id",
-    ]
-    for field in field_candidates:
-        if not field:
-            continue
-        raw_value = story_row.get(field)
-        value = _as_uuid(raw_value)
-        if value is not None:
-            return value
-        int_value = _as_int_id(raw_value)
-        if int_value is not None:
-            return int_value
-    return None
-
-
-def _init_supabase() -> Client | None:
-    cfg = _get_supabase_config()
-    service_role_key = cfg["service_role_key"] or cfg["anon_key"]
-    if not cfg["url"] or not service_role_key:
-        return None
-    if "supabase_client" not in st.session_state:
-        client = create_client(cfg["url"], service_role_key)
-        if cfg["email"] and cfg["password"]:
-            try:
-                auth = client.auth.sign_in_with_password(
-                    {"email": cfg["email"], "password": cfg["password"]}
-                )
-                if auth and getattr(auth, "user", None):
-                    resolved = _as_uuid(auth.user.id)
-                    if resolved:
-                        st.session_state.supabase_owner_id = resolved
-            except Exception as exc:
-                st.session_state.supabase_auth_error = str(exc)
-        st.session_state.supabase_client = client
-    return st.session_state.supabase_client
-
-
-def _resolve_owner_id(client: Client, cfg: Dict[str, str]) -> str | None:
-    owner_id = _as_uuid(cfg.get("owner_id")) or _as_uuid(st.session_state.get("supabase_owner_id"))
-    if owner_id:
-        return owner_id
-    user = client.auth.get_user()
-    if user and getattr(user, "user", None):
-        owner_id = _as_uuid(user.user.id)
-        if owner_id:
-            st.session_state.supabase_owner_id = owner_id
-            return owner_id
-    return None
-
-
-def _load_latest_story(client: Client) -> Dict[str, Any] | None:
-    resp = client.table("stories").select("*").order("created_at", desc=True).limit(1).execute()
-    if resp.data:
-        return resp.data[0]
-    return None
-
-
-def _load_story_scenes(client: Client, story_id: str | int) -> List[Dict[str, Any]]:
-    resp = (
-        client.table("scenes")
-        .select("*")
-        .eq("story_id", story_id)
-        .order("order_index")
-        .execute()
-    )
-    return resp.data or []
-
-
-def _load_scene_assets(client: Client, scene_ids: List[str]) -> List[Dict[str, Any]]:
-    if not scene_ids:
-        return []
-    resp = client.table("assets").select("*").in_("scene_id", scene_ids).execute()
-    return resp.data or []
-
-
-def _fetch_signed_asset_bytes(client: Client, bucket: str, path: str) -> bytes | None:
-    try:
-        signed = client.storage.from_(bucket).create_signed_url(path, 3600)
-        signed_url = signed.get("signedURL") if isinstance(signed, dict) else None
-        if signed_url:
-            resp = requests.get(signed_url, timeout=30)
-            if resp.ok:
-                return resp.content
-    except Exception:
-        return None
-    return None
-
-
-def _upload_asset_bytes(client: Client, bucket: str, path: str, data: bytes) -> bool:
-    try:
-        client.storage.from_(bucket).upload(
-            path,
-            data,
-            {"content-type": "image/png", "upsert": True},
-        )
-        return True
-    except Exception:
-        return False
-
-
-def _sync_scene_order(scenes: List[Scene], client: Client | None = None) -> None:
+def _sync_scene_order(scenes: List[Scene]) -> None:
     for idx, scene in enumerate(scenes, start=1):
         scene.index = idx
-        if client and scene.supabase_id:
-            client.table("scenes").update({"order_index": idx}).eq("id", scene.supabase_id).execute()
-
-
-def _pack_scene_text(scene: Scene) -> str:
-    payload = {
-        "title": scene.title,
-        "script_excerpt": scene.script_excerpt,
-        "visual_intent": scene.visual_intent,
-        "image_prompt": scene.image_prompt,
-    }
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def _unpack_scene_text(raw_text: str) -> Dict[str, str]:
-    if not raw_text:
-        return {"title": "", "script_excerpt": "", "visual_intent": "", "image_prompt": ""}
-    try:
-        data = json.loads(raw_text)
-        if isinstance(data, dict):
-            return {
-                "title": str(data.get("title", "")),
-                "script_excerpt": str(data.get("script_excerpt", "")),
-                "visual_intent": str(data.get("visual_intent", "")),
-                "image_prompt": str(data.get("image_prompt", "")),
-            }
-    except Exception:
-        pass
-    return {
-        "title": "",
-        "script_excerpt": raw_text,
-        "visual_intent": "",
-        "image_prompt": "",
-    }
 
 def _get_primary_image(scene: Scene) -> bytes | None:
     if scene.image_variations:
@@ -264,79 +78,8 @@ def build_export_zip(
 def main() -> None:
     st.set_page_config(page_title="The History Forge", layout="wide")
     require_login()
-    supabase = _init_supabase()
-    supabase_cfg = _get_supabase_config()
-
     st.title("🔥 The History Forge")
     st.caption("Generate a YouTube history script + scenes + prompts + images.")
-
-    if supabase and "supabase_loaded" not in st.session_state:
-        story = _load_latest_story(supabase)
-        if story:
-            settings = story.get("settings") or {}
-            story_id = _resolve_story_id(story, supabase_cfg)
-            if story_id is None:
-                st.session_state.supabase_last_error = (
-                    "Latest story has no valid ID. "
-                    "Set SUPABASE_STORY_ID_FIELD to the stories ID column name."
-                )
-            else:
-                st.session_state.story_id = story_id
-            st.session_state.script = settings.get("script", "")
-            st.session_state.topic = settings.get("topic", "")
-            st.session_state.voice_id = settings.get("voice_id", "")
-            st.session_state.story_settings = settings
-            if story_id is None:
-                scene_rows = []
-            else:
-                try:
-                    scene_rows = _load_story_scenes(supabase, story_id)
-                except Exception as exc:
-                    st.session_state.supabase_last_error = f"Load scenes: {exc}"
-                    scene_rows = []
-            scene_ids = [row["id"] for row in scene_rows]
-            assets = _load_scene_assets(supabase, scene_ids)
-            assets_by_scene: Dict[str, List[Dict[str, Any]]] = {}
-            for asset in assets:
-                assets_by_scene.setdefault(asset["scene_id"], []).append(asset)
-
-            scenes: List[Scene] = []
-            for row in scene_rows:
-                parsed = _unpack_scene_text(row.get("script_text") or "")
-                scene_assets = assets_by_scene.get(row["id"], [])
-                image_variations: List[bytes | None] = []
-                primary_index = 0
-                for asset in scene_assets:
-                    if asset.get("type") != "image":
-                        continue
-                    meta = asset.get("generation_meta") or {}
-                    variation_index = int(meta.get("variation_index", len(image_variations)))
-                    path = asset.get("url") or ""
-                    img_bytes = None
-                    if path:
-                        img_bytes = _fetch_signed_asset_bytes(supabase, supabase_cfg["bucket"], path)
-                    while len(image_variations) <= variation_index:
-                        image_variations.append(None)
-                    image_variations[variation_index] = img_bytes
-                    if meta.get("is_primary"):
-                        primary_index = variation_index
-
-                scenes.append(
-                    Scene(
-                        index=int(row.get("order_index", len(scenes) + 1)),
-                        title=parsed["title"] or f"Scene {len(scenes) + 1}",
-                        script_excerpt=parsed["script_excerpt"],
-                        visual_intent=parsed["visual_intent"],
-                        image_prompt=parsed["image_prompt"],
-                        image_bytes=image_variations[primary_index] if image_variations else None,
-                        image_variations=image_variations,
-                        primary_image_index=primary_index,
-                        supabase_id=row.get("id"),
-                        status=row.get("status") or "active",
-                    )
-                )
-            st.session_state.scenes = scenes
-        st.session_state.supabase_loaded = True
 
     st.sidebar.header("⚙️ Controls")
     curated_topics = [
@@ -417,14 +160,27 @@ def main() -> None:
 
     st.sidebar.divider()
     if st.sidebar.button("🧹 Reset app state (use after redeploy)", use_container_width=True):
-        for k in ["script", "scenes", "topic", "authenticated", "script_editor"]:
+        for k in ["script", "scenes", "topic", "authenticated", "script_editor", "pasted_script"]:
             if k in st.session_state:
                 del st.session_state[k]
         st.rerun()
 
     st.sidebar.divider()
     generate_all = st.sidebar.button("✨ Generate Package", type="primary", use_container_width=True)
+    generate_from_paste = st.sidebar.button("📋 Generate visuals from pasted script", use_container_width=True)
     debug_mode = st.sidebar.toggle("Debug mode", value=True)
+
+    with st.sidebar.expander("📄 Paste your script (optional)"):
+        pasted_script = st.text_area(
+            "Paste a narration script here to generate scenes + images without rewriting it.",
+            value=st.session_state.get("pasted_script", ""),
+            height=200,
+            key="pasted_script_input",
+        )
+        if st.button("Use pasted script", use_container_width=True):
+            st.session_state.pasted_script = pasted_script
+            st.session_state.script = pasted_script
+            st.success("Pasted script loaded. Now generate visuals.")
 
     if generate_all:
         st.session_state.topic = topic
@@ -436,59 +192,25 @@ def main() -> None:
             st.session_state.voice_id = voice_id
 
             status.update(label=f"2/5 Splitting into {num_images} scenes…")
-            scenes = split_script_into_scenes(script, max_scenes=num_images)
-            st.session_state.scenes = scenes
+            st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
 
             status.update(label="3/5 Writing prompts…")
-            scenes = generate_prompts_for_scenes(scenes, tone=tone, style=visual_style)
-            st.session_state.scenes = scenes
+            st.session_state.scenes = generate_prompts_for_scenes(
+                st.session_state.scenes,
+                tone=tone,
+                style=visual_style,
+            )
 
             status.update(label="4/5 Generating images…")
-            scenes_out = []
-            failed_idxs = []
-            
-            # Pass 1
-            for s in scenes:
-                variations = []
-                for _ in range(variations_per_scene):
-                    s2 = generate_image_for_scene(
-                        s,
-                        aspect_ratio=aspect_ratio,
-                        visual_style=visual_style,
-                    )
-                    variations.append(s2.image_bytes)
-                s.image_variations = variations
-                s.primary_image_index = 0
-                s.image_bytes = variations[0] if variations else None
-                if any(img is None for img in variations):
-                    failed_idxs.append(s.index)
-                scenes_out.append(s)
-            
-            # Pass 2 (retry failures once)
-            if failed_idxs:
-                status.update(label=f"4/5 Retrying {len(failed_idxs)} failed images…")
-                for i in range(len(scenes_out)):
-                    if scenes_out[i].index in failed_idxs:
-                        updated_variations = []
-                        for img in scenes_out[i].image_variations:
-                            if img:
-                                updated_variations.append(img)
-                                continue
-                            s2 = generate_image_for_scene(
-                                scenes_out[i],
-                                aspect_ratio=aspect_ratio,
-                                visual_style=visual_style,
-                            )
-                            updated_variations.append(s2.image_bytes)
-                        scenes_out[i].image_variations = updated_variations
-                        primary = _get_primary_image(scenes_out[i])
-                        scenes_out[i].image_bytes = primary
-            
-            # Count remaining failures
-            failures = sum(
-                1 for s in scenes_out if any(img is None for img in s.image_variations)
+            scenes_out, failures = generate_visuals_from_script(
+                script=script,
+                num_images=num_images,
+                tone=tone,
+                visual_style=visual_style,
+                aspect_ratio=aspect_ratio,
+                variations_per_scene=variations_per_scene,
+                scenes=st.session_state.scenes,
             )
-            
             st.session_state.scenes = scenes_out
             if enable_voiceover:
                 status.update(label="5/5 Generating voiceover…")
@@ -517,98 +239,39 @@ def main() -> None:
             "voice_id": voice_id,
         }
 
-        if supabase:
-            owner_id = _resolve_owner_id(supabase, supabase_cfg)
-            if owner_id:
-                settings = {
-                    "topic": topic,
-                    "length": length,
-                    "tone": tone,
-                    "aspect_ratio": aspect_ratio,
-                    "visual_style": visual_style,
-                    "num_images": num_images,
-                    "variations_per_scene": variations_per_scene,
-                    "script": script,
-                    "voice_id": voice_id,
-                }
-                try:
-                    story_resp = (
-                        supabase.table("stories")
-                        .insert(
-                            {
-                                "owner_id": owner_id,
-                                "title": topic or "Untitled Story",
-                                "settings": settings,
-                            }
-                        )
-                        .execute()
-                    )
-                    story_row = story_resp.data[0] if story_resp.data else None
-                    story_id = _resolve_story_id(story_row, supabase_cfg) if story_row else None
-                except Exception as exc:
-                    st.session_state.supabase_last_error = f"Insert story: {exc}"
-                    story_id = None
-                if story_id is None and story_row:
-                    st.session_state.supabase_last_error = (
-                        "Insert story: missing valid id in response. "
-                        "Set SUPABASE_STORY_ID_FIELD to the stories ID column name."
-                    )
-                if story_id:
-                    st.session_state.story_id = story_id
-                    st.session_state.story_settings = settings
-                    scenes_insert = []
-                    for s in st.session_state.scenes:
-                        scenes_insert.append(
-                            {
-                                "story_id": story_id,
-                                "owner_id": owner_id,
-                                "order_index": s.index,
-                                "script_text": _pack_scene_text(s),
-                                "status": s.status,
-                            }
-                        )
-                    try:
-                        scenes_resp = supabase.table("scenes").insert(scenes_insert).execute()
-                    except Exception as exc:
-                        st.session_state.supabase_last_error = f"Insert scenes: {exc}"
-                        scenes_resp = None
-                    if scenes_resp and scenes_resp.data:
-                        for s, row in zip(st.session_state.scenes, scenes_resp.data):
-                            s.supabase_id = row.get("id")
-                        st.session_state.scenes = st.session_state.scenes
+    if generate_from_paste:
+        script = st.session_state.get("pasted_script", "").strip()
+        if not script:
+            st.sidebar.error("Paste a script first.")
+        else:
+            st.session_state.script = script
+            with st.status("Generating…", expanded=True) as status:
+                status.update(label=f"1/3 Splitting into {num_images} scenes…")
+                st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
 
-                        for s in st.session_state.scenes:
-                            if not s.supabase_id:
-                                continue
-                            if not s.image_variations:
-                                continue
-                            for idx, img in enumerate(s.image_variations):
-                                if not img:
-                                    continue
-                                path = f"{story_id}/{s.supabase_id}/image_{idx + 1:02d}.png"
-                                uploaded = _upload_asset_bytes(supabase, supabase_cfg["bucket"], path, img)
-                                if uploaded:
-                                    try:
-                                        supabase.table("assets").insert(
-                                            {
-                                                "scene_id": s.supabase_id,
-                                                "owner_id": owner_id,
-                                                "type": "image",
-                                                "url": path,
-                                                "generation_meta": {
-                                                    "variation_index": idx,
-                                                    "is_primary": idx == s.primary_image_index,
-                                                },
-                                            }
-                                        ).execute()
-                                    except Exception as exc:
-                                        st.session_state.supabase_last_error = f"Insert assets: {exc}"
-            else:
-                st.session_state.supabase_last_error = (
-                    "Supabase owner id is missing or invalid. "
-                    "Set SUPABASE_OWNER_ID to a valid UUID."
+                status.update(label="2/3 Writing prompts…")
+                st.session_state.scenes = generate_prompts_for_scenes(
+                    st.session_state.scenes,
+                    tone=tone,
+                    style=visual_style,
                 )
 
+                status.update(label="3/3 Generating images…")
+                scenes_out, failures = generate_visuals_from_script(
+                    script=script,
+                    num_images=num_images,
+                    tone=tone,
+                    visual_style=visual_style,
+                    aspect_ratio=aspect_ratio,
+                    variations_per_scene=variations_per_scene,
+                    scenes=st.session_state.scenes,
+                )
+                st.session_state.scenes = scenes_out
+
+                if failures:
+                    status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
+                else:
+                    status.update(label="Done ✅", state="complete")
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
 
@@ -621,12 +284,6 @@ def main() -> None:
             st.text_area("Script (editable)", value=script, height=420, key="script_editor")
             if st.button("💾 Save script edits", use_container_width=True):
                 st.session_state.script = st.session_state.script_editor
-                if supabase and st.session_state.get("story_id"):
-                    story_id = st.session_state.story_id
-                    settings = st.session_state.get("story_settings", {})
-                    settings["script"] = st.session_state.script
-                    supabase.table("stories").update({"settings": settings}).eq("id", story_id).execute()
-                    st.session_state.story_settings = settings
                 st.success("Saved.")
 
     with tab_visuals:
@@ -644,7 +301,7 @@ def main() -> None:
                     with action_cols[0]:
                         if st.button("⬆️ Move up", key=f"up_{s.index}", use_container_width=True, disabled=s.index == 1):
                             scenes[s.index - 2], scenes[s.index - 1] = scenes[s.index - 1], scenes[s.index - 2]
-                            _sync_scene_order(scenes, supabase)
+                            _sync_scene_order(scenes)
                             st.session_state.scenes = scenes
                             st.rerun()
                     with action_cols[1]:
@@ -655,7 +312,7 @@ def main() -> None:
                             disabled=s.index == len(scenes),
                         ):
                             scenes[s.index - 1], scenes[s.index] = scenes[s.index], scenes[s.index - 1]
-                            _sync_scene_order(scenes, supabase)
+                            _sync_scene_order(scenes)
                             st.session_state.scenes = scenes
                             st.rerun()
                     with action_cols[2]:
@@ -666,8 +323,6 @@ def main() -> None:
                             disabled=s.status == "deleted",
                         ):
                             s.status = "deleted"
-                            if supabase and s.supabase_id:
-                                supabase.table("scenes").update({"status": "deleted"}).eq("id", s.supabase_id).execute()
                             st.session_state.scenes = scenes
                             st.rerun()
                     with action_cols[3]:
@@ -678,8 +333,6 @@ def main() -> None:
                             disabled=s.status != "deleted",
                         ):
                             s.status = "active"
-                            if supabase and s.supabase_id:
-                                supabase.table("scenes").update({"status": "active"}).eq("id", s.supabase_id).execute()
                             st.session_state.scenes = scenes
                             st.rerun()
 
@@ -734,19 +387,6 @@ def main() -> None:
                                 ):
                                     s.primary_image_index = idx
                                     s.image_bytes = img
-                                    if supabase and s.supabase_id:
-                                        assets = (
-                                            supabase.table("assets")
-                                            .select("*")
-                                            .eq("scene_id", s.supabase_id)
-                                            .eq("type", "image")
-                                            .execute()
-                                        ).data or []
-                                        for asset in assets:
-                                            meta = asset.get("generation_meta") or {}
-                                            variation_index = int(meta.get("variation_index", 0))
-                                            meta["is_primary"] = variation_index == idx
-                                            supabase.table("assets").update({"generation_meta": meta}).eq("id", asset["id"]).execute()
                                     st.session_state.scenes = scenes
                                     st.rerun()
 
@@ -772,28 +412,12 @@ def main() -> None:
                         if st.button("✏️ Apply refinement", key=f"apply_ref_{s.index}", use_container_width=True):
                             if refine.strip():
                                 s.image_prompt = (s.image_prompt + "\n\nRefinement: " + refine.strip()).strip()
-                                if supabase and s.supabase_id:
-                                    supabase.table("scenes").update(
-                                        {"script_text": _pack_scene_text(s)}
-                                    ).eq("id", s.supabase_id).execute()
                                 st.success("Prompt updated. Now regenerate the image.")
                                 st.rerun()
 
                     with c2:
                         if st.button("🔄 Regenerate primary image", key=f"regen_{s.index}", use_container_width=True):
                             try:
-                                if supabase and s.supabase_id:
-                                    owner_id = _resolve_owner_id(supabase, supabase_cfg)
-                                    if owner_id:
-                                        supabase.table("jobs").insert(
-                                            {
-                                                "scene_id": s.supabase_id,
-                                                "owner_id": owner_id,
-                                                "kind": "image_regen",
-                                                "status": "queued",
-                                                "progress": 0,
-                                            }
-                                        ).execute()
                                 updated = generate_image_for_scene(
                                     s,
                                     aspect_ratio=aspect_ratio,
@@ -802,29 +426,6 @@ def main() -> None:
                                 if s.image_variations:
                                     s.image_variations[s.primary_image_index] = updated.image_bytes
                                 s.image_bytes = updated.image_bytes
-                                if supabase and s.supabase_id and updated.image_bytes:
-                                    owner_id = _resolve_owner_id(supabase, supabase_cfg)
-                                    if owner_id:
-                                        path = f"{st.session_state.story_id}/{s.supabase_id}/image_{s.primary_image_index + 1:02d}.png"
-                                        uploaded = _upload_asset_bytes(
-                                            supabase, supabase_cfg["bucket"], path, updated.image_bytes
-                                        )
-                                        if uploaded:
-                                            supabase.table("assets").insert(
-                                                {
-                                                    "scene_id": s.supabase_id,
-                                                    "owner_id": owner_id,
-                                                    "type": "image",
-                                                    "url": path,
-                                                    "generation_meta": {
-                                                        "variation_index": s.primary_image_index,
-                                                        "is_primary": True,
-                                                    },
-                                                }
-                                            ).execute()
-                                        supabase.table("jobs").update(
-                                            {"status": "complete", "progress": 100}
-                                        ).eq("scene_id", s.supabase_id).eq("kind", "image_regen").execute()
                                 st.session_state.scenes = scenes
                                 if updated.image_bytes:
                                     st.success("Image regenerated.")
@@ -872,31 +473,12 @@ def main() -> None:
 - `gemini_api_key`
 - `elevenlabs_api_key`
 - optional: `APP_PASSCODE` (or legacy `app_password`)
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY` (preferred)
-- `SUPABASE_ANON_KEY` (fallback)
-- `SUPABASE_EMAIL`
-- `SUPABASE_PASSWORD`
-- optional: `SUPABASE_OWNER_ID` (UUID if auth is unavailable)
-- optional: `SUPABASE_STORY_ID_FIELD` (ID column in stories table, UUID or integer)
-- optional: `SUPABASE_STORAGE_BUCKET` (default: `scene-assets`)
 
 If images fail, check logs for:
 - `[Gemini image gen failed]`
 - `[Gemini image gen final] FAILED`
 """.strip()
         )
-        auth_error = st.session_state.get("supabase_auth_error")
-        if auth_error:
-            st.warning(f"Supabase auth error: {auth_error}")
-        last_error = st.session_state.get("supabase_last_error")
-        if last_error:
-            st.warning(f"Supabase data error: {last_error}")
-            if "row-level security" in last_error or "row level security" in last_error:
-                st.info(
-                    "RLS blocked the insert. Add an INSERT policy for the table(s) that allows "
-                    "`owner_id = auth.uid()` for the signed-in user."
-                )
 
 if __name__ == "__main__":
     main()
