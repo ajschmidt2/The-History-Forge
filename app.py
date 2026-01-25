@@ -101,6 +101,7 @@ def init_state() -> None:
             "The Day the Titanic Was Found",
         ],
     )
+    st.session_state["visual_style"] = visual_style
 
 
 
