@@ -140,51 +140,58 @@ def generate_script(topic: str, length: str, tone: str) -> str:
 # ----------------------------
 # Deterministic fallback chunking (ENFORCES N scenes)
 # ----------------------------
+def _split_into_groups(items: List[str], target_n: int) -> List[List[str]]:
+    if target_n <= 0:
+        return []
+    total = len(items)
+    if total == 0:
+        return [[] for _ in range(target_n)]
+    base = total // target_n
+    extra = total % target_n
+    groups: List[List[str]] = []
+    idx = 0
+    for i in range(target_n):
+        take = base + (1 if i < extra else 0)
+        groups.append(items[idx:idx + take])
+        idx += take
+    return groups
+
+
 def _fallback_chunk_scenes(script: str, target_n: int) -> List[Scene]:
     script = (script or "").strip()
-    if not script:
+    if not script or target_n <= 0:
         return []
 
-    # Split by paragraphs first
-    paras = [p.strip() for p in re.split(r"\n\s*\n", script) if p.strip()]
-    if not paras:
-        paras = [script]
+    # Prefer sentence-based splitting so scenes stay aligned throughout the script.
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
+    use: List[str] = []
 
-    # If we already have enough paragraphs, take first N
-    if len(paras) >= target_n:
-        use = paras[:target_n]
+    if len(sentences) >= target_n:
+        groups = _split_into_groups(sentences, target_n)
+        for group in groups:
+            use.append(" ".join(group).strip())
     else:
-        # Otherwise, chunk the whole script into roughly N equal character chunks
-        # (more stable than asking the model again)
-        joined = "\n\n".join(paras)
-        L = len(joined)
-        step = max(200, L // target_n)  # minimum chunk size
-        use = []
-        start = 0
-        while start < L and len(use) < target_n:
-            end = min(L, start + step)
-            # try to break at sentence boundary near end
-            window = joined[start:end]
-            m = re.search(r"(.+?[.!?])\s", window[::-1])
-            # m is not super useful reversed; keep simple:
-            use.append(joined[start:end].strip())
-            start = end
-
-        # If still short, pad with last chunk
-        while len(use) < target_n:
-            use.append(use[-1])
+        # If not enough sentences, fall back to word-based splitting.
+        words = script.split()
+        if not words:
+            return []
+        word_groups = _split_into_groups(words, target_n)
+        for group in word_groups:
+            use.append(" ".join(group).strip())
 
     scenes = []
     for i, txt in enumerate(use, start=1):
-        txt2 = txt.strip()
-        if not txt2:
-            txt2 = script[:240].strip()
+        txt2 = txt.strip() or script[:240].strip()
         scenes.append(
             Scene(
                 index=i,
                 title=f"Scene {i}",
                 script_excerpt=txt2,
-                visual_intent=f"Create a strong historical visual that matches this excerpt: {txt2[:180]}...",
+                visual_intent=(
+                    "Create a strong historical visual that matches this excerpt. "
+                    "Identify the likely time period, location, and key setting details from the excerpt: "
+                    f"{txt2[:180]}..."
+                ),
             )
         )
     return scenes
@@ -231,21 +238,22 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
         if not isinstance(raw, list):
             raw = []
 
-        # 2) Overlay model results onto fallback (keeping exact length)
-        for i in range(min(len(raw), max_scenes)):
-            sc = raw[i] if isinstance(raw[i], dict) else {}
-            title = str(sc.get("title", fallback[i].title)).strip() or fallback[i].title
-            text = str(sc.get("text", fallback[i].script_excerpt)).strip() or fallback[i].script_excerpt
-            vi = str(sc.get("visual_intent", fallback[i].visual_intent)).strip() or fallback[i].visual_intent
+        # 2) Only overlay when the model returns a full set to preserve even coverage.
+        if len(raw) >= max_scenes:
+            for i in range(min(len(raw), max_scenes)):
+                sc = raw[i] if isinstance(raw[i], dict) else {}
+                title = str(sc.get("title", fallback[i].title)).strip() or fallback[i].title
+                text = str(sc.get("text", fallback[i].script_excerpt)).strip() or fallback[i].script_excerpt
+                vi = str(sc.get("visual_intent", fallback[i].visual_intent)).strip() or fallback[i].visual_intent
 
-            fallback[i] = Scene(
-                index=i + 1,
-                title=title,
-                script_excerpt=text,
-                visual_intent=vi,
-                image_prompt=fallback[i].image_prompt,
-                image_bytes=fallback[i].image_bytes,
-            )
+                fallback[i] = Scene(
+                    index=i + 1,
+                    title=title,
+                    script_excerpt=text,
+                    visual_intent=vi,
+                    image_prompt=fallback[i].image_prompt,
+                    image_bytes=fallback[i].image_bytes,
+                )
 
     except Exception:
         # If OpenAI fails or returns weird JSON, we still return fallback
@@ -260,7 +268,10 @@ def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
         if not s.script_excerpt:
             s.script_excerpt = script[:240].strip()
         if not s.visual_intent:
-            s.visual_intent = f"Create a strong historical visual matching: {s.script_excerpt[:180]}..."
+            s.visual_intent = (
+                "Create a strong historical visual. Identify the time period and location from the excerpt: "
+                f"{s.script_excerpt[:180]}..."
+            )
 
     return fallback
 
@@ -296,12 +307,17 @@ def generate_prompts_for_scenes(
     payload = {
         "tone": tone,
         "style": style_phrase,
-        "task": "Write one image prompt per scene. Return exactly one prompt per scene in the same order.",
+        "task": (
+            "Write one image prompt per scene. Return exactly one prompt per scene in the same order. "
+            "Each prompt must name the time period and location inferred from the excerpt, plus concrete "
+            "setting details (architecture, clothing, props) that match the story."
+        ),
         "output": {"format": "json", "field": "prompts"},
         "scenes": packed,
         "constraints": [
             "No text overlays, captions, logos, or watermarks.",
             "Be specific about subject, setting, era cues, lighting, mood, camera feel.",
+            "Explicitly state the era/time period and setting grounded in the excerpt.",
             "Match the selected style strongly."
         ],
     }
@@ -334,6 +350,8 @@ def generate_prompts_for_scenes(
         context = (
             f"Visual intent: {s.visual_intent}\n"
             f"Scene excerpt: {s.script_excerpt}\n"
+            "Include the time period and location inferred from the excerpt. "
+            "Call out architecture, clothing, and props that fit the era. "
             "No text overlays, captions, logos, or watermarks. High detail."
         )
         if not p:
