@@ -1,11 +1,10 @@
 import io
-from typing import Any, Iterable
+from typing import Iterable
 
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
-from app import require_login, _get_primary_image, _sync_scene_order, init_state
-from utils import Scene, generate_image_for_scene
+from utils import Scene, generate_image_for_scene, get_secret
 
 
 DASHBOARD_CSS = """
@@ -127,6 +126,50 @@ section[data-testid="stSidebar"] > div {
 footer {visibility: hidden;}
 </style>
 """
+
+
+def require_login() -> None:
+    pw = (
+        st.secrets.get("APP_PASSCODE", "")
+        or st.secrets.get("app_password", "")
+        or get_secret("APP_PASSCODE", "")
+        or get_secret("app_password", "")
+    ).strip()
+    if not pw:
+        return
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if st.session_state.authenticated:
+        return
+    st.title("🔒 The History Forge")
+    entered = st.text_input("Password", type="password")
+    if st.button("Log in", use_container_width=True):
+        if entered == pw:
+            st.session_state.authenticated = True
+            st.rerun()
+        st.error("Incorrect password")
+    st.stop()
+
+
+def init_state() -> None:
+    st.session_state.setdefault("scenes", [])
+    st.session_state.setdefault("scene_prompts", {})
+    st.session_state.setdefault("scene_images", {})
+    st.session_state.setdefault("active_story_title", "Untitled Project")
+    st.session_state.setdefault("aspect_ratio", "16:9")
+    st.session_state.setdefault("visual_style", "Photorealistic cinematic")
+
+
+def _sync_scene_order(scenes: list[Scene]) -> None:
+    for idx, scene in enumerate(scenes, start=1):
+        scene.index = idx
+
+
+def _get_primary_image(scene: Scene) -> bytes | None:
+    if scene.image_variations:
+        idx = max(0, min(scene.primary_image_index, len(scene.image_variations) - 1))
+        return scene.image_variations[idx]
+    return scene.image_bytes
 
 
 def _placeholder_image() -> bytes:
