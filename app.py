@@ -286,7 +286,14 @@ def main() -> None:
             st.session_state.topic = settings.get("topic", "")
             st.session_state.voice_id = settings.get("voice_id", "")
             st.session_state.story_settings = settings
-            scene_rows = _load_story_scenes(supabase, story_id) if story_id else []
+            if story_id is None:
+                scene_rows = []
+            else:
+                try:
+                    scene_rows = _load_story_scenes(supabase, story_id)
+                except Exception as exc:
+                    st.session_state.supabase_last_error = f"Load scenes: {exc}"
+                    scene_rows = []
             scene_ids = [row["id"] for row in scene_rows]
             assets = _load_scene_assets(supabase, scene_ids)
             assets_by_scene: Dict[str, List[Dict[str, Any]]] = {}
