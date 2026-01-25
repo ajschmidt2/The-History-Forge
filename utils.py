@@ -79,6 +79,7 @@ class Scene:
     image_variations: List[Optional[bytes]] = field(default_factory=list)
     primary_image_index: int = 0
     status: str = "active"
+    image_error: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -506,6 +507,7 @@ def generate_image_for_scene(
 ) -> Scene:
     provider, client = _gemini_client()
     if client is None:
+        scene.image_error = "Gemini API key missing or invalid. Add gemini_api_key in Streamlit Secrets."
         return scene
 
     base = (scene.image_prompt or "").strip()
@@ -528,6 +530,7 @@ def generate_image_for_scene(
 
     png_bytes: Optional[bytes] = None
     last_error: Optional[str] = None
+    scene.image_error = ""
 
     for attempt in range(4):
         try:
@@ -579,7 +582,11 @@ def generate_image_for_scene(
                 break
 
         except Exception as e:
-            last_error = f"{type(e).__name__}: {e}"
+            err_text = str(e)
+            if "API_KEY_INVALID" in err_text or "API key not valid" in err_text:
+                last_error = "Gemini API key is invalid. Update gemini_api_key in Streamlit Secrets."
+            else:
+                last_error = f"{type(e).__name__}: {e}"
             print(f"[Gemini image gen failed] attempt={attempt+1} {last_error}")
             if _is_retryable(e) and attempt < 3:
                 _sleep_backoff(attempt)
@@ -588,6 +595,7 @@ def generate_image_for_scene(
 
     if not png_bytes and last_error:
         print(f"[Gemini image gen final] FAILED: {last_error}")
+        scene.image_error = last_error
 
     scene.image_bytes = png_bytes
     return scene

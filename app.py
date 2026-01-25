@@ -407,7 +407,12 @@ def main() -> None:
                                 use_container_width=True,
                             )
                     else:
-                        st.error("Image missing for this scene. Check logs for '[Gemini image gen failed]'.")
+                        msg = "Image missing for this scene."
+                        if s.image_error:
+                            msg = f"{msg} {s.image_error}"
+                        else:
+                            msg = f"{msg} Check logs for '[Gemini image gen failed]'."
+                        st.error(msg)
 
                     if s.image_variations and len(s.image_variations) > 1:
                         st.markdown("**Variations**")
