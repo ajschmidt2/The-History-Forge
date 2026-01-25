@@ -168,7 +168,8 @@ def main() -> None:
     st.sidebar.divider()
     generate_all = st.sidebar.button("✨ Generate Package", type="primary", use_container_width=True)
     split_pasted_script = st.sidebar.button("🧩 Split pasted script into scenes", use_container_width=True)
-    generate_paste_visuals = st.sidebar.button("🎨 Create prompts + images", use_container_width=True)
+    generate_paste_prompts = st.sidebar.button("📝 Create prompts from scenes", use_container_width=True)
+    generate_paste_images = st.sidebar.button("🎨 Generate images from prompts", use_container_width=True)
     debug_mode = st.sidebar.toggle("Debug mode", value=True)
 
     with st.sidebar.expander("📄 Paste your script (optional)"):
@@ -258,7 +259,7 @@ def main() -> None:
                 st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
                 status.update(label="Scenes ready ✅", state="complete")
 
-    if generate_paste_visuals:
+    if generate_paste_prompts:
         script = (
             st.session_state.get("visuals_script", "")
             or st.session_state.get("pasted_script_input", "")
@@ -271,14 +272,31 @@ def main() -> None:
             st.sidebar.error("Split the script into scenes first.")
         else:
             with st.status("Generating…", expanded=True) as status:
-                status.update(label="1/2 Writing prompts…")
+                status.update(label="Writing prompts…")
                 st.session_state.scenes = generate_prompts_for_scenes(
                     scenes,
                     tone=tone,
                     style=visual_style,
                 )
+                status.update(label="Prompts ready ✅", state="complete")
 
-                status.update(label="2/2 Generating images…")
+    if generate_paste_images:
+        script = (
+            st.session_state.get("visuals_script", "")
+            or st.session_state.get("pasted_script_input", "")
+            or st.session_state.get("pasted_script", "")
+        ).strip()
+        scenes: List[Scene] = st.session_state.get("scenes", [])
+        missing_prompts = [s for s in scenes if not s.image_prompt]
+        if not script:
+            st.sidebar.error("Paste a script first.")
+        elif not scenes:
+            st.sidebar.error("Split the script into scenes first.")
+        elif missing_prompts:
+            st.sidebar.error("Generate prompts before making images.")
+        else:
+            with st.status("Generating…", expanded=True) as status:
+                status.update(label="Generating images…")
                 scenes_out, failures = generate_visuals_from_script(
                     script=script,
                     num_images=num_images,
@@ -286,7 +304,7 @@ def main() -> None:
                     visual_style=visual_style,
                     aspect_ratio=aspect_ratio,
                     variations_per_scene=variations_per_scene,
-                    scenes=st.session_state.scenes,
+                    scenes=scenes,
                 )
                 st.session_state.scenes = scenes_out
 
