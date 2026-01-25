@@ -68,9 +68,6 @@ def _init_supabase() -> Client | None:
                 if auth and getattr(auth, "user", None):
                     st.session_state.supabase_owner_id = auth.user.id
             except Exception as exc:
-                st.warning(
-                    "Supabase sign-in failed. The app will run without a Supabase owner session."
-                )
                 st.session_state.supabase_auth_error = str(exc)
         st.session_state.supabase_client = client
     return st.session_state.supabase_client
@@ -477,7 +474,7 @@ def main() -> None:
                     )
                     story_id = story_resp.data[0]["id"] if story_resp.data else None
                 except Exception as exc:
-                    _record_supabase_error("Insert story", exc)
+                    st.session_state.supabase_last_error = f"Insert story: {exc}"
                     story_id = None
                 if story_id:
                     st.session_state.story_id = story_id
@@ -496,7 +493,7 @@ def main() -> None:
                     try:
                         scenes_resp = supabase.table("scenes").insert(scenes_insert).execute()
                     except Exception as exc:
-                        _record_supabase_error("Insert scenes", exc)
+                        st.session_state.supabase_last_error = f"Insert scenes: {exc}"
                         scenes_resp = None
                     if scenes_resp and scenes_resp.data:
                         for s, row in zip(st.session_state.scenes, scenes_resp.data):
@@ -528,7 +525,7 @@ def main() -> None:
                                         }
                                     ).execute()
                                 except Exception as exc:
-                                    _record_supabase_error("Insert assets", exc)
+                                    st.session_state.supabase_last_error = f"Insert assets: {exc}"
 
 
     tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
@@ -807,6 +804,9 @@ If images fail, check logs for:
         auth_error = st.session_state.get("supabase_auth_error")
         if auth_error:
             st.warning(f"Supabase auth error: {auth_error}")
+        last_error = st.session_state.get("supabase_last_error")
+        if last_error:
+            st.warning(f"Supabase data error: {last_error}")
 
 if __name__ == "__main__":
     main()
