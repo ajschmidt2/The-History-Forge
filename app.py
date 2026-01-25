@@ -793,6 +793,9 @@ If images fail, check logs for:
 - `[Gemini image gen final] FAILED`
 """.strip()
         )
+        auth_error = st.session_state.get("supabase_auth_error")
+        if auth_error:
+            st.warning(f"Supabase auth error: {auth_error}")
 
 if __name__ == "__main__":
     main()
