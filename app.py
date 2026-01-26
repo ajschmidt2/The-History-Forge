@@ -493,5 +493,37 @@ def main() -> None:
         tab_export_package()
 
 
+
+
+def main() -> None:
+    st.set_page_config(page_title="The History Forge", layout="wide")
+    require_login()
+    init_state()
+
+    tabs = st.tabs(
+        [
+            "Paste Script",
+            "Generate Script",
+            "Create Scenes",
+            "Create Prompts",
+            "Create Images",
+            "Export Package",
+        ]
+    )
+
+    with tabs[0]:
+        tab_paste_script()
+    with tabs[1]:
+        tab_generate_script()
+    with tabs[2]:
+        tab_create_scenes()
+    with tabs[3]:
+        tab_create_prompts()
+    with tabs[4]:
+        tab_create_images()
+    with tabs[5]:
+        tab_export_package()
+
+
 if __name__ == "__main__":
     main()
