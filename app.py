@@ -14,6 +14,7 @@ from utils import (
     generate_prompts_for_scenes,
     generate_image_for_scene,
     generate_voiceover,
+    rewrite_description,
     get_secret,
 )
 
@@ -95,6 +96,7 @@ def init_state() -> None:
     st.session_state.setdefault("title_options", [])
     st.session_state.setdefault("description_text", "")
     st.session_state.setdefault("thumbnail_prompt", "")
+    st.session_state.setdefault("thumbnail_prompt_variations", [])
     st.session_state.setdefault("thumbnail_images", [])
     st.session_state.setdefault(
         "lucky_topics",
@@ -707,6 +709,17 @@ def _description_for_script(script: str, topic: str) -> str:
     )
 
 
+def _thumbnail_prompt_variations(base_prompt: str) -> List[str]:
+    base = base_prompt.strip()
+    if not base:
+        base = "High-contrast cinematic historical thumbnail. No text."
+    return [
+        f"{base} Dramatic lighting, strong subject contrast, crisp foreground.",
+        f"{base} Wide establishing shot, epic scale, moody atmosphere.",
+        f"{base} Tight portrait framing, intense emotion, cinematic shadows.",
+    ]
+
+
 def tab_titles_thumbnails() -> None:
     st.subheader("Titles, description & thumbnails")
     st.caption("Generate title ideas, a YouTube description, and thumbnail options from your script.")
@@ -733,12 +746,32 @@ def tab_titles_thumbnails() -> None:
 
     if st.session_state.description_text:
         st.markdown("### Video description")
-        st.text_area(
+        description_value = st.text_area(
             "Description",
             value=st.session_state.description_text,
             height=160,
             key="video_description",
         )
+        st.session_state.description_text = description_value
+
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            edit_mode = st.selectbox(
+                "AI edit mode",
+                ["refresh", "shorten", "expand", "add hashtags"],
+                index=0,
+            )
+        with c2:
+            if st.button("AI edit description", use_container_width=True):
+                with st.spinner("Rewriting description..."):
+                    rewritten = rewrite_description(
+                        st.session_state.script_text,
+                        st.session_state.description_text,
+                        mode=edit_mode,
+                    )
+                st.session_state.description_text = rewritten
+                st.session_state["video_description"] = rewritten
+                st.toast("Description updated.")
 
     st.divider()
     st.markdown("### Thumbnail generation")
@@ -753,15 +786,36 @@ def tab_titles_thumbnails() -> None:
         key="thumbnail_prompt",
     )
 
-    if st.button("Generate 3 thumbnails", use_container_width=True):
+    if st.button("Generate 3 prompt variations", use_container_width=True):
+        st.session_state.thumbnail_prompt_variations = _thumbnail_prompt_variations(
+            st.session_state.thumbnail_prompt
+        )
+
+    prompt_variations = st.session_state.thumbnail_prompt_variations
+    if prompt_variations:
+        st.markdown("#### Thumbnail prompt variations")
+        for i, prompt in enumerate(prompt_variations, start=1):
+            updated_prompt = st.text_area(
+                f"Prompt {i}",
+                value=prompt,
+                height=80,
+                key=f"thumb_prompt_{i}",
+            )
+            prompt_variations[i - 1] = updated_prompt
+        st.session_state.thumbnail_prompt_variations = prompt_variations
+
+    if st.button("Generate thumbnail images", use_container_width=True):
         st.session_state.thumbnail_images = []
-        for i in range(3):
+        prompts = st.session_state.thumbnail_prompt_variations or [st.session_state.thumbnail_prompt]
+        while len(prompts) < 3:
+            prompts.append(prompts[-1])
+        for i, prompt in enumerate(prompts[:3], start=1):
             scene = Scene(
-                index=i + 1,
-                title=f"Thumbnail {i + 1}",
+                index=i,
+                title=f"Thumbnail {i}",
                 script_excerpt=st.session_state.script_text[:240],
                 visual_intent="Create a compelling YouTube thumbnail.",
-                image_prompt=st.session_state.thumbnail_prompt,
+                image_prompt=prompt,
             )
             updated = generate_image_for_scene(
                 scene,
@@ -775,13 +829,16 @@ def tab_titles_thumbnails() -> None:
         st.image(st.session_state.thumbnail_images, use_container_width=True)
         if st.button("Regenerate thumbnails", use_container_width=True):
             st.session_state.thumbnail_images = []
-            for i in range(3):
+            prompts = st.session_state.thumbnail_prompt_variations or [st.session_state.thumbnail_prompt]
+            while len(prompts) < 3:
+                prompts.append(prompts[-1])
+            for i, prompt in enumerate(prompts[:3], start=1):
                 scene = Scene(
-                    index=i + 1,
-                    title=f"Thumbnail {i + 1}",
+                    index=i,
+                    title=f"Thumbnail {i}",
                     script_excerpt=st.session_state.script_text[:240],
                     visual_intent="Create a compelling YouTube thumbnail.",
-                    image_prompt=st.session_state.thumbnail_prompt,
+                    image_prompt=prompt,
                 )
                 updated = generate_image_for_scene(
                     scene,
