@@ -93,6 +93,11 @@ def init_state() -> None:
     st.session_state.setdefault("voiceover_bytes", None)
     st.session_state.setdefault("voiceover_error", "")
     st.session_state.setdefault("compiled_video_bytes", None)
+    st.session_state.setdefault("background_music_bytes", None)
+    st.session_state.setdefault("background_music_name", "")
+    st.session_state.setdefault("background_music_url", "")
+    st.session_state.setdefault("background_music_error", "")
+    st.session_state.setdefault("background_music_volume", 0.2)
     st.session_state.setdefault("title_options", [])
     st.session_state.setdefault("description_text", "")
     st.session_state.setdefault("thumbnail_prompt", "")
@@ -588,6 +593,24 @@ def _write_scene_images(scenes: List[Scene], temp_dir: str) -> List[str]:
     return image_paths
 
 
+def _fetch_music_from_url(url: str) -> tuple[bytes | None, str]:
+    if not url:
+        return None, "Enter a URL to fetch."
+    try:
+        import requests
+    except ModuleNotFoundError:
+        return None, "Requests is not installed."
+    try:
+        response = requests.get(url, timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return None, f"Could not download audio: {exc}"
+    content_type = response.headers.get("content-type", "").lower()
+    if "audio" not in content_type and not url.lower().endswith((".mp3", ".wav", ".m4a", ".aac", ".ogg")):
+        return None, "The URL does not appear to point to an audio file."
+    return response.content, ""
+
+
 def tab_compile_video() -> None:
     st.subheader("Compile slideshow video")
     st.caption("Combine scene images into an MP4 slideshow. Optionally attach the voiceover.")
@@ -612,6 +635,49 @@ def tab_compile_video() -> None:
     fade_duration = st.slider("Fade in/out (seconds)", 0.0, 2.0, 0.3, 0.1)
     crossfade = st.checkbox("Crossfade between slides", value=False)
     zoom_effect = st.checkbox("Subtle zoom-in effect", value=False)
+
+    st.markdown("### Background music (optional)")
+    st.caption(
+        "Upload a track or paste a royalty-free URL (e.g., Pixabay, Free Music Archive, or "
+        "YouTube Audio Library). Always verify the license before publishing."
+    )
+    music_upload = st.file_uploader(
+        "Upload background music",
+        type=["mp3", "wav", "m4a", "aac", "ogg"],
+        accept_multiple_files=False,
+    )
+    if music_upload is not None:
+        st.session_state.background_music_bytes = music_upload.read()
+        st.session_state.background_music_name = music_upload.name
+        st.session_state.background_music_error = ""
+    music_url = st.text_input(
+        "Or paste a music URL",
+        value=st.session_state.background_music_url,
+        placeholder="https://example.com/track.mp3",
+    )
+    st.session_state.background_music_url = music_url
+    if st.button("Fetch music from URL", use_container_width=True):
+        music_bytes, error = _fetch_music_from_url(music_url.strip())
+        if error:
+            st.session_state.background_music_error = error
+            st.session_state.background_music_bytes = None
+            st.session_state.background_music_name = ""
+        else:
+            st.session_state.background_music_bytes = music_bytes
+            st.session_state.background_music_name = music_url.split("/")[-1] or "background-music"
+            st.session_state.background_music_error = ""
+            st.toast("Background music loaded.")
+    if st.session_state.background_music_error:
+        st.warning(st.session_state.background_music_error)
+    if st.session_state.background_music_bytes:
+        st.success(f"Background music ready: {st.session_state.background_music_name or 'track'}")
+        st.session_state.background_music_volume = st.slider(
+            "Music volume",
+            0.0,
+            1.0,
+            float(st.session_state.background_music_volume),
+            0.05,
+        )
 
     if st.button("Build video", type="primary", use_container_width=True):
         with st.spinner("Compiling video..."):
@@ -651,9 +717,39 @@ def tab_compile_video() -> None:
                             clip = clip.fx(vfx.fadein, fade_duration).fx(vfx.fadeout, fade_duration)
                         audio_clips.append(clip)
                     if crossfade and len(audio_clips) > 1:
-                        video = concatenate_videoclips(audio_clips, method="compose", padding=-fade_duration).set_audio(audio_clip)
+                        video = concatenate_videoclips(
+                            audio_clips,
+                            method="compose",
+                            padding=-fade_duration,
+                        ).set_audio(audio_clip)
                     else:
                         video = concatenate_videoclips(audio_clips, method="compose").set_audio(audio_clip)
+
+                background_music = st.session_state.get("background_music_bytes")
+                if background_music:
+                    name = st.session_state.get("background_music_name", "")
+                    ext = ".mp3"
+                    if "." in name:
+                        ext = f".{name.split('.')[-1]}"
+                    music_path = f"{temp_dir}/background_music{ext}"
+                    with open(music_path, "wb") as f:
+                        f.write(background_music)
+                    music_clip = AudioFileClip(music_path)
+                    video_duration = video.duration
+                    if music_clip.duration < video_duration:
+                        from moviepy.editor import concatenate_audioclips
+
+                        loops = int(video_duration / music_clip.duration) + 1
+                        music_clip = concatenate_audioclips([music_clip] * loops)
+                    music_clip = music_clip.subclip(0, video_duration).volumex(
+                        st.session_state.background_music_volume
+                    )
+                    if video.audio:
+                        from moviepy.editor import CompositeAudioClip
+
+                        video = video.set_audio(CompositeAudioClip([music_clip, video.audio]))
+                    else:
+                        video = video.set_audio(music_clip)
 
                 output_path = f"{temp_dir}/history_forge_slideshow.mp4"
                 video.write_videofile(
