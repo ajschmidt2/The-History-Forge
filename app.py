@@ -87,6 +87,9 @@ def init_state() -> None:
     st.session_state.setdefault("active_story_title", "Untitled Project")
     st.session_state.setdefault("aspect_ratio", "16:9")
     st.session_state.setdefault("visual_style", "Photorealistic cinematic")
+    st.session_state.setdefault("voice_id", "r6YelDxIe1A40lDuW365")
+    st.session_state.setdefault("voiceover_bytes", None)
+    st.session_state.setdefault("voiceover_error", "")
     st.session_state.setdefault(
         "lucky_topics",
         [
@@ -294,12 +297,63 @@ def tab_create_scenes() -> None:
             sc.title = new_title
             sc.script_excerpt = new_text
 
-            del_col, _ = st.columns([1, 5])
-            with del_col:
+            c1, c2, c3 = st.columns([1, 1, 1])
+            with c1:
+                if st.button("Move up", key=f"up_{key}", disabled=i == 0):
+                    scenes = st.session_state.scenes
+                    scenes[i - 1], scenes[i] = scenes[i], scenes[i - 1]
+                    _sync_scene_order(scenes)
+                    st.session_state.scenes = scenes
+                    st.rerun()
+            with c2:
+                if st.button("Move down", key=f"down_{key}", disabled=i == len(st.session_state.scenes) - 1):
+                    scenes = st.session_state.scenes
+                    scenes[i + 1], scenes[i] = scenes[i], scenes[i + 1]
+                    _sync_scene_order(scenes)
+                    st.session_state.scenes = scenes
+                    st.rerun()
+            with c3:
                 if st.button("Delete scene", key=f"del_{key}"):
                     st.session_state.scenes.pop(i)
                     _sync_scene_order(st.session_state.scenes)
                     st.rerun()
+
+
+def tab_voiceover() -> None:
+    st.subheader("Generate voiceover")
+    st.caption("Create narration audio from your script using ElevenLabs.")
+
+    if not st.session_state.script_text.strip():
+        st.warning("Paste or generate a script first.")
+        return
+
+    st.session_state.voice_id = st.text_input(
+        "ElevenLabs voice ID",
+        value=st.session_state.get("voice_id", ""),
+    )
+
+    if st.button("Generate voiceover", type="primary", use_container_width=True):
+        with st.spinner("Generating voiceover..."):
+            voiceover_bytes, error = generate_voiceover(
+                st.session_state.script_text,
+                voice_id=st.session_state.voice_id,
+            )
+        st.session_state.voiceover_bytes = voiceover_bytes
+        st.session_state.voiceover_error = error or ""
+        if error:
+            st.warning(error)
+        else:
+            st.success("Voiceover ready.")
+
+    if st.session_state.voiceover_bytes:
+        st.audio(st.session_state.voiceover_bytes, format="audio/mp3")
+        st.download_button(
+            "Download voiceover",
+            data=st.session_state.voiceover_bytes,
+            file_name="voiceover.mp3",
+            mime="audio/mpeg",
+            use_container_width=True,
+        )
 
 
 def tab_create_prompts() -> None:
@@ -457,19 +511,13 @@ def tab_export_package() -> None:
 
     include_all_variations = st.checkbox("Include all image variations", value=False)
     include_voiceover = st.checkbox("Include narration voiceover", value=False)
-    voice_id = st.text_input("ElevenLabs voice ID", value=st.session_state.get("voice_id", ""))
 
     if st.button("Build ZIP", type="primary", use_container_width=True):
         voiceover_bytes = None
         if include_voiceover:
-            with st.spinner("Generating voiceover..."):
-                voiceover_bytes, error = generate_voiceover(
-                    st.session_state.script_text,
-                    voice_id=voice_id,
-                )
-                if error:
-                    st.warning(error)
-                    voiceover_bytes = None
+            voiceover_bytes = st.session_state.get("voiceover_bytes")
+            if not voiceover_bytes:
+                st.warning("Generate a voiceover in the Voiceover tab first.")
 
         zip_bytes = build_export_zip(
             st.session_state.script_text,
@@ -499,6 +547,7 @@ def main() -> None:
             "Create Scenes",
             "Create Prompts",
             "Create Images",
+            "Voiceover",
             "Export Package",
         ]
     )
@@ -514,6 +563,8 @@ def main() -> None:
     with tabs[4]:
         tab_create_images()
     with tabs[5]:
+        tab_voiceover()
+    with tabs[6]:
         tab_export_package()
 
 
