@@ -6,7 +6,6 @@ import zipfile
 from typing import Any, Dict, List
 
 import streamlit as st
-from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
 
 from utils import (
     Scene,
@@ -145,6 +144,17 @@ def scene_text(scene: Any) -> str:
 
 def _update_scene_prompt(scene: Scene, new_prompt: str) -> None:
     scene.image_prompt = new_prompt
+
+
+def _ensure_scene_prompt(scene: Scene) -> str:
+    if scene.image_prompt:
+        return scene.image_prompt
+    excerpt = (scene.script_excerpt or "").strip()
+    visual = (scene.visual_intent or "").strip()
+    base = "Create a cinematic historical visual aligned to the scene."
+    prompt = f"{base}\n{visual}\nScene excerpt: {excerpt}".strip()
+    scene.image_prompt = prompt
+    return prompt
 
 
 def tab_paste_script() -> None:
@@ -420,22 +430,35 @@ def tab_create_images() -> None:
     if st.button("Generate images for all scenes", type="primary", use_container_width=True):
         with st.spinner("Generating images..."):
             errors: List[str] = []
+            missing_prompts = [s for s in st.session_state.scenes if not s.image_prompt]
+            if missing_prompts:
+                st.session_state.scenes = generate_prompts_for_scenes(
+                    st.session_state.scenes,
+                    tone="Cinematic",
+                    style=st.session_state.visual_style,
+                )
             for i, sc in enumerate(st.session_state.scenes):
                 sid = get_scene_key(sc, i)
                 sc.image_prompt = st.session_state.scene_prompts.get(sid, sc.image_prompt)
+                _ensure_scene_prompt(sc)
                 sc.image_variations = []
                 sc.image_bytes = None
 
                 count = 1 if per_scene else variations
                 for _ in range(count):
-                    updated = generate_image_for_scene(
-                        sc,
-                        aspect_ratio=st.session_state.aspect_ratio,
-                        visual_style=st.session_state.visual_style,
-                    )
-                    if updated.image_bytes:
-                        _store_scene_image(sc, updated.image_bytes)
-                    if updated.image_error:
+                    updated = None
+                    for attempt in range(2):
+                        updated = generate_image_for_scene(
+                            sc,
+                            aspect_ratio=st.session_state.aspect_ratio,
+                            visual_style=st.session_state.visual_style,
+                        )
+                        if updated.image_bytes:
+                            _store_scene_image(sc, updated.image_bytes)
+                            break
+                        if updated.image_error and "no image bytes" not in updated.image_error.lower():
+                            break
+                    if updated and updated.image_error and not updated.image_bytes:
                         errors.append(f"{scene_title(sc, i)}: {updated.image_error}")
             if errors:
                 st.warning("Image generation issues:\n" + "\n".join(errors))
@@ -488,13 +511,20 @@ def tab_create_images() -> None:
                         sc.image_variations = []
                         sc.image_bytes = None
                         for _ in range(variations):
-                            updated = generate_image_for_scene(
-                                sc,
-                                aspect_ratio=st.session_state.aspect_ratio,
-                                visual_style=st.session_state.visual_style,
-                            )
-                            if updated.image_bytes:
-                                _store_scene_image(sc, updated.image_bytes)
+                            updated = None
+                            for attempt in range(2):
+                                updated = generate_image_for_scene(
+                                    sc,
+                                    aspect_ratio=st.session_state.aspect_ratio,
+                                    visual_style=st.session_state.visual_style,
+                                )
+                                if updated.image_bytes:
+                                    _store_scene_image(sc, updated.image_bytes)
+                                    break
+                                if updated.image_error and "no image bytes" not in updated.image_error.lower():
+                                    break
+                            if updated and updated.image_error and not updated.image_bytes:
+                                st.warning(f"{scene_title(sc, i)}: {updated.image_error}")
                     st.toast("Regenerated.")
                     st.rerun()
             with c2:
@@ -559,6 +589,12 @@ def tab_compile_video() -> None:
     st.subheader("Compile slideshow video")
     st.caption("Combine scene images into an MP4 slideshow. Optionally attach the voiceover.")
 
+    try:
+        from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, vfx
+    except ModuleNotFoundError:
+        st.error("MoviePy is not installed. Run `pip install -r requirements.txt` to enable video compilation.")
+        return
+
     scenes = [s for s in st.session_state.scenes if s.status != "deleted"]
     if not scenes:
         st.warning("Create scenes and images first.")
@@ -567,6 +603,9 @@ def tab_compile_video() -> None:
     duration_per_image = st.slider("Seconds per image", 1.0, 12.0, 4.0, 0.5)
     fps = st.selectbox("FPS", [24, 30, 60], index=1)
     include_voiceover = st.checkbox("Attach voiceover if available", value=True)
+    fade_duration = st.slider("Fade in/out (seconds)", 0.0, 2.0, 0.3, 0.1)
+    crossfade = st.checkbox("Crossfade between slides", value=False)
+    zoom_effect = st.checkbox("Subtle zoom-in effect", value=False)
 
     if st.button("Build video", type="primary", use_container_width=True):
         with st.spinner("Compiling video..."):
@@ -577,8 +616,19 @@ def tab_compile_video() -> None:
                     st.warning("No images found to compile. Generate images first.")
                     return
 
-                clips = [ImageClip(path).set_duration(duration_per_image) for path in image_paths]
-                video = concatenate_videoclips(clips, method="compose")
+                clips = []
+                for path in image_paths:
+                    clip = ImageClip(path).set_duration(duration_per_image)
+                    if zoom_effect:
+                        clip = clip.fx(vfx.resize, lambda t: 1 + 0.03 * t / duration_per_image)
+                    if fade_duration > 0:
+                        clip = clip.fx(vfx.fadein, fade_duration).fx(vfx.fadeout, fade_duration)
+                    clips.append(clip)
+
+                if crossfade and len(clips) > 1:
+                    video = concatenate_videoclips(clips, method="compose", padding=-fade_duration)
+                else:
+                    video = concatenate_videoclips(clips, method="compose")
 
                 if voiceover_bytes:
                     audio_path = f"{temp_dir}/voiceover.mp3"
@@ -586,10 +636,18 @@ def tab_compile_video() -> None:
                         f.write(voiceover_bytes)
                     audio_clip = AudioFileClip(audio_path)
                     per_image = max(audio_clip.duration / len(clips), 0.5)
-                    video = concatenate_videoclips(
-                        [ImageClip(path).set_duration(per_image) for path in image_paths],
-                        method="compose",
-                    ).set_audio(audio_clip)
+                    audio_clips = []
+                    for path in image_paths:
+                        clip = ImageClip(path).set_duration(per_image)
+                        if zoom_effect:
+                            clip = clip.fx(vfx.resize, lambda t: 1 + 0.03 * t / per_image)
+                        if fade_duration > 0:
+                            clip = clip.fx(vfx.fadein, fade_duration).fx(vfx.fadeout, fade_duration)
+                        audio_clips.append(clip)
+                    if crossfade and len(audio_clips) > 1:
+                        video = concatenate_videoclips(audio_clips, method="compose", padding=-fade_duration).set_audio(audio_clip)
+                    else:
+                        video = concatenate_videoclips(audio_clips, method="compose").set_audio(audio_clip)
 
                 output_path = f"{temp_dir}/history_forge_slideshow.mp4"
                 video.write_videofile(
