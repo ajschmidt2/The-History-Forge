@@ -80,6 +80,7 @@ def build_export_zip(
 def init_state() -> None:
     st.session_state.setdefault("topic", "")
     st.session_state.setdefault("script_text", "")
+    st.session_state.setdefault("script_text_pending", None)
     st.session_state.setdefault("scenes", [])
     st.session_state.setdefault("scene_prompts", {})
     st.session_state.setdefault("scene_images", {})
@@ -140,6 +141,12 @@ def tab_paste_script() -> None:
     st.subheader("Paste your own script")
     st.caption("Paste an existing script and use it as the source for scenes, prompts, images, and export.")
 
+    pending_script = st.session_state.get("script_text_pending")
+    if pending_script:
+        st.session_state.script_text = pending_script
+        st.session_state.script = pending_script
+        st.session_state.script_text_pending = None
+
     st.text_area(
         "Script",
         value=st.session_state.script_text,
@@ -196,24 +203,28 @@ def tab_generate_script() -> None:
             return
 
         with st.spinner("Generating script..."):
-            st.session_state.script_text = generate_script(
+            generated_script = generate_script(
                 topic=st.session_state.topic,
                 length=length_map[length_display],
                 tone=tone,
             )
-        st.session_state.script = st.session_state.script_text
+        st.session_state.script_text_pending = generated_script
+        st.session_state.script = generated_script
         st.session_state.active_story_title = st.session_state.topic
         st.toast("Script generated.")
+        st.rerun()
 
-    generated_text = st.text_area(
+    preview_text = st.session_state.script_text_pending or st.session_state.script_text
+    st.session_state["generated_script_preview"] = preview_text
+    st.text_area(
         "Generated Script",
-        value=st.session_state.script_text,
+        value=preview_text,
         height=320,
         placeholder="Generated script will appear here...",
-        key="script_text",
+        key="generated_script_preview",
+        disabled=True,
     )
-    st.session_state.script_text = generated_text
-    st.session_state.script = generated_text
+    st.caption("Edit the script in the Paste Script tab.")
 
 
 def tab_create_scenes() -> None:
@@ -449,6 +460,38 @@ def tab_export_package() -> None:
             mime="application/zip",
             use_container_width=True,
         )
+
+
+
+def main() -> None:
+    st.set_page_config(page_title="The History Forge", layout="wide")
+    require_login()
+    init_state()
+
+    tabs = st.tabs(
+        [
+            "Paste Script",
+            "Generate Script",
+            "Create Scenes",
+            "Create Prompts",
+            "Create Images",
+            "Export Package",
+        ]
+    )
+
+    with tabs[0]:
+        tab_paste_script()
+    with tabs[1]:
+        tab_generate_script()
+    with tabs[2]:
+        tab_create_scenes()
+    with tabs[3]:
+        tab_create_prompts()
+    with tabs[4]:
+        tab_create_images()
+    with tabs[5]:
+        tab_export_package()
+
 
 
 
