@@ -387,6 +387,23 @@ def tab_create_images() -> None:
         primary = _get_primary_image(sc)
 
         with st.expander(f"{i + 1:02d} — {scene_title(sc, i)} images", expanded=False):
+            prompt_key = f"image_prompt_{sid}"
+            augment_key = f"image_prompt_augment_{sid}"
+            base_prompt = st.session_state.scene_prompts.get(sid, sc.image_prompt or "")
+            st.session_state.setdefault(prompt_key, base_prompt)
+            st.text_area(
+                "Image prompt",
+                key=prompt_key,
+                height=90,
+                placeholder="Edit the image prompt for this scene...",
+            )
+            st.session_state.scene_prompts[sid] = st.session_state.get(prompt_key, base_prompt)
+            st.text_input(
+                "Augment prompt",
+                key=augment_key,
+                placeholder="Optional additions (lighting, lens, mood, etc.)",
+            )
+
             if primary:
                 st.image(primary, use_container_width=True)
             else:
@@ -399,7 +416,13 @@ def tab_create_images() -> None:
             c1, c2 = st.columns([1, 1])
             with c1:
                 if st.button("Regenerate this scene", key=f"regen_{sid}"):
-                    sc.image_prompt = st.session_state.scene_prompts.get(sid, sc.image_prompt)
+                    base = st.session_state.get(prompt_key, "").strip()
+                    augment = st.session_state.get(augment_key, "").strip()
+                    combined_prompt = base
+                    if augment:
+                        combined_prompt = f"{base}\n\nAugment: {augment}".strip()
+                    sc.image_prompt = combined_prompt
+                    st.session_state.scene_prompts[sid] = base
                     with st.spinner("Regenerating..."):
                         sc.image_variations = []
                         sc.image_bytes = None
@@ -461,70 +484,6 @@ def tab_export_package() -> None:
             mime="application/zip",
             use_container_width=True,
         )
-
-
-
-def main() -> None:
-    st.set_page_config(page_title="The History Forge", layout="wide")
-    require_login()
-    init_state()
-
-    tabs = st.tabs(
-        [
-            "Paste Script",
-            "Generate Script",
-            "Create Scenes",
-            "Create Prompts",
-            "Create Images",
-            "Export Package",
-        ]
-    )
-
-    with tabs[0]:
-        tab_paste_script()
-    with tabs[1]:
-        tab_generate_script()
-    with tabs[2]:
-        tab_create_scenes()
-    with tabs[3]:
-        tab_create_prompts()
-    with tabs[4]:
-        tab_create_images()
-    with tabs[5]:
-        tab_export_package()
-
-
-
-
-def main() -> None:
-    st.set_page_config(page_title="The History Forge", layout="wide")
-    require_login()
-    init_state()
-
-    tabs = st.tabs(
-        [
-            "Paste Script",
-            "Generate Script",
-            "Create Scenes",
-            "Create Prompts",
-            "Create Images",
-            "Export Package",
-        ]
-    )
-
-    with tabs[0]:
-        tab_paste_script()
-    with tabs[1]:
-        tab_generate_script()
-    with tabs[2]:
-        tab_create_scenes()
-    with tabs[3]:
-        tab_create_prompts()
-    with tabs[4]:
-        tab_create_images()
-    with tabs[5]:
-        tab_export_package()
-
 
 
 
