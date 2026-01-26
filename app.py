@@ -782,7 +782,7 @@ def tab_titles_thumbnails() -> None:
         f"High-contrast cinematic thumbnail for {st.session_state.active_story_title}. "
         "Bold historical imagery, dramatic lighting, clear focal subject. No text."
     )
-    st.session_state.thumbnail_prompt = st.text_area(
+    thumbnail_prompt = st.text_area(
         "Thumbnail prompt",
         value=default_prompt,
         height=90,
@@ -791,7 +791,7 @@ def tab_titles_thumbnails() -> None:
 
     if st.button("Generate 3 prompt variations", use_container_width=True):
         st.session_state.thumbnail_prompt_variations = _thumbnail_prompt_variations(
-            st.session_state.thumbnail_prompt
+            thumbnail_prompt
         )
 
     prompt_variations = st.session_state.thumbnail_prompt_variations
