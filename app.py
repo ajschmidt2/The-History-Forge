@@ -320,6 +320,7 @@ def tab_create_prompts() -> None:
             for i, sc in enumerate(st.session_state.scenes):
                 sid = get_scene_key(sc, i)
                 st.session_state.scene_prompts[sid] = sc.image_prompt
+                st.session_state[f"prompt_{sid}"] = sc.image_prompt
         st.toast("Prompts ready.")
 
     st.divider()
@@ -460,6 +461,38 @@ def tab_export_package() -> None:
             mime="application/zip",
             use_container_width=True,
         )
+
+
+
+def main() -> None:
+    st.set_page_config(page_title="The History Forge", layout="wide")
+    require_login()
+    init_state()
+
+    tabs = st.tabs(
+        [
+            "Paste Script",
+            "Generate Script",
+            "Create Scenes",
+            "Create Prompts",
+            "Create Images",
+            "Export Package",
+        ]
+    )
+
+    with tabs[0]:
+        tab_paste_script()
+    with tabs[1]:
+        tab_generate_script()
+    with tabs[2]:
+        tab_create_scenes()
+    with tabs[3]:
+        tab_create_prompts()
+    with tabs[4]:
+        tab_create_images()
+    with tabs[5]:
+        tab_export_package()
+
 
 
 
