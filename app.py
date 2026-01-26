@@ -98,6 +98,7 @@ def init_state() -> None:
     st.session_state.setdefault("thumbnail_prompt", "")
     st.session_state.setdefault("thumbnail_prompt_variations", [])
     st.session_state.setdefault("thumbnail_images", [])
+    st.session_state.setdefault("thumbnail_aspect_ratio", "16:9")
     st.session_state.setdefault(
         "lucky_topics",
         [
@@ -778,6 +779,12 @@ def tab_titles_thumbnails() -> None:
 
     st.divider()
     st.markdown("### Thumbnail generation")
+    st.selectbox(
+        "Thumbnail aspect ratio",
+        ["16:9", "9:16", "1:1"],
+        index=["16:9", "9:16", "1:1"].index(st.session_state.thumbnail_aspect_ratio),
+        key="thumbnail_aspect_ratio",
+    )
     default_prompt = st.session_state.thumbnail_prompt or (
         f"High-contrast cinematic thumbnail for {st.session_state.active_story_title}. "
         "Bold historical imagery, dramatic lighting, clear focal subject. No text."
@@ -807,35 +814,16 @@ def tab_titles_thumbnails() -> None:
             prompt_variations[i - 1] = updated_prompt
         st.session_state.thumbnail_prompt_variations = prompt_variations
 
-    if st.button("Generate thumbnail images", use_container_width=True):
-        st.session_state.thumbnail_images = []
-        prompts = st.session_state.thumbnail_prompt_variations or [st.session_state.thumbnail_prompt]
-        while len(prompts) < 3:
-            prompts.append(prompts[-1])
-        for i, prompt in enumerate(prompts[:3], start=1):
-            scene = Scene(
-                index=i,
-                title=f"Thumbnail {i}",
-                script_excerpt=st.session_state.script_text[:240],
-                visual_intent="Create a compelling YouTube thumbnail.",
-                image_prompt=prompt,
-            )
-            updated = generate_image_for_scene(
-                scene,
-                aspect_ratio="16:9",
-                visual_style=st.session_state.visual_style,
-            )
-            if updated.image_bytes:
-                st.session_state.thumbnail_images.append(updated.image_bytes)
+    prompts = st.session_state.thumbnail_prompt_variations or [thumbnail_prompt]
+    if len(st.session_state.thumbnail_images) != len(prompts):
+        st.session_state.thumbnail_images = [None] * len(prompts)
 
-    if st.session_state.thumbnail_images:
-        st.image(st.session_state.thumbnail_images, use_container_width=True)
-        if st.button("Regenerate thumbnails", use_container_width=True):
-            st.session_state.thumbnail_images = []
-            prompts = st.session_state.thumbnail_prompt_variations or [st.session_state.thumbnail_prompt]
-            while len(prompts) < 3:
-                prompts.append(prompts[-1])
-            for i, prompt in enumerate(prompts[:3], start=1):
+    for i, prompt in enumerate(prompts, start=1):
+        cols = st.columns([2, 1])
+        with cols[0]:
+            st.markdown(f"**Thumbnail prompt {i}**")
+        with cols[1]:
+            if st.button("Generate image", key=f"generate_thumbnail_{i}", use_container_width=True):
                 scene = Scene(
                     index=i,
                     title=f"Thumbnail {i}",
@@ -845,11 +833,15 @@ def tab_titles_thumbnails() -> None:
                 )
                 updated = generate_image_for_scene(
                     scene,
-                    aspect_ratio="16:9",
+                    aspect_ratio=st.session_state.thumbnail_aspect_ratio,
                     visual_style=st.session_state.visual_style,
                 )
                 if updated.image_bytes:
-                    st.session_state.thumbnail_images.append(updated.image_bytes)
+                    st.session_state.thumbnail_images[i - 1] = updated.image_bytes
+
+        image_bytes = st.session_state.thumbnail_images[i - 1]
+        if image_bytes:
+            st.image(image_bytes, use_container_width=True)
 
 
 
