@@ -592,6 +592,9 @@ def tab_compile_video() -> None:
     st.caption("Combine scene images into an MP4 slideshow. Optionally attach the voiceover.")
 
     try:
+        from PIL import Image
+        if not hasattr(Image, "ANTIALIAS"):
+            Image.ANTIALIAS = Image.Resampling.LANCZOS  # type: ignore[attr-defined]
         from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips, vfx
     except ModuleNotFoundError:
         st.error("MoviePy is not installed. Run `pip install -r requirements.txt` to enable video compilation.")
