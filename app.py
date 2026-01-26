@@ -1,10 +1,12 @@
 import io
 import json
 import random
+import tempfile
 import zipfile
 from typing import Any, Dict, List
 
 import streamlit as st
+from moviepy.editor import AudioFileClip, ImageClip, concatenate_videoclips
 
 from utils import (
     Scene,
@@ -90,6 +92,7 @@ def init_state() -> None:
     st.session_state.setdefault("voice_id", "r6YelDxIe1A40lDuW365")
     st.session_state.setdefault("voiceover_bytes", None)
     st.session_state.setdefault("voiceover_error", "")
+    st.session_state.setdefault("compiled_video_bytes", None)
     st.session_state.setdefault(
         "lucky_topics",
         [
@@ -532,6 +535,13 @@ def tab_export_package() -> None:
             mime="application/zip",
             use_container_width=True,
         )
+        st.download_button(
+            "Download ZIP",
+            data=zip_bytes,
+            file_name="history_forge_export.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
 
 
 
@@ -565,6 +575,119 @@ def main() -> None:
     with tabs[5]:
         tab_voiceover()
     with tabs[6]:
+        tab_export_package()
+
+
+
+
+def _write_scene_images(scenes: List[Scene], temp_dir: str) -> List[str]:
+    image_paths: List[str] = []
+    for scene in scenes:
+        img = _get_primary_image(scene)
+        if not img:
+            continue
+        path = f"{temp_dir}/scene_{scene.index:02d}.png"
+        with open(path, "wb") as f:
+            f.write(img)
+        image_paths.append(path)
+    return image_paths
+
+
+def tab_compile_video() -> None:
+    st.subheader("Compile slideshow video")
+    st.caption("Combine scene images into an MP4 slideshow. Optionally attach the voiceover.")
+
+    scenes = [s for s in st.session_state.scenes if s.status != "deleted"]
+    if not scenes:
+        st.warning("Create scenes and images first.")
+        return
+
+    duration_per_image = st.slider("Seconds per image", 1.0, 12.0, 4.0, 0.5)
+    fps = st.selectbox("FPS", [24, 30, 60], index=1)
+    include_voiceover = st.checkbox("Attach voiceover if available", value=True)
+
+    if st.button("Build video", type="primary", use_container_width=True):
+        with st.spinner("Compiling video..."):
+            voiceover_bytes = st.session_state.get("voiceover_bytes") if include_voiceover else None
+            with tempfile.TemporaryDirectory() as temp_dir:
+                image_paths = _write_scene_images(scenes, temp_dir)
+                if not image_paths:
+                    st.warning("No images found to compile. Generate images first.")
+                    return
+
+                clips = [ImageClip(path).set_duration(duration_per_image) for path in image_paths]
+                video = concatenate_videoclips(clips, method="compose")
+
+                if voiceover_bytes:
+                    audio_path = f"{temp_dir}/voiceover.mp3"
+                    with open(audio_path, "wb") as f:
+                        f.write(voiceover_bytes)
+                    audio_clip = AudioFileClip(audio_path)
+                    per_image = max(audio_clip.duration / len(clips), 0.5)
+                    video = concatenate_videoclips(
+                        [ImageClip(path).set_duration(per_image) for path in image_paths],
+                        method="compose",
+                    ).set_audio(audio_clip)
+
+                output_path = f"{temp_dir}/history_forge_slideshow.mp4"
+                video.write_videofile(
+                    output_path,
+                    fps=fps,
+                    codec="libx264",
+                    audio_codec="aac",
+                    verbose=False,
+                    logger=None,
+                )
+                with open(output_path, "rb") as f:
+                    st.session_state.compiled_video_bytes = f.read()
+
+        st.success("Video compiled.")
+
+    if st.session_state.compiled_video_bytes:
+        st.video(st.session_state.compiled_video_bytes)
+        st.download_button(
+            "Download MP4",
+            data=st.session_state.compiled_video_bytes,
+            file_name="history_forge_slideshow.mp4",
+            mime="video/mp4",
+            use_container_width=True,
+        )
+
+
+
+def main() -> None:
+    st.set_page_config(page_title="The History Forge", layout="wide")
+    require_login()
+    init_state()
+
+    tabs = st.tabs(
+        [
+            "Paste Script",
+            "Generate Script",
+            "Create Scenes",
+            "Create Prompts",
+            "Create Images",
+            "Voiceover",
+            "Compile Video",
+            "Export Package",
+        ]
+    )
+
+    with tabs[0]:
+        tab_paste_script()
+    with tabs[1]:
+        tab_generate_script()
+    with tabs[2]:
+        tab_create_scenes()
+    with tabs[3]:
+        tab_create_prompts()
+    with tabs[4]:
+        tab_create_images()
+    with tabs[5]:
+        tab_voiceover()
+    with tabs[6]:
+        tab_compile_video()
+    with tabs[7]:
         tab_export_package()
 
 
