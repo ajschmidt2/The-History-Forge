@@ -1,6 +1,5 @@
 import io
 import json
-import random
 import tempfile
 import zipfile
 from typing import Any, Dict, List
@@ -10,6 +9,7 @@ import streamlit as st
 from utils import (
     Scene,
     generate_script,
+    generate_lucky_topic,
     split_script_into_scenes,
     generate_prompts_for_scenes,
     generate_image_for_scene,
@@ -201,20 +201,13 @@ def tab_paste_script() -> None:
 
 def tab_generate_script() -> None:
     st.subheader("Generate script")
-    st.caption("Generate a script from a topic, or pick a random topic with 'I'm Feeling Lucky'.")
+    st.caption("Generate a script from a topic, or let ChatGPT surprise you with 'I'm Feeling Lucky'.")
 
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.session_state.topic = st.text_input(
-            "Topic",
-            value=st.session_state.topic,
-            placeholder="e.g., The Rise of Rome",
-        )
-    with c2:
-        if st.button("🎲 I'm Feeling Lucky", use_container_width=True):
-            st.session_state.topic = random.choice(st.session_state.lucky_topics)
-            st.session_state.active_story_title = st.session_state.topic
-            st.toast(f"Picked: {st.session_state.topic}")
+    st.session_state.topic = st.text_input(
+        "Topic",
+        value=st.session_state.topic,
+        placeholder="e.g., The Rise of Rome",
+    )
 
     length_display = st.selectbox("Length", ["~1 min", "~3 min", "~5 min", "~10 min"], index=2)
     length_map = {
@@ -224,6 +217,20 @@ def tab_generate_script() -> None:
         "~10 min": "20–30 minutes",
     }
     tone = st.selectbox("Tone", ["Documentary", "Cinematic", "Mysterious", "Playful"], index=0)
+
+    if st.button("🎲 I'm Feeling Lucky", use_container_width=True):
+        with st.spinner("Finding a surprising story..."):
+            st.session_state.topic = generate_lucky_topic()
+            generated_script = generate_script(
+                topic=st.session_state.topic,
+                length=length_map[length_display],
+                tone=tone,
+            )
+        st.session_state.script_text_pending = generated_script
+        st.session_state.script = generated_script
+        st.session_state.active_story_title = st.session_state.topic
+        st.toast(f"Generated: {st.session_state.topic}")
+        st.rerun()
 
     if st.button("Generate Script", type="primary", use_container_width=True):
         if not st.session_state.topic.strip():

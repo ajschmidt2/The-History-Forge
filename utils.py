@@ -138,6 +138,36 @@ def generate_script(topic: str, length: str, tone: str) -> str:
     return resp.choices[0].message.content.strip()
 
 
+def generate_lucky_topic() -> str:
+    client = _openai_client()
+    if client is None:
+        return random.choice(
+            [
+                "The Lost City of Cahokia",
+                "The Great Fire of London",
+                "The Spy Who Fooled Hitler",
+                "The Silk Road's Hidden Empires",
+                "The Mystery of the Mary Celeste",
+                "The Battle Won by an Eclipse",
+            ]
+        )
+
+    system = (
+        "You are a history curator. Provide a single intriguing, lesser-known history topic "
+        "title suitable for a short YouTube documentary."
+    )
+    user = "Give me one unique historical story idea. Respond with only the title."
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=1.0,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content.strip().strip('"')
+
+
 def rewrite_description(script: str, description: str, mode: str = "refresh") -> str:
     script = (script or "").strip()
     description = (description or "").strip()
