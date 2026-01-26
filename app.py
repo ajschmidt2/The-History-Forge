@@ -1,10 +1,10 @@
-import streamlit as st
-from typing import List
-from datetime import datetime
-import zipfile
 import io
 import json
 import random
+import zipfile
+from typing import Any, Dict, List
+
+import streamlit as st
 
 from utils import (
     Scene,
@@ -14,8 +14,8 @@ from utils import (
     generate_image_for_scene,
     generate_voiceover,
     get_secret,
-    generate_visuals_from_script,
 )
+
 
 def require_login() -> None:
     pw = (
@@ -43,6 +43,7 @@ def require_login() -> None:
 def _sync_scene_order(scenes: List[Scene]) -> None:
     for idx, scene in enumerate(scenes, start=1):
         scene.index = idx
+
 
 def _get_primary_image(scene: Scene) -> bytes | None:
     if scene.image_variations:
@@ -75,58 +76,173 @@ def build_export_zip(
                     z.writestr(f"images/scene_{s.index:02d}.png", primary)
     return buf.getvalue()
 
-def main() -> None:
-    st.set_page_config(page_title="The History Forge", layout="wide")
-    require_login()
-    st.title("🔥 The History Forge")
-    st.caption("Generate a YouTube history script + scenes + prompts + images.")
 
-    st.sidebar.header("⚙️ Controls")
-    curated_topics = [
-        "The lost city of Atlantis and why it endures",
-        "The mystery of Alexander the Great's tomb",
-        "The night Pompeii vanished beneath ash",
-        "The real story behind the Trojan War",
-        "The rise and fall of the Library of Alexandria",
-        "The secret tunnels of ancient Rome",
-        "How the Black Death reshaped Europe",
-        "The treasure of the Knights Templar",
-        "The longest siege in medieval history",
-        "The spy who saved D-Day",
-        "The shipwreck that changed global trade",
-        "The assassination that sparked World War I",
-    ]
-    def _set_lucky_topic():
-        lucky_topic = random.choice(curated_topics)
-        st.session_state["topic_input"] = lucky_topic
-        st.session_state["topic"] = lucky_topic
-
-    topic_default = st.session_state.get("topic", curated_topics[1])
-    topic = st.sidebar.text_input("Topic", value=topic_default, key="topic_input")
-    st.sidebar.button(
-        "🎲 I'm Feeling Lucky",
-        use_container_width=True,
-        on_click=_set_lucky_topic,
-    )
-    length = st.sidebar.selectbox(
-        "Length",
-        ["Short (~60 seconds)", "8–10 minutes", "20–30 minutes"],
-        index=1
-    )
-    tone = st.sidebar.selectbox(
-        "Tone",
-        ["Cinematic", "Mysterious", "Educational", "Eerie"],
-        index=0
-    )
-    aspect_ratio = st.sidebar.selectbox(
-        "Image aspect ratio",
-        ["16:9", "9:16", "1:1"],
-        index=0
-    )
-
-    visual_style = st.sidebar.selectbox(
-        "Image style",
+def init_state() -> None:
+    st.session_state.setdefault("topic", "")
+    st.session_state.setdefault("script_text", "")
+    st.session_state.setdefault("script_text_pending", None)
+    st.session_state.setdefault("scenes", [])
+    st.session_state.setdefault("scene_prompts", {})
+    st.session_state.setdefault("scene_images", {})
+    st.session_state.setdefault("active_story_title", "Untitled Project")
+    st.session_state.setdefault("aspect_ratio", "16:9")
+    st.session_state.setdefault("visual_style", "Photorealistic cinematic")
+    st.session_state.setdefault("voice_id", "r6YelDxIe1A40lDuW365")
+    st.session_state.setdefault("voiceover_bytes", None)
+    st.session_state.setdefault("voiceover_error", "")
+    st.session_state.setdefault(
+        "lucky_topics",
         [
+            "The Rise of Rome",
+            "The Fall of Constantinople",
+            "The Spy Who Fooled Hitler",
+            "The Lost City of Cahokia",
+            "The Great Fire of London",
+            "The Strange Death of Rasputin",
+            "The Battle Won by an Eclipse",
+            "The Silk Road's Hidden Empires",
+            "The Mystery of the Mary Celeste",
+            "The Day the Titanic Was Found",
+        ],
+    )
+
+
+
+def get_scene_key(scene: Any, idx: int) -> str:
+    if isinstance(scene, dict):
+        return str(scene.get("id") or scene.get("scene_id") or f"idx_{idx}")
+    if hasattr(scene, "id") and getattr(scene, "id"):
+        return str(getattr(scene, "id"))
+    return f"idx_{idx}"
+
+
+def scene_title(scene: Any, idx: int) -> str:
+    if isinstance(scene, dict):
+        return scene.get("title") or f"Scene {idx + 1}"
+    if hasattr(scene, "title") and getattr(scene, "title"):
+        return getattr(scene, "title")
+    return f"Scene {idx + 1}"
+
+
+def scene_text(scene: Any) -> str:
+    if isinstance(scene, dict):
+        return scene.get("text") or scene.get("script") or scene.get("content") or ""
+    if hasattr(scene, "script_excerpt"):
+        return getattr(scene, "script_excerpt") or ""
+    if hasattr(scene, "text"):
+        return getattr(scene, "text") or ""
+    if hasattr(scene, "script"):
+        return getattr(scene, "script") or ""
+    return ""
+
+
+def _update_scene_prompt(scene: Scene, new_prompt: str) -> None:
+    scene.image_prompt = new_prompt
+
+
+def tab_paste_script() -> None:
+    st.subheader("Paste your own script")
+    st.caption("Paste an existing script and use it as the source for scenes, prompts, images, and export.")
+
+    pending_script = st.session_state.get("script_text_pending")
+    if pending_script:
+        st.session_state.script_text = pending_script
+        st.session_state.script = pending_script
+        st.session_state.script_text_pending = None
+
+    st.text_area(
+        "Script",
+        value=st.session_state.script_text,
+        height=320,
+        placeholder="Paste your script here...",
+        key="script_text",
+    )
+
+    cols = st.columns([1, 3])
+    with cols[0]:
+        if st.button("Use Script →", type="primary", use_container_width=True):
+            if not st.session_state.script_text.strip():
+                st.warning("Paste a script first.")
+            else:
+                st.toast("Script loaded.")
+                st.session_state.script = st.session_state.script_text
+    with cols[1]:
+        st.session_state.active_story_title = st.text_input(
+            "Project Title",
+            value=st.session_state.active_story_title,
+            placeholder="e.g., The Rise of Rome",
+        )
+
+
+def tab_generate_script() -> None:
+    st.subheader("Generate script")
+    st.caption("Generate a script from a topic, or pick a random topic with 'I'm Feeling Lucky'.")
+
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.session_state.topic = st.text_input(
+            "Topic",
+            value=st.session_state.topic,
+            placeholder="e.g., The Rise of Rome",
+        )
+    with c2:
+        if st.button("🎲 I'm Feeling Lucky", use_container_width=True):
+            st.session_state.topic = random.choice(st.session_state.lucky_topics)
+            st.session_state.active_story_title = st.session_state.topic
+            st.toast(f"Picked: {st.session_state.topic}")
+
+    length_display = st.selectbox("Length", ["~1 min", "~3 min", "~5 min", "~10 min"], index=2)
+    length_map = {
+        "~1 min": "Short (~60 seconds)",
+        "~3 min": "8–10 minutes",
+        "~5 min": "8–10 minutes",
+        "~10 min": "20–30 minutes",
+    }
+    tone = st.selectbox("Tone", ["Documentary", "Cinematic", "Mysterious", "Playful"], index=0)
+
+    if st.button("Generate Script", type="primary", use_container_width=True):
+        if not st.session_state.topic.strip():
+            st.warning("Enter a topic or use I'm Feeling Lucky.")
+            return
+
+        with st.spinner("Generating script..."):
+            generated_script = generate_script(
+                topic=st.session_state.topic,
+                length=length_map[length_display],
+                tone=tone,
+            )
+        st.session_state.script_text_pending = generated_script
+        st.session_state.script = generated_script
+        st.session_state.active_story_title = st.session_state.topic
+        st.toast("Script generated.")
+        st.rerun()
+
+    preview_text = st.session_state.script_text_pending or st.session_state.script_text
+    st.session_state["generated_script_preview"] = preview_text
+    st.text_area(
+        "Generated Script",
+        value=preview_text,
+        height=320,
+        placeholder="Generated script will appear here...",
+        key="generated_script_preview",
+        disabled=True,
+    )
+    st.caption("Edit the script in the Paste Script tab.")
+
+
+def tab_create_scenes() -> None:
+    st.subheader("Create scenes")
+    st.caption("Split your script into scenes you can refine and storyboard.")
+
+    if not st.session_state.script_text.strip():
+        st.warning("Paste or generate a script first.")
+        return
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        target_scenes = st.number_input("Target scenes", min_value=3, max_value=60, value=12, step=1)
+    with c2:
+        style_options = [
             "Photorealistic cinematic",
             "Illustrated cinematic",
             "Painterly",
@@ -135,404 +251,322 @@ def main() -> None:
             "3D render",
             "Watercolor illustration",
             "Charcoal / pencil sketch",
-        ],
-        index=0
-    )
-
-    num_images = st.sidebar.slider(
-        "Number of images to create",
-        min_value=1,
-        max_value=75,
-        value=8,
-        step=1,
-        help="This sets how many scenes (and therefore how many images) are generated (max 75)."
-    )
-    variations_per_scene = st.sidebar.selectbox(
-        "Variations per scene",
-        [1, 2],
-        index=0,
-        help="Create multiple image options per scene."
-    )
-    st.sidebar.divider()
-    enable_voiceover = st.sidebar.toggle("Generate narration voiceover", value=False)
-    voice_id_default = st.session_state.get("voice_id", "r6YelDxIe1A40lDuW365")
-    voice_id = st.sidebar.text_input("ElevenLabs voice ID", value=voice_id_default)
-
-    st.sidebar.divider()
-    if st.sidebar.button("🧹 Reset app state (use after redeploy)", use_container_width=True):
-        for k in ["script", "scenes", "topic", "authenticated", "script_editor", "pasted_script"]:
-            if k in st.session_state:
-                del st.session_state[k]
-        st.rerun()
-
-    st.sidebar.divider()
-    generate_all = st.sidebar.button("✨ Generate Package", type="primary", use_container_width=True)
-    split_pasted_script = st.sidebar.button("🧩 Split pasted script into scenes", use_container_width=True)
-    generate_paste_prompts = st.sidebar.button("📝 Create prompts from scenes", use_container_width=True)
-    generate_paste_images = st.sidebar.button("🎨 Generate images from prompts", use_container_width=True)
-    debug_mode = st.sidebar.toggle("Debug mode", value=True)
-
-    with st.sidebar.expander("📄 Paste your script (optional)"):
-        pasted_script = st.text_area(
-            "Paste a narration script here to generate scenes + images without rewriting it.",
-            value=st.session_state.get("pasted_script", ""),
-            height=200,
-            key="pasted_script_input",
+        ]
+        current_style = st.session_state.get("visual_style", style_options[0])
+        style_index = style_options.index(current_style) if current_style in style_options else 0
+        st.session_state.visual_style = st.selectbox(
+            "Visual style",
+            style_options,
+            index=style_index,
         )
-        if st.button("Use pasted script", use_container_width=True):
-            st.session_state.pasted_script = pasted_script
-            st.session_state.script = pasted_script
-            st.session_state.visuals_script = pasted_script
-            st.success("Pasted script loaded. Now split into scenes.")
 
-    if generate_all:
-        st.session_state.topic = topic
+    aspect_options = ["16:9", "9:16", "1:1"]
+    current_aspect = st.session_state.get("aspect_ratio", aspect_options[0])
+    aspect_index = aspect_options.index(current_aspect) if current_aspect in aspect_options else 0
+    st.session_state.aspect_ratio = st.selectbox(
+        "Image aspect ratio",
+        aspect_options,
+        index=aspect_index,
+    )
 
-        with st.status("Generating…", expanded=True) as status:
-            status.update(label="1/5 Writing script…")
-            script = generate_script(topic=topic, length=length, tone=tone)
-            st.session_state.script = script
-            st.session_state.visuals_script = script
-            st.session_state.voice_id = voice_id
+    if st.button("Split into scenes", type="primary", use_container_width=True):
+        with st.spinner("Splitting script into scenes..."):
+            st.session_state.scenes = split_script_into_scenes(
+                st.session_state.script_text,
+                max_scenes=int(target_scenes),
+            )
+            _sync_scene_order(st.session_state.scenes)
+            st.session_state.scene_prompts = {}
+            st.session_state.scene_images = {}
+        st.toast(f"Created {len(st.session_state.scenes)} scenes.")
 
-            status.update(label=f"2/5 Splitting into {num_images} scenes…")
-            st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
+    if not st.session_state.scenes:
+        st.info("No scenes yet. Click 'Split into scenes'.")
+        return
 
-            status.update(label="3/5 Writing prompts…")
+    st.divider()
+    st.markdown("### Scene Editor")
+
+    for i, sc in enumerate(st.session_state.scenes):
+        key = get_scene_key(sc, i)
+        with st.expander(f"{i + 1:02d} — {scene_title(sc, i)}", expanded=False):
+            title_val = sc.title or f"Scene {i + 1}"
+            text_val = scene_text(sc)
+            new_title = st.text_input("Title", value=title_val, key=f"title_{key}")
+            new_text = st.text_area("Scene text", value=text_val, key=f"text_{key}", height=140)
+            sc.title = new_title
+            sc.script_excerpt = new_text
+
+            c1, c2, c3 = st.columns([1, 1, 1])
+            with c1:
+                if st.button("Move up", key=f"up_{key}", disabled=i == 0):
+                    scenes = st.session_state.scenes
+                    scenes[i - 1], scenes[i] = scenes[i], scenes[i - 1]
+                    _sync_scene_order(scenes)
+                    st.session_state.scenes = scenes
+                    st.rerun()
+            with c2:
+                if st.button("Move down", key=f"down_{key}", disabled=i == len(st.session_state.scenes) - 1):
+                    scenes = st.session_state.scenes
+                    scenes[i + 1], scenes[i] = scenes[i], scenes[i + 1]
+                    _sync_scene_order(scenes)
+                    st.session_state.scenes = scenes
+                    st.rerun()
+            with c3:
+                if st.button("Delete scene", key=f"del_{key}"):
+                    st.session_state.scenes.pop(i)
+                    _sync_scene_order(st.session_state.scenes)
+                    st.rerun()
+
+
+def tab_voiceover() -> None:
+    st.subheader("Generate voiceover")
+    st.caption("Create narration audio from your script using ElevenLabs.")
+
+    if not st.session_state.script_text.strip():
+        st.warning("Paste or generate a script first.")
+        return
+
+    st.session_state.voice_id = st.text_input(
+        "ElevenLabs voice ID",
+        value=st.session_state.get("voice_id", ""),
+    )
+
+    if st.button("Generate voiceover", type="primary", use_container_width=True):
+        with st.spinner("Generating voiceover..."):
+            voiceover_bytes, error = generate_voiceover(
+                st.session_state.script_text,
+                voice_id=st.session_state.voice_id,
+            )
+        st.session_state.voiceover_bytes = voiceover_bytes
+        st.session_state.voiceover_error = error or ""
+        if error:
+            st.warning(error)
+        else:
+            st.success("Voiceover ready.")
+
+    if st.session_state.voiceover_bytes:
+        st.audio(st.session_state.voiceover_bytes, format="audio/mp3")
+        st.download_button(
+            "Download voiceover",
+            data=st.session_state.voiceover_bytes,
+            file_name="voiceover.mp3",
+            mime="audio/mpeg",
+            use_container_width=True,
+        )
+
+
+def tab_create_prompts() -> None:
+    st.subheader("Create prompts")
+    st.caption("Generate (and edit) image prompts for each scene.")
+
+    if not st.session_state.scenes:
+        st.warning("Create scenes first.")
+        return
+
+    if st.button("Generate prompts for all scenes", type="primary", use_container_width=True):
+        with st.spinner("Generating prompts..."):
             st.session_state.scenes = generate_prompts_for_scenes(
                 st.session_state.scenes,
-                tone=tone,
-                style=visual_style,
+                tone="Cinematic",
+                style=st.session_state.visual_style,
             )
+            for i, sc in enumerate(st.session_state.scenes):
+                sid = get_scene_key(sc, i)
+                st.session_state.scene_prompts[sid] = sc.image_prompt
+                st.session_state[f"prompt_{sid}"] = sc.image_prompt
+        st.toast("Prompts ready.")
 
-            status.update(label="4/5 Generating images…")
-            scenes_out, failures = generate_visuals_from_script(
-                script=script,
-                num_images=num_images,
-                tone=tone,
-                visual_style=visual_style,
-                aspect_ratio=aspect_ratio,
-                variations_per_scene=variations_per_scene,
-                scenes=st.session_state.scenes,
-            )
-            st.session_state.scenes = scenes_out
-            if enable_voiceover:
-                status.update(label="5/5 Generating voiceover…")
-                voiceover_bytes, voiceover_error = generate_voiceover(
-                    script=script,
-                    voice_id=voice_id,
-                    output_format="mp3",
-                )
-                st.session_state.voiceover_bytes = voiceover_bytes
-                st.session_state.voiceover_error = voiceover_error
-
-            if failures:
-                status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
-            else:
-                status.update(label="Done ✅", state="complete")
-
-        st.session_state.story_settings = {
-            "topic": topic,
-            "length": length,
-            "tone": tone,
-            "aspect_ratio": aspect_ratio,
-            "visual_style": visual_style,
-            "num_images": num_images,
-            "variations_per_scene": variations_per_scene,
-            "script": script,
-            "voice_id": voice_id,
-        }
-
-    if split_pasted_script:
-        script = (
-            st.session_state.get("pasted_script_input", "")
-            or st.session_state.get("pasted_script", "")
-        ).strip()
-        if not script:
-            st.sidebar.error("Paste a script first.")
-        else:
-            st.session_state.topic = "Pasted script"
-            st.session_state.script = script
-            st.session_state.visuals_script = script
-            with st.status("Generating…", expanded=True) as status:
-                status.update(label=f"1/1 Splitting pasted script into {num_images} scenes…")
-                st.session_state.scenes = split_script_into_scenes(script, max_scenes=num_images)
-                status.update(label="Scenes ready ✅", state="complete")
-
-    if generate_paste_prompts:
-        script = (
-            st.session_state.get("visuals_script", "")
-            or st.session_state.get("pasted_script_input", "")
-            or st.session_state.get("pasted_script", "")
-        ).strip()
-        scenes: List[Scene] = st.session_state.get("scenes", [])
-        if not script:
-            st.sidebar.error("Paste a script first.")
-        elif not scenes:
-            st.sidebar.error("Split the script into scenes first.")
-        else:
-            with st.status("Generating…", expanded=True) as status:
-                status.update(label="Writing prompts…")
-                st.session_state.scenes = generate_prompts_for_scenes(
-                    scenes,
-                    tone=tone,
-                    style=visual_style,
-                )
-                status.update(label="Prompts ready ✅", state="complete")
-
-    if generate_paste_images:
-        script = (
-            st.session_state.get("visuals_script", "")
-            or st.session_state.get("pasted_script_input", "")
-            or st.session_state.get("pasted_script", "")
-        ).strip()
-        scenes: List[Scene] = st.session_state.get("scenes", [])
-        missing_prompts = [s for s in scenes if not s.image_prompt]
-        if not script:
-            st.sidebar.error("Paste a script first.")
-        elif not scenes:
-            st.sidebar.error("Split the script into scenes first.")
-        elif missing_prompts:
-            st.sidebar.error("Generate prompts before making images.")
-        else:
-            with st.status("Generating…", expanded=True) as status:
-                status.update(label="Generating images…")
-                scenes_out, failures = generate_visuals_from_script(
-                    script=script,
-                    num_images=num_images,
-                    tone=tone,
-                    visual_style=visual_style,
-                    aspect_ratio=aspect_ratio,
-                    variations_per_scene=variations_per_scene,
-                    scenes=scenes,
-                )
-                st.session_state.scenes = scenes_out
-
-                if failures:
-                    status.update(label=f"Done (with {failures} image failures) ⚠️", state="complete")
-                else:
-                    status.update(label="Done ✅", state="complete")
-
-    tab_script, tab_visuals, tab_export = st.tabs(["📝 Script", "🖼️ Scenes & Visuals", "⬇️ Export"])
-
-    with tab_script:
-        st.subheader("Narration Script")
-        script = st.session_state.get("script", "")
-        if not script:
-            st.info("Click **Generate Package** to create a script.")
-        else:
-            st.text_area("Script (editable)", value=script, height=420, key="script_editor")
-            if st.button("💾 Save script edits", use_container_width=True):
-                st.session_state.script = st.session_state.script_editor
-                st.success("Saved.")
-
-    with tab_visuals:
-        st.subheader("Scenes & Visuals")
-        visuals_script = st.session_state.get("visuals_script") or st.session_state.get("script", "")
-        if visuals_script:
-            with st.expander("Script used for image generation", expanded=True):
-                st.text_area(
-                    "Visuals script (read-only)",
-                    value=visuals_script,
-                    height=220,
-                    disabled=True,
-                )
-        scenes: List[Scene] = sorted(st.session_state.get("scenes", []), key=lambda s: s.index)
-        if not scenes:
-            st.info("Generate a package to see scenes and images here.")
-        else:
-            show_deleted = st.toggle("Show deleted scenes", value=False)
-            visible_scenes = [s for s in scenes if show_deleted or s.status != "deleted"]
-            st.caption(f"Scenes generated: {len(visible_scenes)} (target: {num_images})")
-            for s in visible_scenes:
-                with st.expander(f"Scene {s.index}: {s.title}", expanded=(s.index == 1)):
-                    action_cols = st.columns([1, 1, 1, 1])
-                    with action_cols[0]:
-                        if st.button("⬆️ Move up", key=f"up_{s.index}", use_container_width=True, disabled=s.index == 1):
-                            scenes[s.index - 2], scenes[s.index - 1] = scenes[s.index - 1], scenes[s.index - 2]
-                            _sync_scene_order(scenes)
-                            st.session_state.scenes = scenes
-                            st.rerun()
-                    with action_cols[1]:
-                        if st.button(
-                            "⬇️ Move down",
-                            key=f"down_{s.index}",
-                            use_container_width=True,
-                            disabled=s.index == len(scenes),
-                        ):
-                            scenes[s.index - 1], scenes[s.index] = scenes[s.index], scenes[s.index - 1]
-                            _sync_scene_order(scenes)
-                            st.session_state.scenes = scenes
-                            st.rerun()
-                    with action_cols[2]:
-                        if st.button(
-                            "🗑️ Delete scene",
-                            key=f"delete_{s.index}",
-                            use_container_width=True,
-                            disabled=s.status == "deleted",
-                        ):
-                            s.status = "deleted"
-                            st.session_state.scenes = scenes
-                            st.rerun()
-                    with action_cols[3]:
-                        if st.button(
-                            "↩️ Undo delete",
-                            key=f"undo_{s.index}",
-                            use_container_width=True,
-                            disabled=s.status != "deleted",
-                        ):
-                            s.status = "active"
-                            st.session_state.scenes = scenes
-                            st.rerun()
-
-                    st.markdown("**Scene excerpt**")
-                    st.write(s.script_excerpt or "—")
-
-                    st.markdown("**Visual intent**")
-                    st.write(s.visual_intent or "—")
-
-                    st.markdown("**Image prompt**")
-                    st.code(s.image_prompt or "—", language="text")
-
-                    primary = _get_primary_image(s)
-                    if primary:
-                        st.image(primary, caption=f"Scene {s.index} ({aspect_ratio})", width=200)
-                        enlarge_key = f"show_primary_{s.index}"
-                        if st.button("Enlarge", key=f"enlarge_{s.index}"):
-                            st.session_state[enlarge_key] = True
-                        if st.session_state.get(enlarge_key):
-                            st.image(
-                                primary,
-                                caption=f"Scene {s.index} ({aspect_ratio})",
-                                use_container_width=True,
-                            )
-                    else:
-                        msg = "Image missing for this scene."
-                        if s.image_error:
-                            msg = f"{msg} {s.image_error}"
-                        else:
-                            msg = f"{msg} Check logs for '[Gemini image gen failed]'."
-                        st.error(msg)
-
-                    if s.image_variations and len(s.image_variations) > 1:
-                        st.markdown("**Variations**")
-                        selected_key = f"selected_variation_{s.index}"
-                        if selected_key not in st.session_state:
-                            st.session_state[selected_key] = s.primary_image_index
-
-                        cols = st.columns(min(len(s.image_variations), 4))
-                        for idx, img in enumerate(s.image_variations):
-                            with cols[idx % len(cols)]:
-                                if img:
-                                    st.image(img, caption=f"Variation {idx + 1}", width=160)
-                                    if st.button(
-                                        "View larger",
-                                        key=f"view_{s.index}_{idx}",
-                                        use_container_width=True,
-                                    ):
-                                        st.session_state[selected_key] = idx
-                                else:
-                                    st.warning(f"Variation {idx + 1} missing.")
-                                if st.button(
-                                    "Set as primary",
-                                    key=f"primary_{s.index}_{idx}",
-                                    use_container_width=True,
-                                    disabled=idx == s.primary_image_index,
-                                ):
-                                    s.primary_image_index = idx
-                                    s.image_bytes = img
-                                    st.session_state.scenes = scenes
-                                    st.rerun()
-
-                        selected_idx = st.session_state.get(selected_key, s.primary_image_index)
-                        if 0 <= selected_idx < len(s.image_variations):
-                            selected_img = s.image_variations[selected_idx]
-                            if selected_img:
-                                st.image(
-                                    selected_img,
-                                    caption=f"Selected variation {selected_idx + 1}",
-                                    use_container_width=True,
-                                )
-
-                    refine = st.text_input(
-                        f"Refine prompt (Scene {s.index})",
-                        value="",
-                        key=f"refine_{s.index}",
-                        placeholder="e.g., tighter close-up, warmer lighting, more fog…",
-                    )
-
-                    c1, c2 = st.columns([1, 1])
-                    with c1:
-                        if st.button("✏️ Apply refinement", key=f"apply_ref_{s.index}", use_container_width=True):
-                            if refine.strip():
-                                s.image_prompt = (s.image_prompt + "\n\nRefinement: " + refine.strip()).strip()
-                                st.success("Prompt updated. Now regenerate the image.")
-                                st.rerun()
-
-                    with c2:
-                        if st.button("🔄 Regenerate primary image", key=f"regen_{s.index}", use_container_width=True):
-                            try:
-                                updated = generate_image_for_scene(
-                                    s,
-                                    aspect_ratio=aspect_ratio,
-                                    visual_style=visual_style,
-                                )
-                                if s.image_variations:
-                                    s.image_variations[s.primary_image_index] = updated.image_bytes
-                                s.image_bytes = updated.image_bytes
-                                st.session_state.scenes = scenes
-                                if updated.image_bytes:
-                                    st.success("Image regenerated.")
-                                else:
-                                    st.error("Regeneration failed (no bytes returned). Check logs.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error("Image regeneration failed.")
-                                if debug_mode:
-                                    st.exception(e)
-
-    with tab_export:
-        st.subheader("Export")
-        script = st.session_state.get("script", "")
-        scenes: List[Scene] = sorted(st.session_state.get("scenes", []), key=lambda s: s.index)
-        voiceover_bytes = st.session_state.get("voiceover_bytes") if enable_voiceover else None
-        voiceover_error = st.session_state.get("voiceover_error") if enable_voiceover else None
-        if not script or not scenes:
-            st.info("Generate a package first.")
-        else:
-            if enable_voiceover:
-                if voiceover_bytes:
-                    st.audio(voiceover_bytes, format="audio/mp3")
-                elif voiceover_error:
-                    st.error(f"Voiceover failed: {voiceover_error}")
-            export_mode = st.radio(
-                "Image export options",
-                ["Primary images only", "All variations"],
-                horizontal=True,
-            )
-            include_all_variations = export_mode == "All variations"
-            zip_bytes = build_export_zip(script, scenes, include_all_variations, voiceover_bytes)
-            st.download_button(
-                "⬇️ Download Package (ZIP)",
-                data=zip_bytes,
-                file_name=f"history_forge_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
-                use_container_width=True,
-            )
-
-    with st.sidebar.expander("ℹ️ Secrets checklist"):
-        st.markdown(
-            """
-**Streamlit Cloud → Secrets**
-- `openai_api_key`
-- `gemini_api_key`
-- `elevenlabs_api_key`
-- optional: `APP_PASSCODE` (or legacy `app_password`)
-
-If images fail, check logs for:
-- `[Gemini image gen failed]`
-- `[Gemini image gen final] FAILED`
-""".strip()
+    st.divider()
+    for i, sc in enumerate(st.session_state.scenes):
+        sid = get_scene_key(sc, i)
+        st.session_state.scene_prompts.setdefault(sid, sc.image_prompt or "")
+        updated = st.text_area(
+            f"{i + 1:02d} — {scene_title(sc, i)} prompt",
+            value=st.session_state.scene_prompts[sid],
+            key=f"prompt_{sid}",
+            height=90,
         )
+        st.session_state.scene_prompts[sid] = updated
+        _update_scene_prompt(sc, updated)
+
+
+def _store_scene_image(scene: Scene, image_bytes: bytes) -> None:
+    if scene.image_variations:
+        scene.image_variations.append(image_bytes)
+        scene.primary_image_index = len(scene.image_variations) - 1
+    else:
+        scene.image_bytes = image_bytes
+
+
+def tab_create_images() -> None:
+    st.subheader("Create images")
+    st.caption("Generate images per scene. Increase variations as needed.")
+
+    if not st.session_state.scenes:
+        st.warning("Create scenes first.")
+        return
+
+    variations = st.slider("Variations per scene", 1, 4, 1)
+    per_scene = st.checkbox("Generate 1 image per scene (recommended)", value=True)
+
+    if st.button("Generate images for all scenes", type="primary", use_container_width=True):
+        with st.spinner("Generating images..."):
+            errors: List[str] = []
+            for i, sc in enumerate(st.session_state.scenes):
+                sid = get_scene_key(sc, i)
+                sc.image_prompt = st.session_state.scene_prompts.get(sid, sc.image_prompt)
+                sc.image_variations = []
+                sc.image_bytes = None
+
+                count = 1 if per_scene else variations
+                for _ in range(count):
+                    updated = generate_image_for_scene(
+                        sc,
+                        aspect_ratio=st.session_state.aspect_ratio,
+                        visual_style=st.session_state.visual_style,
+                    )
+                    if updated.image_bytes:
+                        _store_scene_image(sc, updated.image_bytes)
+                    if updated.image_error:
+                        errors.append(f"{scene_title(sc, i)}: {updated.image_error}")
+            if errors:
+                st.warning("Image generation issues:\n" + "\n".join(errors))
+        st.toast("Image generation complete.")
+
+    st.divider()
+
+    for i, sc in enumerate(st.session_state.scenes):
+        sid = get_scene_key(sc, i)
+        primary = _get_primary_image(sc)
+
+        with st.expander(f"{i + 1:02d} — {scene_title(sc, i)} images", expanded=False):
+            prompt_key = f"image_prompt_{sid}"
+            augment_key = f"image_prompt_augment_{sid}"
+            base_prompt = st.session_state.scene_prompts.get(sid, sc.image_prompt or "")
+            st.session_state.setdefault(prompt_key, base_prompt)
+            st.text_area(
+                "Image prompt",
+                key=prompt_key,
+                height=90,
+                placeholder="Edit the image prompt for this scene...",
+            )
+            st.session_state.scene_prompts[sid] = st.session_state.get(prompt_key, base_prompt)
+            st.text_input(
+                "Augment prompt",
+                key=augment_key,
+                placeholder="Optional additions (lighting, lens, mood, etc.)",
+            )
+
+            if primary:
+                st.image(primary, use_container_width=True)
+            else:
+                st.info("No images yet for this scene.")
+
+            if sc.image_variations:
+                with st.expander("Variations"):
+                    st.image([img for img in sc.image_variations if img], use_container_width=True)
+
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                if st.button("Regenerate this scene", key=f"regen_{sid}"):
+                    base = st.session_state.get(prompt_key, "").strip()
+                    augment = st.session_state.get(augment_key, "").strip()
+                    combined_prompt = base
+                    if augment:
+                        combined_prompt = f"{base}\n\nAugment: {augment}".strip()
+                    sc.image_prompt = combined_prompt
+                    st.session_state.scene_prompts[sid] = base
+                    with st.spinner("Regenerating..."):
+                        sc.image_variations = []
+                        sc.image_bytes = None
+                        for _ in range(variations):
+                            updated = generate_image_for_scene(
+                                sc,
+                                aspect_ratio=st.session_state.aspect_ratio,
+                                visual_style=st.session_state.visual_style,
+                            )
+                            if updated.image_bytes:
+                                _store_scene_image(sc, updated.image_bytes)
+                    st.toast("Regenerated.")
+                    st.rerun()
+            with c2:
+                st.caption("Tip: prompts live in the Prompts tab.")
+
+
+def tab_export_package() -> None:
+    st.subheader("Export package")
+    st.caption("Bundle script + scenes + prompts + images into a downloadable package.")
+
+    if not st.session_state.script_text.strip():
+        st.warning("No script to export.")
+        return
+    if not st.session_state.scenes:
+        st.warning("No scenes to export.")
+        return
+
+    st.markdown("### Export preview")
+    st.write(f"**Project:** {st.session_state.active_story_title}")
+    st.write(f"**Scenes:** {len(st.session_state.scenes)}")
+
+    include_all_variations = st.checkbox("Include all image variations", value=False)
+    include_voiceover = st.checkbox("Include narration voiceover", value=False)
+
+    if st.button("Build ZIP", type="primary", use_container_width=True):
+        voiceover_bytes = None
+        if include_voiceover:
+            voiceover_bytes = st.session_state.get("voiceover_bytes")
+            if not voiceover_bytes:
+                st.warning("Generate a voiceover in the Voiceover tab first.")
+
+        zip_bytes = build_export_zip(
+            st.session_state.script_text,
+            st.session_state.scenes,
+            include_all_variations=include_all_variations,
+            voiceover_bytes=voiceover_bytes,
+        )
+        st.download_button(
+            "Download ZIP",
+            data=zip_bytes,
+            file_name="history_forge_export.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+
+
+def main() -> None:
+    st.set_page_config(page_title="The History Forge", layout="wide")
+    require_login()
+    init_state()
+
+    tabs = st.tabs(
+        [
+            "Paste Script",
+            "Generate Script",
+            "Create Scenes",
+            "Create Prompts",
+            "Create Images",
+            "Voiceover",
+            "Export Package",
+        ]
+    )
+
+    with tabs[0]:
+        tab_paste_script()
+    with tabs[1]:
+        tab_generate_script()
+    with tabs[2]:
+        tab_create_scenes()
+    with tabs[3]:
+        tab_create_prompts()
+    with tabs[4]:
+        tab_create_images()
+    with tabs[5]:
+        tab_voiceover()
+    with tabs[6]:
+        tab_export_package()
+
 
 if __name__ == "__main__":
     main()
