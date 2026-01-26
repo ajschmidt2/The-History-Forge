@@ -93,6 +93,10 @@ def init_state() -> None:
     st.session_state.setdefault("voiceover_bytes", None)
     st.session_state.setdefault("voiceover_error", "")
     st.session_state.setdefault("compiled_video_bytes", None)
+    st.session_state.setdefault("title_options", [])
+    st.session_state.setdefault("description_text", "")
+    st.session_state.setdefault("thumbnail_prompt", "")
+    st.session_state.setdefault("thumbnail_images", [])
     st.session_state.setdefault(
         "lucky_topics",
         [
@@ -535,48 +539,6 @@ def tab_export_package() -> None:
             mime="application/zip",
             use_container_width=True,
         )
-        st.download_button(
-            "Download ZIP",
-            data=zip_bytes,
-            file_name="history_forge_export.zip",
-            mime="application/zip",
-            use_container_width=True,
-        )
-
-
-
-def main() -> None:
-    st.set_page_config(page_title="The History Forge", layout="wide")
-    require_login()
-    init_state()
-
-    tabs = st.tabs(
-        [
-            "Paste Script",
-            "Generate Script",
-            "Create Scenes",
-            "Create Prompts",
-            "Create Images",
-            "Voiceover",
-            "Export Package",
-        ]
-    )
-
-    with tabs[0]:
-        tab_paste_script()
-    with tabs[1]:
-        tab_generate_script()
-    with tabs[2]:
-        tab_create_scenes()
-    with tabs[3]:
-        tab_create_prompts()
-    with tabs[4]:
-        tab_create_images()
-    with tabs[5]:
-        tab_voiceover()
-    with tabs[6]:
-        tab_export_package()
-
 
 
 
@@ -655,6 +617,124 @@ def tab_compile_video() -> None:
 
 
 
+def _script_summary(script: str) -> str:
+    text = (script or "").strip().replace("\n", " ")
+    if not text:
+        return "A quick history story."
+    return text[:220].rsplit(" ", 1)[0] + "..."
+
+
+def _title_options(topic: str, script: str) -> List[str]:
+    base = (topic or "").strip()
+    if not base:
+        base = (script or "").strip().split(".")[0][:60] or "History Story"
+    return [
+        f"{base}: The Untold Story",
+        f"{base} — Secrets Revealed",
+        f"Inside {base}: What Really Happened",
+    ]
+
+
+def _description_for_script(script: str, topic: str) -> str:
+    word_count = len((script or "").split())
+    summary = _script_summary(script)
+    if word_count <= 200:
+        return f"{summary}\n\nSubscribe for more quick history stories."
+    hashtags = "#history #documentary #ancienthistory #shorts #education"
+    return (
+        f"{summary}\n\n"
+        "In this episode we explore the timeline, key figures, and hidden details that shaped the story. "
+        "If you enjoy deep dives into the past, consider subscribing for weekly releases.\n\n"
+        f"{hashtags}"
+    )
+
+
+def tab_titles_thumbnails() -> None:
+    st.subheader("Titles, description & thumbnails")
+    st.caption("Generate title ideas, a YouTube description, and thumbnail options from your script.")
+
+    if not st.session_state.script_text.strip():
+        st.warning("Paste or generate a script first.")
+        return
+
+    if st.button("Generate titles + description", type="primary", use_container_width=True):
+        st.session_state.title_options = _title_options(
+            st.session_state.active_story_title,
+            st.session_state.script_text,
+        )
+        st.session_state.description_text = _description_for_script(
+            st.session_state.script_text,
+            st.session_state.active_story_title,
+        )
+        st.toast("Metadata ready.")
+
+    if st.session_state.title_options:
+        st.markdown("### Title ideas")
+        for idx, title in enumerate(st.session_state.title_options, start=1):
+            st.text_input(f"Title option {idx}", value=title, key=f"title_option_{idx}")
+
+    if st.session_state.description_text:
+        st.markdown("### Video description")
+        st.text_area(
+            "Description",
+            value=st.session_state.description_text,
+            height=160,
+            key="video_description",
+        )
+
+    st.divider()
+    st.markdown("### Thumbnail generation")
+    default_prompt = st.session_state.thumbnail_prompt or (
+        f"High-contrast cinematic thumbnail for {st.session_state.active_story_title}. "
+        "Bold historical imagery, dramatic lighting, clear focal subject. No text."
+    )
+    st.session_state.thumbnail_prompt = st.text_area(
+        "Thumbnail prompt",
+        value=default_prompt,
+        height=90,
+        key="thumbnail_prompt",
+    )
+
+    if st.button("Generate 3 thumbnails", use_container_width=True):
+        st.session_state.thumbnail_images = []
+        for i in range(3):
+            scene = Scene(
+                index=i + 1,
+                title=f"Thumbnail {i + 1}",
+                script_excerpt=st.session_state.script_text[:240],
+                visual_intent="Create a compelling YouTube thumbnail.",
+                image_prompt=st.session_state.thumbnail_prompt,
+            )
+            updated = generate_image_for_scene(
+                scene,
+                aspect_ratio="16:9",
+                visual_style=st.session_state.visual_style,
+            )
+            if updated.image_bytes:
+                st.session_state.thumbnail_images.append(updated.image_bytes)
+
+    if st.session_state.thumbnail_images:
+        st.image(st.session_state.thumbnail_images, use_container_width=True)
+        if st.button("Regenerate thumbnails", use_container_width=True):
+            st.session_state.thumbnail_images = []
+            for i in range(3):
+                scene = Scene(
+                    index=i + 1,
+                    title=f"Thumbnail {i + 1}",
+                    script_excerpt=st.session_state.script_text[:240],
+                    visual_intent="Create a compelling YouTube thumbnail.",
+                    image_prompt=st.session_state.thumbnail_prompt,
+                )
+                updated = generate_image_for_scene(
+                    scene,
+                    aspect_ratio="16:9",
+                    visual_style=st.session_state.visual_style,
+                )
+                if updated.image_bytes:
+                    st.session_state.thumbnail_images.append(updated.image_bytes)
+
+
+
 def main() -> None:
     st.set_page_config(page_title="The History Forge", layout="wide")
     require_login()
@@ -669,6 +749,7 @@ def main() -> None:
             "Create Images",
             "Voiceover",
             "Compile Video",
+            "Titles & Thumbnails",
             "Export Package",
         ]
     )
@@ -688,6 +769,8 @@ def main() -> None:
     with tabs[6]:
         tab_compile_video()
     with tabs[7]:
+        tab_titles_thumbnails()
+    with tabs[8]:
         tab_export_package()
 
 
