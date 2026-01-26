@@ -138,6 +138,41 @@ def generate_script(topic: str, length: str, tone: str) -> str:
     return resp.choices[0].message.content.strip()
 
 
+def rewrite_description(script: str, description: str, mode: str = "refresh") -> str:
+    script = (script or "").strip()
+    description = (description or "").strip()
+    if not description:
+        return ""
+
+    client = _openai_client()
+    if client is None:
+        return (
+            "[Missing openai_api_key] Unable to rewrite description. "
+            "Add `openai_api_key` in Streamlit Secrets to enable AI edits."
+        )
+
+    system = (
+        "You are a YouTube metadata assistant. Rewrite descriptions clearly and concisely. "
+        "Preserve facts from the script and keep it YouTube-ready."
+    )
+    user = (
+        f"Script excerpt:\n{script[:1200]}\n\n"
+        f"Current description:\n{description}\n\n"
+        f"Rewrite mode: {mode}\n"
+        "Return only the rewritten description."
+    )
+
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.6,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content.strip()
+
+
 # ----------------------------
 # Deterministic fallback chunking (ENFORCES N scenes)
 # ----------------------------
