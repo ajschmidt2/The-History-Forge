@@ -853,14 +853,6 @@ def tab_titles_thumbnails() -> None:
 
     if st.session_state.description_text:
         st.markdown("### Video description")
-        description_value = st.text_area(
-            "Description",
-            value=st.session_state.description_text,
-            height=160,
-            key="video_description",
-        )
-        st.session_state.description_text = description_value
-
         c1, c2 = st.columns([1, 2])
         with c1:
             edit_mode = st.selectbox(
@@ -877,8 +869,21 @@ def tab_titles_thumbnails() -> None:
                         mode=edit_mode,
                     )
                 st.session_state.description_text = rewritten
-                st.session_state["video_description"] = rewritten
+                st.session_state.video_description = rewritten
                 st.toast("Description updated.")
+
+        if (
+            "video_description" not in st.session_state
+            or st.session_state.video_description != st.session_state.description_text
+        ):
+            st.session_state.video_description = st.session_state.description_text
+
+        description_value = st.text_area(
+            "Description",
+            height=160,
+            key="video_description",
+        )
+        st.session_state.description_text = description_value
 
     st.divider()
     st.markdown("### Thumbnail generation")
