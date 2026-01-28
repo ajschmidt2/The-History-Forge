@@ -10,6 +10,7 @@ from io import BytesIO
 import requests
 from PIL import Image
 
+from image_gen import generate_imagen_images
 
 # ----------------------------
 # Secrets
@@ -37,28 +38,6 @@ def _openai_client():
         return None
     from openai import OpenAI  # openai>=1.x
     return OpenAI(api_key=key)
-
-
-def _gemini_client() -> Tuple[Optional[str], Any]:
-    key = _get_secret("gemini_api_key", "").strip()
-    if not key:
-        return None, None
-
-    try:
-        from google import genai  # type: ignore
-        client = genai.Client(api_key=key)
-        return "google-genai", client
-    except Exception:
-        pass
-
-    try:
-        import google.generativeai as genai_old  # type: ignore
-        genai_old.configure(api_key=key)
-        return "google-generativeai", genai_old
-    except Exception:
-        pass
-
-    return None, None
 
 
 def _elevenlabs_api_key() -> str:
@@ -510,48 +489,6 @@ def _crop_to_aspect(img: Image.Image, aspect_ratio: str) -> Image.Image:
         return img.crop((0, top, w, top + new_h))
 
 
-# ----------------------------
-# Robust extraction of image bytes from google-genai responses
-# ----------------------------
-def _extract_image_bytes_google_genai(resp: Any) -> Optional[bytes]:
-    # Try object path: resp.candidates[].content.parts[].inline_data.data
-    try:
-        for cand in getattr(resp, "candidates", []) or []:
-            content = getattr(cand, "content", None)
-            parts = getattr(content, "parts", []) if content else []
-            for part in parts:
-                inline = getattr(part, "inline_data", None)
-                data = getattr(inline, "data", None) if inline else None
-                if data:
-                    return data
-    except Exception:
-        pass
-
-    # Try dict path (SDK sometimes provides to_dict-like objects)
-    try:
-        if hasattr(resp, "to_dict"):
-            d = resp.to_dict()
-        elif isinstance(resp, dict):
-            d = resp
-        else:
-            d = None
-
-        if d:
-            cands = d.get("candidates", [])
-            for cand in cands:
-                content = cand.get("content", {})
-                parts = content.get("parts", [])
-                for part in parts:
-                    inline = part.get("inline_data") or part.get("inlineData") or {}
-                    data = inline.get("data")
-                    if data:
-                        return data
-    except Exception:
-        pass
-
-    return None
-
-
 def _sleep_backoff(attempt: int) -> None:
     time.sleep(min(20.0, (2 ** attempt)) + random.random())
 
@@ -568,13 +505,7 @@ def generate_image_for_scene(
     scene: Scene,
     aspect_ratio: str = "16:9",
     visual_style: str = "Photorealistic cinematic",
-    model_name: str = "gemini-2.5-flash-image",
 ) -> Scene:
-    provider, client = _gemini_client()
-    if client is None:
-        scene.image_error = "Gemini API key missing or invalid. Add gemini_api_key in Streamlit Secrets."
-        return scene
-
     base = (scene.image_prompt or "").strip()
     if not base:
         base = "Create a cinematic historical visual."
@@ -585,7 +516,6 @@ def generate_image_for_scene(
         "No text overlays, captions, logos, or watermarks."
     ).strip()
 
-    # Keep prompt concise; too long can reduce compliance
     prompt = (
         f"Style: {visual_style}.\n"
         f"{base}\n\n"
@@ -599,67 +529,42 @@ def generate_image_for_scene(
 
     for attempt in range(4):
         try:
-            if provider == "google-genai":
-                from google.genai import types  # type: ignore
+            raw_images = generate_imagen_images(
+                prompt,
+                number_of_images=1,
+                aspect_ratio=aspect_ratio,
+            )
+            raw = raw_images[0] if raw_images else None
+            if not raw:
+                raise RuntimeError("Imagen returned no image bytes.")
 
-                resp = client.models.generate_content(
-                    model=model_name,
-                    contents=[prompt],
-                    config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
-                )
+            img = Image.open(BytesIO(raw)).convert("RGB")
+            img = _crop_to_aspect(img, aspect_ratio)
 
-                raw = _extract_image_bytes_google_genai(resp)
-                if not raw:
-                    raise RuntimeError("Gemini returned no image bytes (no inline_data.data found)")
-
-                img = Image.open(BytesIO(raw)).convert("RGB")
-                img = _crop_to_aspect(img, aspect_ratio)
-
-                out = BytesIO()
-                img.save(out, format="PNG")
-                png_bytes = out.getvalue()
-                break
-
-            else:
-                # Older SDK fallback (best effort)
-                resp = client.GenerativeModel(model_name).generate_content(prompt)
-                raw = None
-                try:
-                    candidates = getattr(resp, "candidates", None)
-                    if candidates:
-                        parts = candidates[0].content.parts
-                        for part in parts:
-                            inline = getattr(part, "inline_data", None)
-                            if inline and getattr(inline, "data", None):
-                                raw = inline.data
-                                break
-                except Exception:
-                    raw = None
-
-                if not raw:
-                    raise RuntimeError("Older Gemini SDK returned no image bytes")
-
-                img = Image.open(BytesIO(raw)).convert("RGB")
-                img = _crop_to_aspect(img, aspect_ratio)
-                out = BytesIO()
-                img.save(out, format="PNG")
-                png_bytes = out.getvalue()
-                break
-
+            out = BytesIO()
+            img.save(out, format="PNG")
+            png_bytes = out.getvalue()
+            break
         except Exception as e:
             err_text = str(e)
-            if "API_KEY_INVALID" in err_text or "API key not valid" in err_text:
-                last_error = "Gemini API key is invalid. Update gemini_api_key in Streamlit Secrets."
+            if "missing google_ai_studio_api_key" in err_text.lower():
+                last_error = (
+                    "Missing GOOGLE_AI_STUDIO_API_KEY. Add it to Streamlit Secrets or environment variables."
+                )
+            elif _is_retryable(e):
+                last_error = (
+                    "AI Studio rate limit reached. Retry later or reduce the number of images."
+                )
             else:
                 last_error = f"{type(e).__name__}: {e}"
-            print(f"[Gemini image gen failed] attempt={attempt+1} {last_error}")
+            print(f"[Imagen image gen failed] attempt={attempt+1} {last_error}")
             if _is_retryable(e) and attempt < 3:
                 _sleep_backoff(attempt)
                 continue
             break
 
     if not png_bytes and last_error:
-        print(f"[Gemini image gen final] FAILED: {last_error}")
+        print(f"[Imagen image gen final] FAILED: {last_error}")
         scene.image_error = last_error
 
     scene.image_bytes = png_bytes

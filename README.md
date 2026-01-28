@@ -8,8 +8,8 @@ Generate engaging YouTube‐style history videos with AI. This project is a
 * **real generated images** aligned to each scene (optional toggle)
 * an exportable ZIP bundle for your editor
 
-Under the hood it uses OpenAI for text and Google’s **Gen AI SDK** (Gemini
-native image models) for images.
+Under the hood it uses OpenAI for text and Google’s **Gen AI SDK** (AI Studio
+Imagen models) for images.
 
 ## Features
 
@@ -24,9 +24,9 @@ native image models) for images.
   (not chat logs), with progressive generation steps and per-scene controls.
 * **Scene planning & prompts** – uses structured JSON planning so visuals stay
   coherent and aligned with the narration.
-* **Optional image generation** – generates real images using Gemini native
-  image models (e.g. `gemini-2.5-flash-image`). When image generation fails,
-  the app falls back to placeholders so you can still export a usable package.
+* **Optional image generation** – generates real images using AI Studio Imagen
+  models (e.g. `imagen-3.0-generate-002`). When image generation fails, the app
+  falls back to placeholders so you can still export a usable package.
 * **Per-scene regeneration & refinement** – refine the whole script or just a
   single scene prompt, then regenerate only that scene’s image.
 * **Export ZIP** – script + `scenes.json` + images (PNG) in a tidy folder.
@@ -39,7 +39,8 @@ native image models) for images.
 ```text
 youtube_history_generator/
 ├── app.py                # Main Streamlit application
-├── utils.py              # Provider logic (OpenAI text + Gemini images)
+├── utils.py              # Provider logic (OpenAI text + AI Studio images)
+├── image_gen.py          # AI Studio Imagen helper
 ├── requirements.txt      # Python dependencies
 ├── README.md             # This file
 ├── .gitignore            # Ignore common Python artefacts
@@ -83,11 +84,11 @@ pip install -r requirements.txt
 
 ```toml
 openai_api_key = "sk-..."
-gemini_api_key = "AIza..."
+GOOGLE_AI_STUDIO_API_KEY = "AIza..."
 
 # Optional overrides
 openai_model = "gpt-4.1-mini"
-gemini_image_model = "gemini-2.5-flash-image"  # or gemini-3-pro-image-preview
+GOOGLE_AI_STUDIO_IMAGE_MODEL = "imagen-3.0-generate-002"
 ```
 
 4. Run the app:
