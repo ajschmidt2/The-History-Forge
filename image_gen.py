@@ -92,16 +92,26 @@ def generate_imagen_images(
     client = genai.Client(api_key=api_key)
     model = _resolve_model()
 
-    result = client.models.generate_images(
-        model=model,
-        prompt=prompt,
-        config={
-            "number_of_images": max(1, int(number_of_images)),
-            "output_mime_type": "image/png",
-            "aspect_ratio": aspect_ratio,
-            "person_generation": "ALLOW_ALL",
-        },
-    )
+    config = {
+        "number_of_images": max(1, int(number_of_images)),
+        "output_mime_type": "image/png",
+        "aspect_ratio": aspect_ratio,
+    }
+
+    try:
+        result = client.models.generate_images(
+            model=model,
+            prompt=prompt,
+            config={**config, "person_generation": "ALLOW_ALL"},
+        )
+    except ValueError as exc:
+        if "PersonGeneration.ALLOW_ALL" not in str(exc):
+            raise
+        result = client.models.generate_images(
+            model=model,
+            prompt=prompt,
+            config=config,
+        )
 
     images = _extract_images(result)
     if not images:
