@@ -25,7 +25,7 @@ Imagen models) for images.
 * **Scene planning & prompts** – uses structured JSON planning so visuals stay
   coherent and aligned with the narration.
 * **Optional image generation** – generates real images using AI Studio Imagen
-  models (e.g. `imagen-3.0-generate-001`). When image generation fails, the app
+  models (e.g. `models/imagen-4.0-generate-001`). When image generation fails, the app
   falls back to placeholders so you can still export a usable package.
 * **Per-scene regeneration & refinement** – refine the whole script or just a
   single scene prompt, then regenerate only that scene’s image.
@@ -88,7 +88,7 @@ GOOGLE_AI_STUDIO_API_KEY = "AIza..."
 
 # Optional overrides
 openai_model = "gpt-4.1-mini"
-GOOGLE_AI_STUDIO_IMAGE_MODEL = "imagen-3.0-generate-001"
+GOOGLE_AI_STUDIO_IMAGE_MODEL = "models/imagen-4.0-generate-001"
 ```
 
 4. Run the app:
@@ -144,6 +144,41 @@ async function generateFlashImage() {
 }
 
 generateFlashImage();
+```
+
+## Python SDK quickstart (Imagen 4)
+
+```bash
+pip install google-genai
+```
+
+```python
+from google import genai
+import os
+
+def generate():
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    result = client.models.generate_images(
+        model="models/imagen-4.0-generate-001",
+        prompt="INSERT_INPUT_HERE",
+        config=dict(
+            number_of_images=1,
+            output_mime_type="image/jpeg",
+            person_generation="ALLOW_ALL",
+            aspect_ratio="1:1",
+            image_size="1K",
+        ),
+    )
+
+    if not result.generated_images:
+        print("No images generated.")
+        return
+
+    for n, generated_image in enumerate(result.generated_images):
+        generated_image.image.save(f"generated_image_{n}.jpg")
+
+if __name__ == "__main__":
+    generate()
 ```
 
 ## Future directions
