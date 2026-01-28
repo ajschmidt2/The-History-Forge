@@ -25,7 +25,7 @@ Imagen models) for images.
 * **Scene planning & prompts** – uses structured JSON planning so visuals stay
   coherent and aligned with the narration.
 * **Optional image generation** – generates real images using AI Studio Imagen
-  models (e.g. `imagen-3.0-generate-002`). When image generation fails, the app
+  models (e.g. `models/imagen-4.0-generate-001`). When image generation fails, the app
   falls back to placeholders so you can still export a usable package.
 * **Per-scene regeneration & refinement** – refine the whole script or just a
   single scene prompt, then regenerate only that scene’s image.
@@ -88,7 +88,7 @@ GOOGLE_AI_STUDIO_API_KEY = "AIza..."
 
 # Optional overrides
 openai_model = "gpt-4.1-mini"
-GOOGLE_AI_STUDIO_IMAGE_MODEL = "imagen-3.0-generate-002"
+GOOGLE_AI_STUDIO_IMAGE_MODEL = "models/imagen-4.0-generate-001"
 ```
 
 4. Run the app:
