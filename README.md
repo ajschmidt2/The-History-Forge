@@ -84,7 +84,7 @@ pip install -r requirements.txt
 
 ```toml
 openai_api_key = "sk-..."
-GOOGLE_AI_STUDIO_API_KEY = "AIza..."
+GEMINI_API_KEY = "AIza..."
 
 # Optional overrides
 openai_model = "gpt-4.1-mini"
