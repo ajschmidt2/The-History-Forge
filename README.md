@@ -25,7 +25,7 @@ Imagen models) for images.
 * **Scene planning & prompts** – uses structured JSON planning so visuals stay
   coherent and aligned with the narration.
 * **Optional image generation** – generates real images using AI Studio Imagen
-  models (e.g. `imagen-3.0-generate-002`). When image generation fails, the app
+  models (e.g. `imagen-3.0-generate-001`). When image generation fails, the app
   falls back to placeholders so you can still export a usable package.
 * **Per-scene regeneration & refinement** – refine the whole script or just a
   single scene prompt, then regenerate only that scene’s image.
@@ -88,7 +88,7 @@ GOOGLE_AI_STUDIO_API_KEY = "AIza..."
 
 # Optional overrides
 openai_model = "gpt-4.1-mini"
-GOOGLE_AI_STUDIO_IMAGE_MODEL = "imagen-3.0-generate-002"
+GOOGLE_AI_STUDIO_IMAGE_MODEL = "imagen-3.0-generate-001"
 ```
 
 4. Run the app:
@@ -101,6 +101,31 @@ Streamlit will start a local web server (usually at http://localhost:8501) where
 enter a topic, pick settings and generate a script and images.  API keys are
 loaded securely via Streamlit’s secrets manager and never exposed in your
 source code.
+
+## Node.js SDK quickstart (Imagen)
+
+If you are calling Imagen from a Node.js backend, install the SDK and use the
+model name shown below:
+
+```bash
+npm install @google/generative-ai
+```
+
+```js
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+const genAI = new GoogleGenerativeAI(process.env.API_KEY);
+const model = genAI.getGenerativeModel({ model: "imagen-3.0-generate-001" });
+
+async function generateImage() {
+  const prompt = "A futuristic city with flying cars, digital art style";
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  console.log(response);
+}
+
+generateImage();
+```
 
 ## Future directions
 
