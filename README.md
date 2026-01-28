@@ -102,10 +102,10 @@ enter a topic, pick settings and generate a script and images.  API keys are
 loaded securely via Streamlit’s secrets manager and never exposed in your
 source code.
 
-## Node.js SDK quickstart (Imagen)
+## Node.js SDK quickstart (Gemini image output)
 
-If you are calling Imagen from a Node.js backend, install the SDK and use the
-model name shown below:
+If you are calling Gemini from a Node.js backend and want native image output,
+use the experimental model shown below:
 
 ```bash
 npm install @google/generative-ai
@@ -115,16 +115,35 @@ npm install @google/generative-ai
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const genAI = new GoogleGenerativeAI(process.env.API_KEY);
-const model = genAI.getGenerativeModel({ model: "imagen-3.0-generate-001" });
+const model = genAI.getGenerativeModel({
+  model: "gemini-2.0-flash-exp",
+  generationConfig: {
+    responseModalities: ["TEXT", "IMAGE"],
+  },
+});
 
-async function generateImage() {
-  const prompt = "A futuristic city with flying cars, digital art style";
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  console.log(response);
+async function generateFlashImage() {
+  try {
+    const prompt = "Create a digital art image of a futuristic city.";
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+
+    if (response.candidates && response.candidates[0].content.parts) {
+      const parts = response.candidates[0].content.parts;
+      for (const part of parts) {
+        if (part.inlineData) {
+          console.log("Image generated! Base64 length:", part.inlineData.data.length);
+        } else if (part.text) {
+          console.log("Text:", part.text);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Generation failed:", error.message);
+  }
 }
 
-generateImage();
+generateFlashImage();
 ```
 
 ## Future directions
