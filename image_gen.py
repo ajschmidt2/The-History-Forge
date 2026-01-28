@@ -26,7 +26,7 @@ def generate_imagen_images(
     from google import genai  # type: ignore
 
     client = genai.Client(api_key=api_key)
-    model = os.getenv("GOOGLE_AI_STUDIO_IMAGE_MODEL", "imagen-3.0-generate-002")
+    model = os.getenv("GOOGLE_AI_STUDIO_IMAGE_MODEL", "models/imagen-4.0-generate-001")
 
     resp = client.models.generate_images(
         model=model,
@@ -34,6 +34,7 @@ def generate_imagen_images(
         config={
             "number_of_images": number_of_images,
             "aspect_ratio": aspect_ratio,
+            "output_mime_type": "image/png",
         },
     )
 
