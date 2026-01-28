@@ -25,7 +25,7 @@ Imagen models) for images.
 * **Scene planning & prompts** – uses structured JSON planning so visuals stay
   coherent and aligned with the narration.
 * **Optional image generation** – generates real images using AI Studio Imagen
-  models (e.g. `imagen-3.0-generate-002`). When image generation fails, the app
+  models (e.g. `models/imagen-4.0-generate-001`). When image generation fails, the app
   falls back to placeholders so you can still export a usable package.
 * **Per-scene regeneration & refinement** – refine the whole script or just a
   single scene prompt, then regenerate only that scene’s image.
@@ -84,11 +84,11 @@ pip install -r requirements.txt
 
 ```toml
 openai_api_key = "sk-..."
-GOOGLE_AI_STUDIO_API_KEY = "AIza..."
+GEMINI_API_KEY = "AIza..."
 
 # Optional overrides
 openai_model = "gpt-4.1-mini"
-GOOGLE_AI_STUDIO_IMAGE_MODEL = "imagen-3.0-generate-002"
+GOOGLE_AI_STUDIO_IMAGE_MODEL = "models/imagen-4.0-generate-001"
 ```
 
 4. Run the app:
@@ -101,6 +101,85 @@ Streamlit will start a local web server (usually at http://localhost:8501) where
 enter a topic, pick settings and generate a script and images.  API keys are
 loaded securely via Streamlit’s secrets manager and never exposed in your
 source code.
+
+## Node.js SDK quickstart (Gemini image output)
+
+If you are calling Gemini from a Node.js backend and want native image output,
+use the experimental model shown below:
+
+```bash
+npm install @google/generative-ai
+```
+
+```js
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+const genAI = new GoogleGenerativeAI(process.env.API_KEY);
+const model = genAI.getGenerativeModel({
+  model: "gemini-2.0-flash-exp",
+  generationConfig: {
+    responseModalities: ["TEXT", "IMAGE"],
+  },
+});
+
+async function generateFlashImage() {
+  try {
+    const prompt = "Create a digital art image of a futuristic city.";
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+
+    if (response.candidates && response.candidates[0].content.parts) {
+      const parts = response.candidates[0].content.parts;
+      for (const part of parts) {
+        if (part.inlineData) {
+          console.log("Image generated! Base64 length:", part.inlineData.data.length);
+        } else if (part.text) {
+          console.log("Text:", part.text);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Generation failed:", error.message);
+  }
+}
+
+generateFlashImage();
+```
+
+## Python SDK quickstart (Imagen 4)
+
+```bash
+pip install google-genai
+```
+
+```python
+from google import genai
+import os
+
+def generate():
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    result = client.models.generate_images(
+        model="models/imagen-4.0-generate-001",
+        prompt="INSERT_INPUT_HERE",
+        config=dict(
+            number_of_images=1,
+            output_mime_type="image/jpeg",
+            person_generation="ALLOW_ALL",
+            aspect_ratio="1:1",
+            image_size="1K",
+        ),
+    )
+
+    if not result.generated_images:
+        print("No images generated.")
+        return
+
+    for n, generated_image in enumerate(result.generated_images):
+        generated_image.image.save(f"generated_image_{n}.jpg")
+
+if __name__ == "__main__":
+    generate()
+```
 
 ## Future directions
 

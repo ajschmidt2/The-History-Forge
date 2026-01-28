@@ -6,9 +6,9 @@ from typing import List, Optional
 def _get_api_key() -> Optional[str]:
     try:
         import streamlit as st  # type: ignore
-        return st.secrets.get("GOOGLE_AI_STUDIO_API_KEY")
+        return st.secrets.get("GEMINI_API_KEY")
     except Exception:
-        return os.getenv("GOOGLE_AI_STUDIO_API_KEY")
+        return os.getenv("GEMINI_API_KEY")
 
 
 def generate_imagen_images(
@@ -20,13 +20,13 @@ def generate_imagen_images(
     api_key = _get_api_key()
     if not api_key:
         raise RuntimeError(
-            "Missing GOOGLE_AI_STUDIO_API_KEY. Add it to Streamlit Secrets or environment variables."
+            "Missing GEMINI_API_KEY. Add it to Streamlit Secrets or environment variables."
         )
 
     from google import genai  # type: ignore
 
     client = genai.Client(api_key=api_key)
-    model = os.getenv("GOOGLE_AI_STUDIO_IMAGE_MODEL", "imagen-3.0-generate-002")
+    model = os.getenv("GOOGLE_AI_STUDIO_IMAGE_MODEL", "models/imagen-4.0-generate-001")
 
     resp = client.models.generate_images(
         model=model,
@@ -34,6 +34,7 @@ def generate_imagen_images(
         config={
             "number_of_images": number_of_images,
             "aspect_ratio": aspect_ratio,
+            "output_mime_type": "image/jpeg",
         },
     )
 
