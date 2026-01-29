@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 from collections import deque
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import streamlit as st
 
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
+from src.video.timeline_schema import Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 
 
@@ -60,6 +63,54 @@ if audio_files:
 if music_files:
     st.caption(f"Using music bed: {music_files[0].name}")
 
+st.markdown("### Background music")
+if music_files:
+    music_rows = [
+        {"File": music_file.name, "Size (MB)": f"{music_file.stat().st_size / (1024 * 1024):.2f}"}
+        for music_file in music_files
+    ]
+    st.dataframe(music_rows, use_container_width=True, hide_index=True)
+else:
+    st.info("No background music files found yet.")
+
+upload_cols = st.columns([2, 1])
+with upload_cols[0]:
+    uploaded_music = st.file_uploader(
+        "Upload background music (.mp3 or .wav)",
+        type=["mp3", "wav"],
+        key="video_music_upload",
+    )
+    if uploaded_music is not None:
+        music_dir.mkdir(parents=True, exist_ok=True)
+        destination = music_dir / uploaded_music.name
+        destination.write_bytes(uploaded_music.getbuffer())
+        st.success(f"Saved {uploaded_music.name} to assets/music.")
+        st.rerun()
+with upload_cols[1]:
+    music_url = st.text_input("Music URL", placeholder="https://example.com/track.mp3", key="video_music_url")
+    if st.button("Add from URL", use_container_width=True, key="video_music_url_add"):
+        if not music_url.strip():
+            st.error("Enter a URL to fetch music.")
+        else:
+            parsed = urlparse(music_url)
+            filename = Path(parsed.path).name
+            if not filename:
+                st.error("URL does not include a filename.")
+            elif Path(filename).suffix.lower() not in {".mp3", ".wav"}:
+                st.error("Only .mp3 or .wav files are supported.")
+            else:
+                try:
+                    with urlopen(music_url) as response:
+                        music_bytes = response.read()
+                except Exception as exc:  # noqa: BLE001 - surface download errors to user
+                    st.error(f"Failed to download music: {exc}")
+                else:
+                    music_dir.mkdir(parents=True, exist_ok=True)
+                    destination = music_dir / filename
+                    destination.write_bytes(music_bytes)
+                    st.success(f"Downloaded {filename} to assets/music.")
+                    st.rerun()
+
 timeline_path = project_path / "timeline.json"
 meta_defaults = _load_timeline_meta(timeline_path)
 
@@ -74,6 +125,19 @@ with settings_cols[2]:
 with settings_cols[3]:
     burn_captions = st.checkbox("Burn captions", value=bool(meta_defaults.get("burn_captions", True)))
 
+include_voiceover_default = meta_defaults.get("include_voiceover")
+if include_voiceover_default is None:
+    include_voiceover_default = bool(audio_files)
+include_music_default = meta_defaults.get("include_music")
+if include_music_default is None:
+    include_music_default = bool(music_files)
+
+options_cols = st.columns(2)
+with options_cols[0]:
+    include_voiceover = st.checkbox("Include voiceover", value=bool(include_voiceover_default))
+with options_cols[1]:
+    include_music = st.checkbox("Include background music", value=bool(include_music_default))
+
 music_volume_db = st.slider(
     "Music volume (dB)",
     min_value=-36.0,
@@ -87,25 +151,51 @@ st.markdown("### Actions")
 if st.button("Generate timeline.json", use_container_width=True):
     if not images:
         st.error("No images found in assets/images/. Add scene images to generate a timeline.")
-    elif not audio_files:
-        st.error("No voiceover audio found in assets/audio/. Add a voiceover file first.")
+    elif include_voiceover and not audio_files:
+        st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
     else:
+        voiceover_path = audio_files[0] if include_voiceover and audio_files else None
         timeline = build_default_timeline(
             project_id=project_name,
             title=title,
             images=images,
-            voiceover_path=audio_files[0],
+            voiceover_path=voiceover_path,
             aspect_ratio=aspect_ratio,
             fps=int(fps),
             burn_captions=burn_captions,
-            music_path=music_files[0] if music_files else None,
+            music_path=music_files[0] if include_music and music_files else None,
             music_volume_db=music_volume_db,
+            include_voiceover=include_voiceover,
+            include_music=include_music,
         )
         write_timeline_json(timeline, timeline_path)
         st.success("timeline.json generated.")
 
 render_disabled = not timeline_path.exists()
 if st.button("Render video (FFmpeg)", use_container_width=True, disabled=render_disabled):
+    try:
+        timeline = Timeline.parse_file(timeline_path)
+    except ValueError as exc:
+        st.error(f"Unable to read timeline.json: {exc}")
+        st.stop()
+
+    missing_images = [scene.image_path for scene in timeline.scenes if not Path(scene.image_path).exists()]
+    if missing_images:
+        st.error("Missing scene images referenced by timeline.json.")
+        st.code("\n".join(missing_images))
+        st.stop()
+    if timeline.meta.include_voiceover:
+        if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
+            st.error("Voiceover is enabled but timeline.json has no voiceover path.")
+            st.stop()
+        if not Path(timeline.meta.voiceover.path).exists():
+            st.error(f"Voiceover audio not found: {timeline.meta.voiceover.path}")
+            st.stop()
+    if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
+        if not Path(timeline.meta.music.path).exists():
+            st.error(f"Music file not found: {timeline.meta.music.path}")
+            st.stop()
+
     try:
         ensure_ffmpeg_exists()
     except FFmpegNotFoundError as exc:
