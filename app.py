@@ -74,6 +74,11 @@ def init_state() -> None:
     st.session_state.setdefault("voice_id", "")
     st.session_state.setdefault("voiceover_bytes", None)
     st.session_state.setdefault("voiceover_error", None)
+    st.session_state.setdefault("voiceover_saved_path", "")
+
+
+def _project_folder_name() -> str:
+    return (st.session_state.project_title or "Untitled Project").strip().replace(" ", "_")
 
 
 def scenes_ready() -> bool:
@@ -402,6 +407,11 @@ def tab_voiceover() -> None:
         if err:
             st.error(err)
         else:
+            project_folder = Path("data/projects") / _project_folder_name() / "assets/audio"
+            project_folder.mkdir(parents=True, exist_ok=True)
+            output_path = project_folder / "voiceover.mp3"
+            output_path.write_bytes(audio)
+            st.session_state.voiceover_saved_path = str(output_path)
             st.toast("Voiceover generated.")
         st.rerun()
 
@@ -410,6 +420,8 @@ def tab_voiceover() -> None:
 
     if st.session_state.voiceover_bytes:
         st.audio(st.session_state.voiceover_bytes, format="audio/mp3")
+        if st.session_state.voiceover_saved_path:
+            st.caption(f"Saved to {st.session_state.voiceover_saved_path}")
 
 
 def build_zip() -> bytes:
@@ -660,6 +672,17 @@ def tab_video_compile() -> None:
         st.dataframe(audio_rows, use_container_width=True, hide_index=True)
     else:
         st.info("No voiceover audio files found yet.")
+        if st.session_state.voiceover_bytes:
+            if st.button(
+                "Save generated voiceover to assets/audio",
+                use_container_width=True,
+                key="video_save_generated_voiceover",
+            ):
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                destination = audio_dir / "voiceover.mp3"
+                destination.write_bytes(st.session_state.voiceover_bytes)
+                st.success("Saved generated voiceover to assets/audio/voiceover.mp3.")
+                st.rerun()
 
     voiceover_upload = st.file_uploader(
         "Upload voiceover audio (.mp3 or .wav)",
