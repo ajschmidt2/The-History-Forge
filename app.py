@@ -297,7 +297,17 @@ def tab_create_images() -> None:
         st.warning("Create scenes first.")
         return
 
-    st.session_state.aspect_ratio = st.selectbox("Aspect ratio", ["16:9", "9:16", "1:1"], index=0)
+    aspect_ratio_options = ["16:9", "9:16", "1:1"]
+    current_aspect_ratio = (
+        st.session_state.aspect_ratio
+        if st.session_state.aspect_ratio in aspect_ratio_options
+        else aspect_ratio_options[0]
+    )
+    st.session_state.aspect_ratio = st.selectbox(
+        "Aspect ratio",
+        aspect_ratio_options,
+        index=aspect_ratio_options.index(current_aspect_ratio),
+    )
     st.session_state.variations_per_scene = st.slider(
         "Variations per scene",
         1,
@@ -335,11 +345,11 @@ def tab_create_images() -> None:
             else:
                 st.info("No primary image yet.")
 
-            if s.image_variations:
+            if len(s.image_variations) > 1:
                 st.caption("Variations")
-                for vi, b in enumerate(s.image_variations):
+                for vi, b in enumerate(s.image_variations[1:], start=2):
                     if b:
-                        st.image(b, caption=f"Variation {vi + 1}", use_container_width=True)
+                        st.image(b, caption=f"Variation {vi}", use_container_width=True)
 
             if s.image_error:
                 st.error(s.image_error)
