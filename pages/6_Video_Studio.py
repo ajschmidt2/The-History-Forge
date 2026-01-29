@@ -195,6 +195,19 @@ with options_cols[0]:
 with options_cols[1]:
     include_music = st.checkbox("Include background music", value=bool(include_music_default))
 
+include_voiceover_default = meta_defaults.get("include_voiceover")
+if include_voiceover_default is None:
+    include_voiceover_default = bool(audio_files)
+include_music_default = meta_defaults.get("include_music")
+if include_music_default is None:
+    include_music_default = bool(music_files)
+
+options_cols = st.columns(2)
+with options_cols[0]:
+    include_voiceover = st.checkbox("Include voiceover", value=bool(include_voiceover_default))
+with options_cols[1]:
+    include_music = st.checkbox("Include background music", value=bool(include_music_default))
+
 music_volume_db = st.slider(
     "Music volume (dB)",
     min_value=-36.0,

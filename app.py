@@ -671,6 +671,13 @@ def tab_video_compile() -> None:
     if include_music_default is None:
         include_music_default = bool(music_files)
 
+    include_voiceover_default = meta_defaults.get("include_voiceover")
+    if include_voiceover_default is None:
+        include_voiceover_default = bool(audio_files)
+    include_music_default = meta_defaults.get("include_music")
+    if include_music_default is None:
+        include_music_default = bool(music_files)
+
     options_cols = st.columns(4)
     with options_cols[0]:
         include_voiceover = st.checkbox(
