@@ -32,11 +32,11 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
 
 def _caption_style_presets() -> dict[str, CaptionStyle]:
     return {
-        "Bold Impact": CaptionStyle(font="Impact", font_size=14, line_spacing=10, bottom_margin=130),
-        "Clean Sans": CaptionStyle(font="Arial", font_size=12, line_spacing=8, bottom_margin=140),
-        "Tall Outline": CaptionStyle(font="Helvetica", font_size=14, line_spacing=10, bottom_margin=150),
-        "Compact": CaptionStyle(font="Verdana", font_size=11, line_spacing=6, bottom_margin=120),
-        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=16, line_spacing=12, bottom_margin=160),
+        "Bold Impact": CaptionStyle(font="Impact", font_size=10, line_spacing=6, bottom_margin=120),
+        "Clean Sans": CaptionStyle(font="Arial", font_size=9, line_spacing=5, bottom_margin=120),
+        "Tall Outline": CaptionStyle(font="Helvetica", font_size=10, line_spacing=6, bottom_margin=130),
+        "Compact": CaptionStyle(font="Verdana", font_size=9, line_spacing=4, bottom_margin=110),
+        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=12, line_spacing=7, bottom_margin=140),
     }
 
 
@@ -103,6 +103,7 @@ def _build_timeline_from_ui(
     music_files: list[Path],
     aspect_ratio: str,
     fps: int,
+    scene_duration: float | None,
     burn_captions: bool,
     caption_style: CaptionStyle,
     music_volume_db: float,
@@ -117,6 +118,7 @@ def _build_timeline_from_ui(
         voiceover_path=voiceover_path,
         aspect_ratio=aspect_ratio,
         fps=int(fps),
+        scene_duration=scene_duration,
         burn_captions=burn_captions,
         caption_style=caption_style,
         music_path=music_files[0] if include_music and music_files else None,
@@ -183,6 +185,14 @@ if audio_files:
     st.dataframe(audio_rows, use_container_width=True, hide_index=True)
 else:
     st.info("No voiceover audio files found yet.")
+
+if st.session_state.get("voiceover_bytes"):
+    if st.button("Save generated voiceover to assets/audio", use_container_width=True, key="video_save_generated_voiceover"):
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        destination = audio_dir / "voiceover.mp3"
+        destination.write_bytes(st.session_state.voiceover_bytes)
+        st.success("Saved generated voiceover to assets/audio/voiceover.mp3.")
+        st.rerun()
 
 voiceover_upload = st.file_uploader(
     "Upload voiceover audio (.mp3 or .wav)",
@@ -256,6 +266,16 @@ with settings_cols[1]:
 with settings_cols[2]:
     fps = st.number_input("FPS", min_value=12, max_value=60, value=int(meta_defaults.get("fps", 30)))
 
+scene_duration = st.slider(
+    "Seconds per image",
+    min_value=1.0,
+    max_value=12.0,
+    value=float(meta_defaults.get("scene_duration", 3.0)),
+    step=0.5,
+    help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
+    key="video_scene_duration",
+)
+
 st.markdown("### Closed captions")
 captions_cols = st.columns([2, 1])
 with captions_cols[0]:
@@ -294,8 +314,8 @@ with captions_cols[0]:
     selected_caption_style.font_size = int(
         st.slider(
             "Caption size",
-            min_value=28,
-            max_value=72,
+            min_value=12,
+            max_value=48,
             value=selected_caption_style.font_size,
             step=2,
             key="video_caption_font_size",
@@ -333,6 +353,8 @@ with options_cols[0]:
 with options_cols[1]:
     include_music = st.checkbox("Include background music", value=bool(include_music_default))
 
+effective_scene_duration = None if include_voiceover and audio_files else scene_duration
+
 music_defaults = meta_defaults.get("music") or {}
 music_volume_db = st.slider(
     "Music volume (dB)",
@@ -358,6 +380,7 @@ if st.button("Generate timeline.json", use_container_width=True):
             music_files=music_files,
             aspect_ratio=aspect_ratio,
             fps=int(fps),
+            scene_duration=effective_scene_duration,
             burn_captions=burn_captions,
             caption_style=selected_caption_style,
             music_volume_db=music_volume_db,
@@ -402,6 +425,7 @@ if st.button("Render video (FFmpeg)", use_container_width=True):
             timeline.meta.music = None
         timeline.meta.burn_captions = burn_captions
         timeline.meta.caption_style = selected_caption_style
+        timeline.meta.scene_duration = effective_scene_duration
         write_timeline_json(timeline, timeline_path)
     else:
         timeline = _build_timeline_from_ui(
@@ -412,6 +436,7 @@ if st.button("Render video (FFmpeg)", use_container_width=True):
             music_files=music_files,
             aspect_ratio=aspect_ratio,
             fps=int(fps),
+            scene_duration=effective_scene_duration,
             burn_captions=burn_captions,
             caption_style=selected_caption_style,
             music_volume_db=music_volume_db,
@@ -441,6 +466,7 @@ if st.button("Render video (FFmpeg)", use_container_width=True):
             timeline.meta.music = None
         timeline.meta.burn_captions = burn_captions
         timeline.meta.caption_style = selected_caption_style
+        timeline.meta.scene_duration = effective_scene_duration
         write_timeline_json(timeline, timeline_path)
     else:
         timeline = _build_timeline_from_ui(
@@ -451,6 +477,7 @@ if st.button("Render video (FFmpeg)", use_container_width=True):
             music_files=music_files,
             aspect_ratio=aspect_ratio,
             fps=int(fps),
+            scene_duration=effective_scene_duration,
             burn_captions=burn_captions,
             caption_style=selected_caption_style,
             music_volume_db=music_volume_db,
@@ -480,6 +507,7 @@ if st.button("Render video (FFmpeg)", use_container_width=True):
             timeline.meta.music = None
         timeline.meta.burn_captions = burn_captions
         timeline.meta.caption_style = selected_caption_style
+        timeline.meta.scene_duration = effective_scene_duration
         write_timeline_json(timeline, timeline_path)
     else:
         timeline = _build_timeline_from_ui(
@@ -490,6 +518,7 @@ if st.button("Render video (FFmpeg)", use_container_width=True):
             music_files=music_files,
             aspect_ratio=aspect_ratio,
             fps=int(fps),
+            scene_duration=effective_scene_duration,
             burn_captions=burn_captions,
             caption_style=selected_caption_style,
             music_volume_db=music_volume_db,

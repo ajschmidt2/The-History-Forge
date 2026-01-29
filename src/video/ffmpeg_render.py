@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 from .audio_mix import build_audio_mix_cmd
-from .captions import write_srt_file
+from .captions import write_ass_file, write_srt_file
 from .timeline_schema import Timeline
 from .utils import ensure_ffmpeg_exists, ensure_parent_dir, run_cmd
 
@@ -153,15 +153,8 @@ def _crossfade_scenes(
     run_cmd(cmd, log_path=log_path)
 
 
-def _subtitle_filter(timeline: Timeline, srt_path: Path) -> str:
-    style = timeline.meta.caption_style
-    alignment_map = {"lower": 2, "center": 5, "top": 8}
-    alignment = alignment_map.get(style.position, 2)
-    style_str = (
-        f"FontName={style.font},FontSize={style.font_size},"
-        f"MarginV={style.bottom_margin},Spacing={style.line_spacing},Alignment={alignment}"
-    )
-    return f"subtitles='{srt_path.as_posix()}':force_style='{style_str}'"
+def _subtitle_filter(subtitle_path: Path) -> str:
+    return f"subtitles='{subtitle_path.as_posix()}'"
 
 
 def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Path, log_path: str | Path | None = None) -> Path:
@@ -203,7 +196,9 @@ def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Pa
             _concat_scenes(scene_paths, stitched_path, log_file)
 
         srt_path = output_path.with_name("captions.srt")
+        ass_path = output_path.with_name("captions.ass")
         write_srt_file(srt_path, timeline)
+        write_ass_file(ass_path, timeline)
 
         if timeline.meta.include_voiceover:
             if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
@@ -224,7 +219,7 @@ def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Pa
             cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
             cmd.extend(audio_plan.input_args)
             if timeline.meta.burn_captions:
-                cmd.extend(["-vf", _subtitle_filter(timeline, srt_path)])
+                cmd.extend(["-vf", _subtitle_filter(ass_path)])
             cmd.extend(["-filter_complex", audio_plan.filter_complex])
             cmd.extend(["-map", "0:v:0"])
             cmd.extend(audio_plan.map_args)
@@ -233,7 +228,7 @@ def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Pa
         else:
             cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
             if timeline.meta.burn_captions:
-                cmd.extend(["-vf", _subtitle_filter(timeline, srt_path)])
+                cmd.extend(["-vf", _subtitle_filter(ass_path)])
             cmd.extend(["-c:v", "libx264", "-movflags", "+faststart", str(output_path)])
             run_cmd(cmd, log_path=log_file)
 
