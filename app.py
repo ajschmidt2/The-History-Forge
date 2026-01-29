@@ -53,6 +53,9 @@ def init_state() -> None:
     st.session_state.setdefault("project_title", "Untitled Project")
     st.session_state.setdefault("topic", "")
     st.session_state.setdefault("script_text", "")
+    st.session_state.setdefault("script_text_input", "")
+    if st.session_state.script_text and not st.session_state.script_text_input:
+        st.session_state.script_text_input = st.session_state.script_text
 
     st.session_state.setdefault("tone", "Documentary")
     st.session_state.setdefault("length", "8–10 minutes")
@@ -124,12 +127,13 @@ def tab_paste_script() -> None:
 
     new_script = st.text_area(
         "Script",
-        key="script_text",
+        key="script_text_input",
         height=320,
         placeholder="Paste your narration script here...",
     )
 
     if st.button("Use this script →", type="primary", use_container_width=True):
+        st.session_state.script_text = st.session_state.script_text_input
         clear_downstream("script")
         st.toast("Script loaded.")
         st.rerun()
@@ -177,6 +181,8 @@ def tab_generate_script() -> None:
                 length=st.session_state.length,
                 tone=st.session_state.tone,
             )
+        st.session_state.script_text = generated_script
+        st.session_state.script_text_input = generated_script
         st.session_state.project_title = st.session_state.topic or st.session_state.project_title
         clear_downstream("script")
         st.toast("Script generated.")
@@ -445,6 +451,13 @@ def tab_export() -> None:
         mime="application/zip",
         use_container_width=True,
     )
+
+
+def _tail_file(path: Path, lines: int = 200) -> str:
+    if not path.exists():
+        return ""
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        return "".join(deque(handle, maxlen=lines))
 
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
