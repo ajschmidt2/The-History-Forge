@@ -500,11 +500,11 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
 
 def _caption_style_presets() -> dict[str, CaptionStyle]:
     return {
-        "Bold Impact": CaptionStyle(font="Impact", font_size=58, line_spacing=10, bottom_margin=130),
-        "Clean Sans": CaptionStyle(font="Arial", font_size=48, line_spacing=8, bottom_margin=140),
-        "Tall Outline": CaptionStyle(font="Helvetica", font_size=56, line_spacing=10, bottom_margin=150),
-        "Compact": CaptionStyle(font="Verdana", font_size=44, line_spacing=6, bottom_margin=120),
-        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=64, line_spacing=12, bottom_margin=160),
+        "Bold Impact": CaptionStyle(font="Impact", font_size=14, line_spacing=10, bottom_margin=130),
+        "Clean Sans": CaptionStyle(font="Arial", font_size=12, line_spacing=8, bottom_margin=140),
+        "Tall Outline": CaptionStyle(font="Helvetica", font_size=14, line_spacing=10, bottom_margin=150),
+        "Compact": CaptionStyle(font="Verdana", font_size=11, line_spacing=6, bottom_margin=120),
+        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=16, line_spacing=12, bottom_margin=160),
     }
 
 
