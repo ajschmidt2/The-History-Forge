@@ -1,6 +1,8 @@
 import json
 import zipfile
+from collections import deque
 from io import BytesIO
+from pathlib import Path
 
 import streamlit as st
 
@@ -13,6 +15,9 @@ from utils import (
     generate_image_for_scene,
     generate_voiceover,
 )
+from src.video.ffmpeg_render import render_video_from_timeline
+from src.video.timeline_builder import build_default_timeline, write_timeline_json
+from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 
 
 # ----------------------------
@@ -119,13 +124,12 @@ def tab_paste_script() -> None:
 
     new_script = st.text_area(
         "Script",
-        value=st.session_state.script_text,
+        key="script_text",
         height=320,
         placeholder="Paste your narration script here...",
     )
 
     if st.button("Use this script →", type="primary", use_container_width=True):
-        st.session_state.script_text = new_script
         clear_downstream("script")
         st.toast("Script loaded.")
         st.rerun()
@@ -424,6 +428,148 @@ def tab_export() -> None:
         use_container_width=True,
     )
 
+    if st.session_state.voiceover_bytes:
+        st.audio(st.session_state.voiceover_bytes, format="audio/mp3")
+
+def _tail_file(path: Path, lines: int = 200) -> str:
+    if not path.exists():
+        return ""
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        return "".join(deque(handle, maxlen=lines))
+
+
+def _load_timeline_meta(timeline_path: Path) -> dict:
+    if not timeline_path.exists():
+        return {}
+    try:
+        return json.loads(timeline_path.read_text(encoding="utf-8")).get("meta", {})
+    except json.JSONDecodeError:
+        return {}
+
+    return buf.getvalue()
+
+def tab_video_compile() -> None:
+    st.subheader("Video Studio")
+
+    projects_root = Path("data/projects")
+    project_dirs = sorted([p for p in projects_root.iterdir() if p.is_dir()])
+    if not project_dirs:
+        st.info("No projects found. Create a folder under data/projects/<project_id> to get started.")
+        return
+
+    project_name = st.selectbox("Project folder", [p.name for p in project_dirs])
+    project_path = projects_root / project_name
+
+    images_dir = project_path / "assets/images"
+    audio_dir = project_path / "assets/audio"
+    music_dir = project_path / "assets/music"
+    renders_dir = project_path / "renders"
+
+    images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
+    audio_files = sorted([p for p in audio_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
+    music_files = sorted([p for p in music_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
+
+    st.markdown("### Assets")
+    cols = st.columns(3)
+    cols[0].metric("Images", len(images))
+    cols[1].metric("Voiceover files", len(audio_files))
+    cols[2].metric("Music files", len(music_files))
+
+    if audio_files:
+        st.caption(f"Using voiceover: {audio_files[0].name}")
+    if music_files:
+        st.caption(f"Using music bed: {music_files[0].name}")
+
+    timeline_path = project_path / "timeline.json"
+    meta_defaults = _load_timeline_meta(timeline_path)
+
+    st.markdown("### Timeline settings")
+    settings_cols = st.columns(4)
+    with settings_cols[0]:
+        title = st.text_input("Title", value=meta_defaults.get("title", project_name), key="video_title")
+    with settings_cols[1]:
+        aspect_ratio = st.selectbox(
+            "Aspect ratio",
+            ["9:16", "16:9"],
+            index=0 if meta_defaults.get("aspect_ratio") != "16:9" else 1,
+            key="video_aspect_ratio",
+        )
+    with settings_cols[2]:
+        fps = st.number_input(
+            "FPS",
+            min_value=12,
+            max_value=60,
+            value=int(meta_defaults.get("fps", 30)),
+            key="video_fps",
+        )
+    with settings_cols[3]:
+        burn_captions = st.checkbox(
+            "Burn captions",
+            value=bool(meta_defaults.get("burn_captions", True)),
+            key="video_burn_captions",
+        )
+
+    music_volume_db = st.slider(
+        "Music volume (dB)",
+        min_value=-36.0,
+        max_value=0.0,
+        value=float(meta_defaults.get("music", {}).get("volume_db", -18)),
+        step=1.0,
+        key="video_music_volume",
+    )
+
+    st.markdown("### Actions")
+    if st.button("Generate timeline.json", use_container_width=True, key="video_generate_timeline"):
+        if not images:
+            st.error("No images found in assets/images/. Add scene images to generate a timeline.")
+        elif not audio_files:
+            st.error("No voiceover audio found in assets/audio/. Add a voiceover file first.")
+        else:
+            timeline = build_default_timeline(
+                project_id=project_name,
+                title=title,
+                images=images,
+                voiceover_path=audio_files[0],
+                aspect_ratio=aspect_ratio,
+                fps=int(fps),
+                burn_captions=burn_captions,
+                music_path=music_files[0] if music_files else None,
+                music_volume_db=music_volume_db,
+            )
+            write_timeline_json(timeline, timeline_path)
+            st.success("timeline.json generated.")
+
+    render_disabled = not timeline_path.exists()
+    if st.button("Render video (FFmpeg)", use_container_width=True, disabled=render_disabled, key="video_render"):
+        try:
+            ensure_ffmpeg_exists()
+        except FFmpegNotFoundError as exc:
+            st.error(str(exc))
+        else:
+            renders_dir.mkdir(parents=True, exist_ok=True)
+            log_path = renders_dir / "render.log"
+            with st.spinner("Rendering video with FFmpeg..."):
+                render_video_from_timeline(timeline_path, renders_dir / "final.mp4", log_path=log_path)
+            st.success("Render complete.")
+
+    st.markdown("### Render output")
+    video_path = renders_dir / "final.mp4"
+    srt_path = renders_dir / "captions.srt"
+    log_path = renders_dir / "render.log"
+
+    if video_path.exists():
+        st.video(str(video_path))
+        with video_path.open("rb") as handle:
+            st.download_button("Download video", handle, file_name="final.mp4")
+
+    if srt_path.exists():
+        st.download_button("Download captions.srt", srt_path.read_bytes(), file_name="captions.srt")
+
+    log_text = _tail_file(log_path)
+    if log_text:
+        st.markdown("#### Render log")
+        st.code(log_text, language="bash")
+
 
 def main() -> None:
     st.set_page_config(page_title="The History Forge", layout="wide")
@@ -442,6 +588,7 @@ def main() -> None:
             "🖼️ Images",
             "🎙️ Voiceover",
             "📦 Export",
+            "🎞️ Video Compile",
         ]
     )
 
@@ -459,6 +606,8 @@ def main() -> None:
         tab_voiceover()
     with tabs[6]:
         tab_export()
+    with tabs[7]:
+        tab_video_compile()
 
 
 if __name__ == "__main__":
