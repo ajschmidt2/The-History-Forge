@@ -4,3 +4,4 @@ google-genai>=0.8.0
 pillow>=10.0
 requests>=2.31
 moviepy>=1.0.3
+pydantic>=1.10
