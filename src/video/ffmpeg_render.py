@@ -155,9 +155,11 @@ def _crossfade_scenes(
 
 def _subtitle_filter(timeline: Timeline, srt_path: Path) -> str:
     style = timeline.meta.caption_style
+    alignment_map = {"lower": 2, "center": 5, "top": 8}
+    alignment = alignment_map.get(style.position, 2)
     style_str = (
         f"FontName={style.font},FontSize={style.font_size},"
-        f"MarginV={style.bottom_margin},Spacing={style.line_spacing}"
+        f"MarginV={style.bottom_margin},Spacing={style.line_spacing},Alignment={alignment}"
     )
     return f"subtitles='{srt_path.as_posix()}':force_style='{style_str}'"
 
