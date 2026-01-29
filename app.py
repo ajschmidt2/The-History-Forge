@@ -234,10 +234,26 @@ def tab_create_prompts() -> None:
         st.warning("Create scenes first.")
         return
 
+    style_options = [
+        "Photorealistic cinematic",
+        "Painterly",
+        "Vintage photo",
+        "Illustrated",
+        "Film still",
+        "Sepia archival",
+        "Watercolor",
+        "Oil painting",
+        "Graphic novel",
+        "3D render",
+        "Epic concept art",
+        "High-contrast noir",
+        "Vintage postcard",
+    ]
+    current_style = st.session_state.visual_style if st.session_state.visual_style in style_options else style_options[0]
     st.session_state.visual_style = st.selectbox(
         "Visual style",
-        ["Photorealistic cinematic", "Painterly", "Vintage photo", "Illustrated"],
-        index=0,
+        style_options,
+        index=style_options.index(current_style),
     )
 
     if st.button("Generate prompts for all scenes", type="primary", use_container_width=True):
@@ -247,6 +263,8 @@ def tab_create_prompts() -> None:
                 tone=st.session_state.tone,
                 style=st.session_state.visual_style,
             )
+            for s in st.session_state.scenes:
+                st.session_state[f"prompt_{s.index}"] = s.image_prompt
         clear_downstream("prompts")
         st.toast("Prompts generated.")
         st.rerun()
@@ -428,8 +446,6 @@ def tab_export() -> None:
         use_container_width=True,
     )
 
-    if st.session_state.voiceover_bytes:
-        st.audio(st.session_state.voiceover_bytes, format="audio/mp3")
 
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
