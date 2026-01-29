@@ -16,6 +16,9 @@ from utils import (
     generate_prompts_for_scenes,
     generate_image_for_scene,
     generate_voiceover,
+    generate_thumbnail_image,
+    generate_thumbnail_prompt,
+    generate_video_titles,
 )
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
@@ -75,6 +78,12 @@ def init_state() -> None:
     st.session_state.setdefault("voiceover_bytes", None)
     st.session_state.setdefault("voiceover_error", None)
     st.session_state.setdefault("voiceover_saved_path", "")
+    st.session_state.setdefault("video_title_suggestions", [])
+    st.session_state.setdefault("selected_video_title", "")
+    st.session_state.setdefault("thumbnail_prompt", "")
+    st.session_state.setdefault("thumbnail_bytes", None)
+    st.session_state.setdefault("thumbnail_error", None)
+    st.session_state.setdefault("thumbnail_saved_path", "")
 
 
 def _project_folder_name() -> str:
@@ -481,6 +490,80 @@ def tab_export() -> None:
         mime="application/zip",
         use_container_width=True,
     )
+
+
+def tab_thumbnail_title() -> None:
+    st.subheader("Thumbnail + title generator")
+    st.caption("Generate YouTube title ideas and thumbnail images for your project.")
+
+    title_seed = st.text_input(
+        "Title/topic seed",
+        value=st.session_state.project_title or st.session_state.topic,
+        placeholder="e.g., The Rise of Rome",
+        key="thumbnail_title_seed",
+    )
+    title_count = st.slider("Number of title ideas", min_value=3, max_value=10, value=5, step=1)
+    if st.button("Generate title ideas", use_container_width=True, key="thumbnail_generate_titles"):
+        st.session_state.video_title_suggestions = generate_video_titles(
+            title_seed,
+            st.session_state.script_text,
+            count=title_count,
+        )
+        if st.session_state.video_title_suggestions:
+            st.session_state.selected_video_title = st.session_state.video_title_suggestions[0]
+        st.rerun()
+
+    if st.session_state.video_title_suggestions:
+        st.session_state.selected_video_title = st.radio(
+            "Pick a title",
+            st.session_state.video_title_suggestions,
+            index=0,
+            key="thumbnail_title_pick",
+        )
+
+    style = st.selectbox(
+        "Thumbnail style",
+        ["Cinematic", "Documentary", "Dramatic lighting", "Vintage film", "Epic illustration"],
+        index=0,
+        key="thumbnail_style",
+    )
+    if st.button("Generate thumbnail prompt", use_container_width=True, key="thumbnail_prompt_btn"):
+        st.session_state.thumbnail_prompt = generate_thumbnail_prompt(
+            title_seed,
+            st.session_state.selected_video_title,
+            style,
+        )
+        st.rerun()
+
+    st.session_state.thumbnail_prompt = st.text_area(
+        "Thumbnail prompt",
+        value=st.session_state.thumbnail_prompt,
+        height=120,
+        key="thumbnail_prompt_text",
+    )
+
+    if st.button("Generate thumbnail image", use_container_width=True, key="thumbnail_generate_image"):
+        image_bytes, err = generate_thumbnail_image(st.session_state.thumbnail_prompt, aspect_ratio="16:9")
+        st.session_state.thumbnail_bytes = image_bytes
+        st.session_state.thumbnail_error = err
+        if err:
+            st.error(err)
+        else:
+            project_folder = Path("data/projects") / _project_folder_name() / "assets/thumbnails"
+            project_folder.mkdir(parents=True, exist_ok=True)
+            output_path = project_folder / "thumbnail.png"
+            output_path.write_bytes(image_bytes)
+            st.session_state.thumbnail_saved_path = str(output_path)
+            st.toast("Thumbnail generated.")
+        st.rerun()
+
+    if st.session_state.thumbnail_error:
+        st.error(st.session_state.thumbnail_error)
+
+    if st.session_state.thumbnail_bytes:
+        st.image(st.session_state.thumbnail_bytes, caption="Generated thumbnail", use_container_width=True)
+        if st.session_state.thumbnail_saved_path:
+            st.caption(f"Saved to {st.session_state.thumbnail_saved_path}")
 
 
 def _tail_file(path: Path, lines: int = 200) -> str:
@@ -1035,6 +1118,7 @@ def main() -> None:
             "🎙️ Voiceover",
             "📦 Export",
             "🎞️ Video Compile",
+            "🖼️ Title + Thumbnail",
         ]
     )
 
@@ -1054,6 +1138,8 @@ def main() -> None:
         tab_export()
     with tabs[7]:
         tab_video_compile()
+    with tabs[8]:
+        tab_thumbnail_title()
 
 
 if __name__ == "__main__":

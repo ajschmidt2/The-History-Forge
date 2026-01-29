@@ -182,6 +182,95 @@ def rewrite_description(script: str, description: str, mode: str = "refresh") ->
     return resp.choices[0].message.content.strip()
 
 
+def generate_video_titles(topic: str, script: str, count: int = 5) -> List[str]:
+    topic = (topic or "").strip()
+    script = (script or "").strip()
+    count = max(1, min(int(count), 12))
+
+    client = _openai_client()
+    if client is None:
+        base = topic or "Untitled History Story"
+        return [
+            f"{base}: The Forgotten Turning Point",
+            f"The Hidden Truth Behind {base}",
+            f"{base} in 10 Minutes",
+            f"{base}: What Really Happened",
+            f"The Untold Story of {base}",
+        ][:count]
+
+    system = (
+        "You are a YouTube title strategist for history documentaries. "
+        "Generate compelling, accurate, curiosity-driven titles without clickbait."
+    )
+    user = (
+        f"Topic: {topic or 'History documentary'}\n"
+        f"Script excerpt:\n{script[:1200]}\n\n"
+        f"Return exactly {count} titles as a JSON array of strings."
+    )
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.7,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    raw = resp.choices[0].message.content.strip()
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()][:count]
+    except json.JSONDecodeError:
+        pass
+    return [line.strip("- ").strip() for line in raw.splitlines() if line.strip()][:count]
+
+
+def generate_thumbnail_prompt(topic: str, title: str, style: str) -> str:
+    topic = (topic or "").strip()
+    title = (title or "").strip()
+    style = (style or "").strip() or "cinematic"
+
+    client = _openai_client()
+    if client is None:
+        base = title or topic or "Epic historical moment"
+        return (
+            f"{base}, {style} lighting, dramatic composition, high contrast, sharp focus, "
+            "no text, no watermark, YouTube thumbnail style, 16:9."
+        )
+
+    system = (
+        "You craft concise image prompts for historical YouTube thumbnails. "
+        "Use vivid cinematic descriptors and avoid any on-image text."
+    )
+    user = (
+        f"Topic: {topic}\nTitle: {title}\nStyle: {style}\n\n"
+        "Write one short prompt (1-2 sentences) for a 16:9 YouTube thumbnail image. "
+        "No text, no logos, no watermarks."
+    )
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.7,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content.strip()
+
+
+def generate_thumbnail_image(prompt: str, aspect_ratio: str = "16:9") -> Tuple[Optional[bytes], str]:
+    base = (prompt or "").strip()
+    if not base:
+        return None, "Enter a thumbnail prompt first."
+    try:
+        images = generate_imagen_images(base, number_of_images=1, aspect_ratio=aspect_ratio)
+    except Exception as exc:  # noqa: BLE001 - surface image generation errors
+        return None, str(exc)
+    if not images:
+        return None, "No image bytes returned."
+    return images[0], ""
+
+
 # ----------------------------
 # Deterministic fallback chunking (ENFORCES N scenes)
 # ----------------------------
