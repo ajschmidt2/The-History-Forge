@@ -113,5 +113,5 @@ def build_default_timeline(
 
 def write_timeline_json(timeline: Timeline, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(timeline.json(indent=2), encoding="utf-8")
+    output_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
     return output_path
