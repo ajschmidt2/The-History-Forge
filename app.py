@@ -122,7 +122,7 @@ def tab_paste_script() -> None:
         placeholder="e.g., The Rise of Rome",
     )
 
-    st.text_area(
+    new_script = st.text_area(
         "Script",
         key="script_text",
         height=320,
@@ -428,6 +428,8 @@ def tab_export() -> None:
         use_container_width=True,
     )
 
+    if st.session_state.voiceover_bytes:
+        st.audio(st.session_state.voiceover_bytes, format="audio/mp3")
 
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
@@ -444,6 +446,7 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
     except json.JSONDecodeError:
         return {}
 
+    return buf.getvalue()
 
 def tab_video_compile() -> None:
     st.subheader("Video Studio")
