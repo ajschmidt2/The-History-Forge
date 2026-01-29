@@ -66,9 +66,13 @@ class Meta(BaseModel):
     resolution: str = "1080x1920"
     fps: int = 30
     burn_captions: bool = True
+    include_voiceover: bool = True
+    include_music: bool = True
+    crossfade: bool = False
+    crossfade_duration: float = 0.3
     caption_style: CaptionStyle = Field(default_factory=CaptionStyle)
     music: Optional[Music] = None
-    voiceover: Voiceover
+    voiceover: Optional[Voiceover] = None
 
     @validator("aspect_ratio")
     def validate_aspect_ratio(cls, value: str) -> str:

@@ -18,7 +18,7 @@ def build_audio_mix_cmd(meta: Meta, total_duration: float) -> AudioMixPlan:
     next_index = 0
     vo_label: str | None = None
 
-    if meta.voiceover and meta.voiceover.path:
+    if meta.include_voiceover and meta.voiceover and meta.voiceover.path:
         input_args += ["-i", meta.voiceover.path]
         vo_input = f"[{next_index}:a]"
         next_index += 1
@@ -31,7 +31,7 @@ def build_audio_mix_cmd(meta: Meta, total_duration: float) -> AudioMixPlan:
         vo_label = "[vo]"
 
     music_label: str | None = None
-    if meta.music and meta.music.path:
+    if meta.include_music and meta.music and meta.music.path:
         input_args += ["-stream_loop", "-1", "-i", meta.music.path]
         music_input = f"[{next_index}:a]"
         next_index += 1

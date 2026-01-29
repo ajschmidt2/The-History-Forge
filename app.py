@@ -446,13 +446,17 @@ def tab_export() -> None:
         use_container_width=True,
     )
 
-
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
         return ""
     with path.open("r", encoding="utf-8", errors="ignore") as handle:
         return "".join(deque(handle, maxlen=lines))
 
+def _tail_file(path: Path, lines: int = 200) -> str:
+    if not path.exists():
+        return ""
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        return "".join(deque(handle, maxlen=lines))
 
 def _load_timeline_meta(timeline_path: Path) -> dict:
     if not timeline_path.exists():
@@ -462,10 +466,21 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
     except json.JSONDecodeError:
         return {}
 
-    return buf.getvalue()
+def _load_timeline_meta(timeline_path: Path) -> dict:
+    if not timeline_path.exists():
+        return {}
+    try:
+        return json.loads(timeline_path.read_text(encoding="utf-8")).get("meta", {})
+    except json.JSONDecodeError:
+        return {}
+
 
 def tab_video_compile() -> None:
     st.subheader("Video Studio")
+    st.caption(
+        "Video compile reads scene images from data/projects/<project_id>/assets/images and audio from "
+        "assets/audio and assets/music. To use generated images, export or save them into that folder first."
+    )
 
     projects_root = Path("data/projects")
     project_dirs = sorted([p for p in projects_root.iterdir() if p.is_dir()])
@@ -525,6 +540,41 @@ def tab_video_compile() -> None:
             key="video_burn_captions",
         )
 
+    options_cols = st.columns(4)
+    with options_cols[0]:
+        include_voiceover = st.checkbox(
+            "Include voiceover",
+            value=bool(meta_defaults.get("include_voiceover", True)),
+            key="video_include_voiceover",
+        )
+    with options_cols[1]:
+        include_music = st.checkbox(
+            "Include background music",
+            value=bool(meta_defaults.get("include_music", True)),
+            key="video_include_music",
+        )
+    with options_cols[2]:
+        enable_motion = st.checkbox(
+            "Ken Burns motion",
+            value=True,
+            key="video_enable_motion",
+        )
+    with options_cols[3]:
+        crossfade = st.checkbox(
+            "Crossfade scenes",
+            value=bool(meta_defaults.get("crossfade", False)),
+            key="video_crossfade",
+        )
+
+    crossfade_duration = st.slider(
+        "Crossfade duration (seconds)",
+        min_value=0.1,
+        max_value=1.5,
+        value=float(meta_defaults.get("crossfade_duration", 0.3)),
+        step=0.1,
+        key="video_crossfade_duration",
+    )
+
     music_volume_db = st.slider(
         "Music volume (dB)",
         min_value=-36.0,
@@ -538,19 +588,25 @@ def tab_video_compile() -> None:
     if st.button("Generate timeline.json", use_container_width=True, key="video_generate_timeline"):
         if not images:
             st.error("No images found in assets/images/. Add scene images to generate a timeline.")
-        elif not audio_files:
-            st.error("No voiceover audio found in assets/audio/. Add a voiceover file first.")
+        elif include_voiceover and not audio_files:
+            st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
         else:
+            voiceover_path = audio_files[0] if audio_files else None
             timeline = build_default_timeline(
                 project_id=project_name,
                 title=title,
                 images=images,
-                voiceover_path=audio_files[0],
+                voiceover_path=voiceover_path,
                 aspect_ratio=aspect_ratio,
                 fps=int(fps),
                 burn_captions=burn_captions,
                 music_path=music_files[0] if music_files else None,
                 music_volume_db=music_volume_db,
+                include_voiceover=include_voiceover,
+                include_music=include_music,
+                enable_motion=enable_motion,
+                crossfade=crossfade,
+                crossfade_duration=crossfade_duration,
             )
             write_timeline_json(timeline, timeline_path)
             st.success("timeline.json generated.")

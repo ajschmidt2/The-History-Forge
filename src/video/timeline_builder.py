@@ -40,24 +40,35 @@ def build_default_timeline(
     project_id: str,
     title: str,
     images: Iterable[Path],
-    voiceover_path: Path,
+    voiceover_path: Path | None,
     aspect_ratio: str = "9:16",
     fps: int = 30,
     burn_captions: bool = True,
     music_path: Path | None = None,
     music_volume_db: float = -18,
+    include_voiceover: bool = True,
+    include_music: bool = True,
+    enable_motion: bool = True,
+    crossfade: bool = False,
+    crossfade_duration: float = 0.3,
 ) -> Timeline:
     image_list = list(images)
     if not image_list:
         raise ValueError("No scene images available to build a timeline.")
 
-    voiceover_duration = get_media_duration(voiceover_path)
+    if include_voiceover and voiceover_path is None:
+        raise ValueError("Voiceover is enabled but no voiceover file was provided.")
+
+    voiceover_duration = get_media_duration(voiceover_path) if voiceover_path else 0.0
     scene_count = len(image_list)
     if aspect_ratio == "9:16" and scene_count > 18:
         image_list = image_list[:18]
         scene_count = len(image_list)
 
-    scene_duration = voiceover_duration / scene_count
+    if voiceover_duration > 0:
+        scene_duration = voiceover_duration / scene_count
+    else:
+        scene_duration = 3.0
     scenes: list[Scene] = []
     current_start = 0.0
 
@@ -68,7 +79,7 @@ def build_default_timeline(
                 image_path=str(image_path),
                 start=round(current_start, 3),
                 duration=round(scene_duration, 3),
-                motion=_build_motion(idx),
+                motion=_build_motion(idx) if enable_motion else None,
                 caption=None,
             )
         )
@@ -86,9 +97,13 @@ def build_default_timeline(
             resolution=_resolution_for_aspect_ratio(aspect_ratio),
             fps=fps,
             burn_captions=burn_captions,
+            include_voiceover=include_voiceover,
+            include_music=include_music,
+            crossfade=crossfade,
+            crossfade_duration=crossfade_duration,
             caption_style=CaptionStyle(),
             music=music,
-            voiceover=Voiceover(path=str(voiceover_path)),
+            voiceover=Voiceover(path=str(voiceover_path)) if voiceover_path else None,
         ),
         scenes=scenes,
     )
