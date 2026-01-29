@@ -17,6 +17,7 @@ from utils import (
 )
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
+from src.video.timeline_schema import Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 
 
@@ -54,6 +55,7 @@ def init_state() -> None:
     st.session_state.setdefault("topic", "")
     st.session_state.setdefault("script_text", "")
     st.session_state.setdefault("script_text_input", "")
+    st.session_state.setdefault("pending_script_text_input", "")
     if st.session_state.script_text and not st.session_state.script_text_input:
         st.session_state.script_text_input = st.session_state.script_text
 
@@ -119,6 +121,10 @@ def clear_downstream(after: str) -> None:
 def tab_paste_script() -> None:
     st.subheader("Paste your own script")
 
+    if st.session_state.pending_script_text_input:
+        st.session_state.script_text_input = st.session_state.pending_script_text_input
+        st.session_state.pending_script_text_input = ""
+
     st.session_state.project_title = st.text_input(
         "Project Title",
         value=st.session_state.project_title,
@@ -176,13 +182,13 @@ def tab_generate_script() -> None:
             st.warning("Enter a topic or use I'm Feeling Lucky.")
             return
         with st.spinner("Generating script..."):
-            st.session_state.script_text = generate_script(
+            generated_script = generate_script(
                 topic=st.session_state.topic,
                 length=st.session_state.length,
                 tone=st.session_state.tone,
             )
         st.session_state.script_text = generated_script
-        st.session_state.script_text_input = generated_script
+        st.session_state.pending_script_text_input = generated_script
         st.session_state.project_title = st.session_state.topic or st.session_state.project_title
         clear_downstream("script")
         st.toast("Script generated.")
@@ -292,7 +298,17 @@ def tab_create_images() -> None:
         st.warning("Create scenes first.")
         return
 
-    st.session_state.aspect_ratio = st.selectbox("Aspect ratio", ["16:9", "9:16", "1:1"], index=0)
+    aspect_ratio_options = ["16:9", "9:16", "1:1"]
+    current_aspect_ratio = (
+        st.session_state.aspect_ratio
+        if st.session_state.aspect_ratio in aspect_ratio_options
+        else aspect_ratio_options[0]
+    )
+    st.session_state.aspect_ratio = st.selectbox(
+        "Aspect ratio",
+        aspect_ratio_options,
+        index=aspect_ratio_options.index(current_aspect_ratio),
+    )
     st.session_state.variations_per_scene = st.slider(
         "Variations per scene",
         1,
@@ -330,11 +346,11 @@ def tab_create_images() -> None:
             else:
                 st.info("No primary image yet.")
 
-            if s.image_variations:
+            if len(s.image_variations) > 1:
                 st.caption("Variations")
-                for vi, b in enumerate(s.image_variations):
+                for vi, b in enumerate(s.image_variations[1:], start=2):
                     if b:
-                        st.image(b, caption=f"Variation {vi + 1}", use_container_width=True)
+                        st.image(b, caption=f"Variation {vi}", use_container_width=True)
 
             if s.image_error:
                 st.error(s.image_error)
@@ -479,14 +495,6 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
     except json.JSONDecodeError:
         return {}
 
-def _load_timeline_meta(timeline_path: Path) -> dict:
-    if not timeline_path.exists():
-        return {}
-    try:
-        return json.loads(timeline_path.read_text(encoding="utf-8")).get("meta", {})
-    except json.JSONDecodeError:
-        return {}
-
 
 def tab_video_compile() -> None:
     st.subheader("Video Studio")
@@ -553,17 +561,24 @@ def tab_video_compile() -> None:
             key="video_burn_captions",
         )
 
+    include_voiceover_default = meta_defaults.get("include_voiceover")
+    if include_voiceover_default is None:
+        include_voiceover_default = bool(audio_files)
+    include_music_default = meta_defaults.get("include_music")
+    if include_music_default is None:
+        include_music_default = bool(music_files)
+
     options_cols = st.columns(4)
     with options_cols[0]:
         include_voiceover = st.checkbox(
             "Include voiceover",
-            value=bool(meta_defaults.get("include_voiceover", True)),
+            value=bool(include_voiceover_default),
             key="video_include_voiceover",
         )
     with options_cols[1]:
         include_music = st.checkbox(
             "Include background music",
-            value=bool(meta_defaults.get("include_music", True)),
+            value=bool(include_music_default),
             key="video_include_music",
         )
     with options_cols[2]:
@@ -604,7 +619,7 @@ def tab_video_compile() -> None:
         elif include_voiceover and not audio_files:
             st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
         else:
-            voiceover_path = audio_files[0] if audio_files else None
+            voiceover_path = audio_files[0] if include_voiceover and audio_files else None
             timeline = build_default_timeline(
                 project_id=project_name,
                 title=title,
@@ -613,7 +628,7 @@ def tab_video_compile() -> None:
                 aspect_ratio=aspect_ratio,
                 fps=int(fps),
                 burn_captions=burn_captions,
-                music_path=music_files[0] if music_files else None,
+                music_path=music_files[0] if include_music and music_files else None,
                 music_volume_db=music_volume_db,
                 include_voiceover=include_voiceover,
                 include_music=include_music,
@@ -626,6 +641,29 @@ def tab_video_compile() -> None:
 
     render_disabled = not timeline_path.exists()
     if st.button("Render video (FFmpeg)", use_container_width=True, disabled=render_disabled, key="video_render"):
+        try:
+            timeline = Timeline.parse_file(timeline_path)
+        except ValueError as exc:
+            st.error(f"Unable to read timeline.json: {exc}")
+            return
+
+        missing_images = [scene.image_path for scene in timeline.scenes if not Path(scene.image_path).exists()]
+        if missing_images:
+            st.error("Missing scene images referenced by timeline.json.")
+            st.code("\n".join(missing_images))
+            return
+        if timeline.meta.include_voiceover:
+            if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
+                st.error("Voiceover is enabled but timeline.json has no voiceover path.")
+                return
+            if not Path(timeline.meta.voiceover.path).exists():
+                st.error(f"Voiceover audio not found: {timeline.meta.voiceover.path}")
+                return
+        if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
+            if not Path(timeline.meta.music.path).exists():
+                st.error(f"Music file not found: {timeline.meta.music.path}")
+                return
+
         try:
             ensure_ffmpeg_exists()
         except FFmpegNotFoundError as exc:
