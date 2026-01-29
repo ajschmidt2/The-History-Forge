@@ -500,11 +500,11 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
 
 def _caption_style_presets() -> dict[str, CaptionStyle]:
     return {
-        "Bold Impact": CaptionStyle(font="Impact", font_size=72, line_spacing=10, bottom_margin=130),
-        "Clean Sans": CaptionStyle(font="Arial", font_size=60, line_spacing=8, bottom_margin=140),
-        "Tall Outline": CaptionStyle(font="Helvetica", font_size=68, line_spacing=10, bottom_margin=150),
-        "Compact": CaptionStyle(font="Verdana", font_size=54, line_spacing=6, bottom_margin=120),
-        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=80, line_spacing=12, bottom_margin=160),
+        "Bold Impact": CaptionStyle(font="Impact", font_size=58, line_spacing=10, bottom_margin=130),
+        "Clean Sans": CaptionStyle(font="Arial", font_size=48, line_spacing=8, bottom_margin=140),
+        "Tall Outline": CaptionStyle(font="Helvetica", font_size=56, line_spacing=10, bottom_margin=150),
+        "Compact": CaptionStyle(font="Verdana", font_size=44, line_spacing=6, bottom_margin=120),
+        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=64, line_spacing=12, bottom_margin=160),
     }
 
 
@@ -757,6 +757,17 @@ def tab_video_compile() -> None:
             disabled=not burn_captions,
         )
         selected_caption_style = caption_presets[caption_style_name].copy(deep=True)
+        selected_caption_style.font_size = int(
+            st.slider(
+                "Caption size",
+                min_value=28,
+                max_value=72,
+                value=selected_caption_style.font_size,
+                step=2,
+                key="video_caption_font_size",
+                disabled=not burn_captions,
+            )
+        )
         selected_caption_style.position = position_options[caption_position_label]
     with captions_cols[1]:
         st.caption("Preview")

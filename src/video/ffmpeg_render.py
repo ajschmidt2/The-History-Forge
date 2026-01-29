@@ -40,7 +40,7 @@ def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     y_expr = f"({y_start} + ({y_end} - {y_start})*on/{frames})*(ih - ih/zoom)"
 
     return (
-        f"scale={width * 1.2}:{height * 1.2}:force_original_aspect_ratio=increase,"
+        f"scale={width * 1.08}:{height * 1.08}:force_original_aspect_ratio=increase,"
         f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d={frames}:s={width}x{height}:fps={fps},"
         "format=yuv420p"
     )

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, validator
 
 class CaptionStyle(BaseModel):
     font: str = "Arial"
-    font_size: int = 56
+    font_size: int = 48
     line_spacing: int = 6
     bottom_margin: int = 140
     position: str = "lower"
