@@ -8,6 +8,7 @@ import streamlit as st
 
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
+from src.video.timeline_schema import Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 
 
@@ -74,6 +75,19 @@ with settings_cols[2]:
 with settings_cols[3]:
     burn_captions = st.checkbox("Burn captions", value=bool(meta_defaults.get("burn_captions", True)))
 
+include_voiceover_default = meta_defaults.get("include_voiceover")
+if include_voiceover_default is None:
+    include_voiceover_default = bool(audio_files)
+include_music_default = meta_defaults.get("include_music")
+if include_music_default is None:
+    include_music_default = bool(music_files)
+
+options_cols = st.columns(2)
+with options_cols[0]:
+    include_voiceover = st.checkbox("Include voiceover", value=bool(include_voiceover_default))
+with options_cols[1]:
+    include_music = st.checkbox("Include background music", value=bool(include_music_default))
+
 music_volume_db = st.slider(
     "Music volume (dB)",
     min_value=-36.0,
@@ -87,25 +101,51 @@ st.markdown("### Actions")
 if st.button("Generate timeline.json", use_container_width=True):
     if not images:
         st.error("No images found in assets/images/. Add scene images to generate a timeline.")
-    elif not audio_files:
-        st.error("No voiceover audio found in assets/audio/. Add a voiceover file first.")
+    elif include_voiceover and not audio_files:
+        st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
     else:
+        voiceover_path = audio_files[0] if include_voiceover and audio_files else None
         timeline = build_default_timeline(
             project_id=project_name,
             title=title,
             images=images,
-            voiceover_path=audio_files[0],
+            voiceover_path=voiceover_path,
             aspect_ratio=aspect_ratio,
             fps=int(fps),
             burn_captions=burn_captions,
-            music_path=music_files[0] if music_files else None,
+            music_path=music_files[0] if include_music and music_files else None,
             music_volume_db=music_volume_db,
+            include_voiceover=include_voiceover,
+            include_music=include_music,
         )
         write_timeline_json(timeline, timeline_path)
         st.success("timeline.json generated.")
 
 render_disabled = not timeline_path.exists()
 if st.button("Render video (FFmpeg)", use_container_width=True, disabled=render_disabled):
+    try:
+        timeline = Timeline.parse_file(timeline_path)
+    except ValueError as exc:
+        st.error(f"Unable to read timeline.json: {exc}")
+        st.stop()
+
+    missing_images = [scene.image_path for scene in timeline.scenes if not Path(scene.image_path).exists()]
+    if missing_images:
+        st.error("Missing scene images referenced by timeline.json.")
+        st.code("\n".join(missing_images))
+        st.stop()
+    if timeline.meta.include_voiceover:
+        if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
+            st.error("Voiceover is enabled but timeline.json has no voiceover path.")
+            st.stop()
+        if not Path(timeline.meta.voiceover.path).exists():
+            st.error(f"Voiceover audio not found: {timeline.meta.voiceover.path}")
+            st.stop()
+    if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
+        if not Path(timeline.meta.music.path).exists():
+            st.error(f"Music file not found: {timeline.meta.music.path}")
+            st.stop()
+
     try:
         ensure_ffmpeg_exists()
     except FFmpegNotFoundError as exc:
