@@ -10,7 +10,7 @@ import streamlit as st
 
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
-from src.video.timeline_schema import CaptionStyle, Timeline
+from src.video.timeline_schema import CaptionStyle, Music, Timeline, Voiceover
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 
 
@@ -32,17 +32,21 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
 
 def _caption_style_presets() -> dict[str, CaptionStyle]:
     return {
-        "Bold Impact": CaptionStyle(font="Impact", font_size=72, line_spacing=10, bottom_margin=130),
-        "Clean Sans": CaptionStyle(font="Arial", font_size=60, line_spacing=8, bottom_margin=140),
-        "Tall Outline": CaptionStyle(font="Helvetica", font_size=68, line_spacing=10, bottom_margin=150),
-        "Compact": CaptionStyle(font="Verdana", font_size=54, line_spacing=6, bottom_margin=120),
-        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=80, line_spacing=12, bottom_margin=160),
+        "Bold Impact": CaptionStyle(font="Impact", font_size=14, line_spacing=10, bottom_margin=130),
+        "Clean Sans": CaptionStyle(font="Arial", font_size=12, line_spacing=8, bottom_margin=140),
+        "Tall Outline": CaptionStyle(font="Helvetica", font_size=14, line_spacing=10, bottom_margin=150),
+        "Compact": CaptionStyle(font="Verdana", font_size=11, line_spacing=6, bottom_margin=120),
+        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=16, line_spacing=12, bottom_margin=160),
     }
+
+
+def _caption_position_options() -> dict[str, str]:
+    return {"Lower": "lower", "Center": "center", "Top": "top"}
 
 
 def _match_caption_preset(style: CaptionStyle, presets: dict[str, CaptionStyle]) -> str:
     for name, preset in presets.items():
-        if preset.dict() == style.dict():
+        if preset.dict(exclude={"position"}) == style.dict(exclude={"position"}):
             return name
     return next(iter(presets))
 
@@ -51,15 +55,75 @@ def _render_caption_preview(style: CaptionStyle) -> None:
     preview_font_size = max(12, int(style.font_size * 0.4))
     preview_line_height = preview_font_size + max(2, int(style.line_spacing * 0.4))
     preview_margin = max(12, int(style.bottom_margin * 0.3))
+    if style.position == "top":
+        position_css = f"top: {preview_margin}px;"
+    elif style.position == "center":
+        position_css = "top: 50%; transform: translateY(-50%);"
+    else:
+        position_css = f"bottom: {preview_margin}px;"
     preview_html = f"""
     <div style="width: 240px; height: 430px; background: #111; border-radius: 12px; position: relative; overflow: hidden; border: 1px solid #333;">
       <div style="position: absolute; inset: 0; background: linear-gradient(180deg, #222 0%, #111 60%);"></div>
-      <div style="position: absolute; left: 12px; right: 12px; bottom: {preview_margin}px; text-align: center; color: #fff; font-family: '{style.font}', sans-serif; font-size: {preview_font_size}px; line-height: {preview_line_height}px; text-shadow: 0 2px 6px rgba(0,0,0,0.8);">
+      <div style="position: absolute; left: 12px; right: 12px; {position_css} text-align: center; color: #fff; font-family: '{style.font}', sans-serif; font-size: {preview_font_size}px; line-height: {preview_line_height}px; text-shadow: 0 2px 6px rgba(0,0,0,0.8);">
         The empires rise<br/>and fall
       </div>
     </div>
     """
     st.markdown(preview_html, unsafe_allow_html=True)
+
+
+def _session_scene_images() -> list[tuple[int, bytes]]:
+    scenes = st.session_state.get("scenes")
+    if not scenes:
+        return []
+    session_images: list[tuple[int, bytes]] = []
+    for scene in scenes:
+        image_bytes = getattr(scene, "image_bytes", None)
+        if image_bytes:
+            session_images.append((scene.index, image_bytes))
+    return session_images
+
+
+def _sync_session_images(images_dir: Path) -> int:
+    session_images = _session_scene_images()
+    if not session_images:
+        return 0
+    images_dir.mkdir(parents=True, exist_ok=True)
+    for scene_index, image_bytes in session_images:
+        destination = images_dir / f"s{scene_index:02d}.png"
+        destination.write_bytes(image_bytes)
+    return len(session_images)
+
+
+def _build_timeline_from_ui(
+    project_name: str,
+    title: str,
+    images: list[Path],
+    audio_files: list[Path],
+    music_files: list[Path],
+    aspect_ratio: str,
+    fps: int,
+    burn_captions: bool,
+    caption_style: CaptionStyle,
+    music_volume_db: float,
+    include_voiceover: bool,
+    include_music: bool,
+) -> Timeline:
+    voiceover_path = audio_files[0] if include_voiceover and audio_files else None
+    return build_default_timeline(
+        project_id=project_name,
+        title=title,
+        images=images,
+        voiceover_path=voiceover_path,
+        aspect_ratio=aspect_ratio,
+        fps=int(fps),
+        burn_captions=burn_captions,
+        caption_style=caption_style,
+        music_path=music_files[0] if include_music and music_files else None,
+        music_volume_db=music_volume_db,
+        include_voiceover=include_voiceover,
+        include_music=include_music,
+    )
 
 
 st.set_page_config(page_title="Video Studio", layout="wide")
@@ -90,10 +154,25 @@ cols[0].metric("Images", len(images))
 cols[1].metric("Voiceover files", len(audio_files))
 cols[2].metric("Music files", len(music_files))
 
+session_images = _session_scene_images()
+if session_images:
+    st.caption(f"Generated images in session: {len(session_images)}")
+    if st.button("Save generated images to assets/images", use_container_width=True, key="video_sync_images"):
+        saved_count = _sync_session_images(images_dir)
+        st.success(f"Saved {saved_count} generated image(s) to assets/images as s##.png.")
+        st.rerun()
+else:
+    st.caption("No generated images found in the current session.")
+
 if audio_files:
     st.caption(f"Using voiceover: {audio_files[0].name}")
 if music_files:
     st.caption(f"Using music bed: {music_files[0].name}")
+
+st.info(
+    "Tip: Generate timeline.json or click Render to auto-build it. Toggle voiceover/music to render "
+    "with or without audio tracks."
+)
 
 st.markdown("### Background music")
 if music_files:
@@ -177,7 +256,31 @@ with captions_cols[0]:
         key="video_caption_style",
         disabled=not burn_captions,
     )
-    selected_caption_style = caption_presets[caption_style_name]
+    position_options = _caption_position_options()
+    current_position_label = next(
+        (label for label, value in position_options.items() if value == current_caption_style.position),
+        "Lower",
+    )
+    caption_position_label = st.selectbox(
+        "Caption position",
+        list(position_options.keys()),
+        index=list(position_options.keys()).index(current_position_label),
+        key="video_caption_position",
+        disabled=not burn_captions,
+    )
+    selected_caption_style = caption_presets[caption_style_name].copy(deep=True)
+    selected_caption_style.font_size = int(
+        st.slider(
+            "Caption size",
+            min_value=28,
+            max_value=72,
+            value=selected_caption_style.font_size,
+            step=2,
+            key="video_caption_font_size",
+            disabled=not burn_captions,
+        )
+    )
+    selected_caption_style.position = position_options[caption_position_label]
 with captions_cols[1]:
     st.caption("Preview")
     _render_caption_preview(selected_caption_style)
@@ -208,11 +311,12 @@ with options_cols[0]:
 with options_cols[1]:
     include_music = st.checkbox("Include background music", value=bool(include_music_default))
 
+music_defaults = meta_defaults.get("music") or {}
 music_volume_db = st.slider(
     "Music volume (dB)",
     min_value=-36.0,
     max_value=0.0,
-    value=float(meta_defaults.get("music", {}).get("volume_db", -18)),
+    value=float(music_defaults.get("volume_db", -18)),
     step=1.0,
 )
 
@@ -224,17 +328,16 @@ if st.button("Generate timeline.json", use_container_width=True):
     elif include_voiceover and not audio_files:
         st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
     else:
-        voiceover_path = audio_files[0] if include_voiceover and audio_files else None
-        timeline = build_default_timeline(
-            project_id=project_name,
+        timeline = _build_timeline_from_ui(
+            project_name=project_name,
             title=title,
             images=images,
-            voiceover_path=voiceover_path,
+            audio_files=audio_files,
+            music_files=music_files,
             aspect_ratio=aspect_ratio,
             fps=int(fps),
             burn_captions=burn_captions,
             caption_style=selected_caption_style,
-            music_path=music_files[0] if include_music and music_files else None,
             music_volume_db=music_volume_db,
             include_voiceover=include_voiceover,
             include_music=include_music,
@@ -242,13 +345,52 @@ if st.button("Generate timeline.json", use_container_width=True):
         write_timeline_json(timeline, timeline_path)
         st.success("timeline.json generated.")
 
-render_disabled = not timeline_path.exists()
-if st.button("Render video (FFmpeg)", use_container_width=True, disabled=render_disabled):
-    try:
-        timeline = Timeline.parse_file(timeline_path)
-    except ValueError as exc:
-        st.error(f"Unable to read timeline.json: {exc}")
+if st.button("Render video (FFmpeg)", use_container_width=True):
+    if not images:
+        st.error("No images found in assets/images/. Add scene images before rendering.")
         st.stop()
+    if include_voiceover and not audio_files:
+        st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
+        st.stop()
+
+    if timeline_path.exists():
+        try:
+            timeline = Timeline.parse_file(timeline_path)
+        except ValueError as exc:
+            st.error(f"Unable to read timeline.json: {exc}")
+            st.stop()
+        timeline.meta.include_voiceover = include_voiceover
+        timeline.meta.include_music = include_music
+        if include_voiceover and audio_files:
+            timeline.meta.voiceover = timeline.meta.voiceover or Voiceover(path=str(audio_files[0]))
+            timeline.meta.voiceover.path = str(audio_files[0])
+        else:
+            timeline.meta.voiceover = None
+        if include_music and music_files:
+            timeline.meta.music = timeline.meta.music or Music(path=str(music_files[0]), volume_db=music_volume_db)
+            timeline.meta.music.path = str(music_files[0])
+            timeline.meta.music.volume_db = music_volume_db
+        else:
+            timeline.meta.music = None
+        timeline.meta.burn_captions = burn_captions
+        timeline.meta.caption_style = selected_caption_style
+        write_timeline_json(timeline, timeline_path)
+    else:
+        timeline = _build_timeline_from_ui(
+            project_name=project_name,
+            title=title,
+            images=images,
+            audio_files=audio_files,
+            music_files=music_files,
+            aspect_ratio=aspect_ratio,
+            fps=int(fps),
+            burn_captions=burn_captions,
+            caption_style=selected_caption_style,
+            music_volume_db=music_volume_db,
+            include_voiceover=include_voiceover,
+            include_music=include_music,
+        )
+        write_timeline_json(timeline, timeline_path)
 
     missing_images = [scene.image_path for scene in timeline.scenes if not Path(scene.image_path).exists()]
     if missing_images:
