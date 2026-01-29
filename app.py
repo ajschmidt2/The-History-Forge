@@ -651,6 +651,28 @@ def tab_video_compile() -> None:
         "with or without audio tracks."
     )
 
+    st.markdown("### Voiceover audio")
+    if audio_files:
+        audio_rows = [
+            {"File": audio_file.name, "Size (MB)": f"{audio_file.stat().st_size / (1024 * 1024):.2f}"}
+            for audio_file in audio_files
+        ]
+        st.dataframe(audio_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No voiceover audio files found yet.")
+
+    voiceover_upload = st.file_uploader(
+        "Upload voiceover audio (.mp3 or .wav)",
+        type=["mp3", "wav"],
+        key="video_voiceover_upload",
+    )
+    if voiceover_upload is not None:
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        destination = audio_dir / voiceover_upload.name
+        destination.write_bytes(voiceover_upload.getbuffer())
+        st.success(f"Saved {voiceover_upload.name} to assets/audio.")
+        st.rerun()
+
     st.markdown("### Background music")
     if music_files:
         music_rows = [

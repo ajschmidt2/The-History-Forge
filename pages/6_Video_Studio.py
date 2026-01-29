@@ -174,6 +174,28 @@ st.info(
     "with or without audio tracks."
 )
 
+st.markdown("### Voiceover audio")
+if audio_files:
+    audio_rows = [
+        {"File": audio_file.name, "Size (MB)": f"{audio_file.stat().st_size / (1024 * 1024):.2f}"}
+        for audio_file in audio_files
+    ]
+    st.dataframe(audio_rows, use_container_width=True, hide_index=True)
+else:
+    st.info("No voiceover audio files found yet.")
+
+voiceover_upload = st.file_uploader(
+    "Upload voiceover audio (.mp3 or .wav)",
+    type=["mp3", "wav"],
+    key="video_voiceover_upload",
+)
+if voiceover_upload is not None:
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    destination = audio_dir / voiceover_upload.name
+    destination.write_bytes(voiceover_upload.getbuffer())
+    st.success(f"Saved {voiceover_upload.name} to assets/audio.")
+    st.rerun()
+
 st.markdown("### Background music")
 if music_files:
     music_rows = [
@@ -352,6 +374,48 @@ if st.button("Render video (FFmpeg)", use_container_width=True):
     if include_voiceover and not audio_files:
         st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
         st.stop()
+    if include_voiceover and not audio_files:
+        st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
+        st.stop()
+
+    if timeline_path.exists():
+        try:
+            timeline = Timeline.parse_file(timeline_path)
+        except ValueError as exc:
+            st.error(f"Unable to read timeline.json: {exc}")
+            st.stop()
+        timeline.meta.include_voiceover = include_voiceover
+        timeline.meta.include_music = include_music
+        if include_voiceover and audio_files:
+            timeline.meta.voiceover = timeline.meta.voiceover or Voiceover(path=str(audio_files[0]))
+            timeline.meta.voiceover.path = str(audio_files[0])
+        else:
+            timeline.meta.voiceover = None
+        if include_music and music_files:
+            timeline.meta.music = timeline.meta.music or Music(path=str(music_files[0]), volume_db=music_volume_db)
+            timeline.meta.music.path = str(music_files[0])
+            timeline.meta.music.volume_db = music_volume_db
+        else:
+            timeline.meta.music = None
+        timeline.meta.burn_captions = burn_captions
+        timeline.meta.caption_style = selected_caption_style
+        write_timeline_json(timeline, timeline_path)
+    else:
+        timeline = _build_timeline_from_ui(
+            project_name=project_name,
+            title=title,
+            images=images,
+            audio_files=audio_files,
+            music_files=music_files,
+            aspect_ratio=aspect_ratio,
+            fps=int(fps),
+            burn_captions=burn_captions,
+            caption_style=selected_caption_style,
+            music_volume_db=music_volume_db,
+            include_voiceover=include_voiceover,
+            include_music=include_music,
+        )
+        write_timeline_json(timeline, timeline_path)
 
     if timeline_path.exists():
         try:
