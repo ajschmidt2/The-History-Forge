@@ -512,11 +512,11 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
 
 def _caption_style_presets() -> dict[str, CaptionStyle]:
     return {
-        "Bold Impact": CaptionStyle(font="Impact", font_size=14, line_spacing=10, bottom_margin=130),
-        "Clean Sans": CaptionStyle(font="Arial", font_size=12, line_spacing=8, bottom_margin=140),
-        "Tall Outline": CaptionStyle(font="Helvetica", font_size=14, line_spacing=10, bottom_margin=150),
-        "Compact": CaptionStyle(font="Verdana", font_size=11, line_spacing=6, bottom_margin=120),
-        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=16, line_spacing=12, bottom_margin=160),
+        "Bold Impact": CaptionStyle(font="Impact", font_size=10, line_spacing=6, bottom_margin=120),
+        "Clean Sans": CaptionStyle(font="Arial", font_size=9, line_spacing=5, bottom_margin=120),
+        "Tall Outline": CaptionStyle(font="Helvetica", font_size=10, line_spacing=6, bottom_margin=130),
+        "Compact": CaptionStyle(font="Verdana", font_size=9, line_spacing=4, bottom_margin=110),
+        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=12, line_spacing=7, bottom_margin=140),
     }
 
 
@@ -583,6 +583,7 @@ def _build_timeline_from_ui(
     music_files: list[Path],
     aspect_ratio: str,
     fps: int,
+    scene_duration: float | None,
     burn_captions: bool,
     caption_style: CaptionStyle,
     music_volume_db: float,
@@ -600,6 +601,7 @@ def _build_timeline_from_ui(
         voiceover_path=voiceover_path,
         aspect_ratio=aspect_ratio,
         fps=int(fps),
+        scene_duration=scene_duration,
         burn_captions=burn_captions,
         caption_style=caption_style,
         music_path=music_files[0] if include_music and music_files else None,
@@ -766,6 +768,15 @@ def tab_video_compile() -> None:
             value=int(meta_defaults.get("fps", 30)),
             key="video_fps",
         )
+    scene_duration = st.slider(
+        "Seconds per image",
+        min_value=1.0,
+        max_value=12.0,
+        value=float(meta_defaults.get("scene_duration", 3.0)),
+        step=0.5,
+        help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
+        key="video_scene_duration",
+    )
 
     st.markdown("### Closed captions")
     captions_cols = st.columns([2, 1])
@@ -805,8 +816,8 @@ def tab_video_compile() -> None:
         selected_caption_style.font_size = int(
             st.slider(
                 "Caption size",
-                min_value=28,
-                max_value=72,
+                min_value=12,
+                max_value=48,
                 value=selected_caption_style.font_size,
                 step=2,
                 key="video_caption_font_size",
@@ -858,6 +869,8 @@ def tab_video_compile() -> None:
             key="video_crossfade",
         )
 
+    effective_scene_duration = None if include_voiceover and audio_files else scene_duration
+
     crossfade_duration = st.slider(
         "Crossfade duration (seconds)",
         min_value=0.1,
@@ -892,6 +905,7 @@ def tab_video_compile() -> None:
                 music_files=music_files,
                 aspect_ratio=aspect_ratio,
                 fps=int(fps),
+                scene_duration=effective_scene_duration,
                 burn_captions=burn_captions,
                 caption_style=selected_caption_style,
                 music_volume_db=music_volume_db,
@@ -933,6 +947,7 @@ def tab_video_compile() -> None:
                 timeline.meta.music = None
             timeline.meta.burn_captions = burn_captions
             timeline.meta.caption_style = selected_caption_style
+            timeline.meta.scene_duration = effective_scene_duration
             write_timeline_json(timeline, timeline_path)
         else:
             timeline = _build_timeline_from_ui(
@@ -943,6 +958,7 @@ def tab_video_compile() -> None:
                 music_files=music_files,
                 aspect_ratio=aspect_ratio,
                 fps=int(fps),
+                scene_duration=effective_scene_duration,
                 burn_captions=burn_captions,
                 caption_style=selected_caption_style,
                 music_volume_db=music_volume_db,
