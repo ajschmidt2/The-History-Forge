@@ -311,11 +311,12 @@ with options_cols[0]:
 with options_cols[1]:
     include_music = st.checkbox("Include background music", value=bool(include_music_default))
 
+music_defaults = meta_defaults.get("music") or {}
 music_volume_db = st.slider(
     "Music volume (dB)",
     min_value=-36.0,
     max_value=0.0,
-    value=float(meta_defaults.get("music", {}).get("volume_db", -18)),
+    value=float(music_defaults.get("volume_db", -18)),
     step=1.0,
 )
 
