@@ -52,6 +52,7 @@ def build_default_timeline(
     enable_motion: bool = True,
     crossfade: bool = False,
     crossfade_duration: float = 0.3,
+    scene_duration: float | None = None,
 ) -> Timeline:
     image_list = list(images)
     if not image_list:
@@ -66,9 +67,9 @@ def build_default_timeline(
         image_list = image_list[:18]
         scene_count = len(image_list)
 
-    if voiceover_duration > 0:
+    if include_voiceover and voiceover_duration > 0:
         scene_duration = voiceover_duration / scene_count
-    else:
+    elif scene_duration is None:
         scene_duration = 3.0
     scenes: list[Scene] = []
     current_start = 0.0
@@ -97,6 +98,7 @@ def build_default_timeline(
             aspect_ratio=aspect_ratio,
             resolution=_resolution_for_aspect_ratio(aspect_ratio),
             fps=fps,
+            scene_duration=scene_duration,
             burn_captions=burn_captions,
             include_voiceover=include_voiceover,
             include_music=include_music,
