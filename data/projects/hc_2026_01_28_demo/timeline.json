@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "project_id": "hc_2026_01_28_demo",
+    "title": "The Mystery of X",
+    "aspect_ratio": "9:16",
+    "resolution": "1080x1920",
+    "fps": 30,
+    "burn_captions": true,
+    "caption_style": {
+      "font": "Arial",
+      "font_size": 56,
+      "line_spacing": 6,
+      "bottom_margin": 140
+    },
+    "music": {
+      "path": "data/projects/hc_2026_01_28_demo/assets/music/bed.mp3",
+      "volume_db": -18,
+      "ducking": {
+        "enabled": true,
+        "threshold_db": -28,
+        "ratio": 8,
+        "attack": 15,
+        "release": 250
+      }
+    },
+    "voiceover": {
+      "path": "data/projects/hc_2026_01_28_demo/assets/audio/vo.wav",
+      "loudnorm": true,
+      "target_i": -16,
+      "true_peak": -1.5,
+      "lra": 11
+    }
+  },
+  "scenes": [
+    {
+      "id": "s01",
+      "image_path": "data/projects/hc_2026_01_28_demo/assets/images/s01.png",
+      "start": 0.0,
+      "duration": 3.4,
+      "motion": {
+        "type": "kenburns",
+        "zoom_start": 1.03,
+        "zoom_end": 1.10,
+        "x_start": 0.50,
+        "y_start": 0.48,
+        "x_end": 0.52,
+        "y_end": 0.50
+      },
+      "caption": "In 1912, a discovery shook the world..."
+    },
+    {
+      "id": "s02",
+      "image_path": "data/projects/hc_2026_01_28_demo/assets/images/s02.png",
+      "start": 3.4,
+      "duration": 3.0,
+      "motion": { "type": "pan", "x_start": 0.45, "x_end": 0.55, "y": 0.50 },
+      "caption": "But the real story was buried deeper."
+    }
+  ]
+}
