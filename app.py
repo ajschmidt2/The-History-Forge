@@ -54,6 +54,7 @@ def init_state() -> None:
     st.session_state.setdefault("topic", "")
     st.session_state.setdefault("script_text", "")
     st.session_state.setdefault("script_text_input", "")
+    st.session_state.setdefault("pending_script_text_input", "")
     if st.session_state.script_text and not st.session_state.script_text_input:
         st.session_state.script_text_input = st.session_state.script_text
 
@@ -119,6 +120,10 @@ def clear_downstream(after: str) -> None:
 def tab_paste_script() -> None:
     st.subheader("Paste your own script")
 
+    if st.session_state.pending_script_text_input:
+        st.session_state.script_text_input = st.session_state.pending_script_text_input
+        st.session_state.pending_script_text_input = ""
+
     st.session_state.project_title = st.text_input(
         "Project Title",
         value=st.session_state.project_title,
@@ -176,13 +181,13 @@ def tab_generate_script() -> None:
             st.warning("Enter a topic or use I'm Feeling Lucky.")
             return
         with st.spinner("Generating script..."):
-            st.session_state.script_text = generate_script(
+            generated_script = generate_script(
                 topic=st.session_state.topic,
                 length=st.session_state.length,
                 tone=st.session_state.tone,
             )
         st.session_state.script_text = generated_script
-        st.session_state.script_text_input = generated_script
+        st.session_state.pending_script_text_input = generated_script
         st.session_state.project_title = st.session_state.topic or st.session_state.project_title
         clear_downstream("script")
         st.toast("Script generated.")
@@ -292,7 +297,17 @@ def tab_create_images() -> None:
         st.warning("Create scenes first.")
         return
 
-    st.session_state.aspect_ratio = st.selectbox("Aspect ratio", ["16:9", "9:16", "1:1"], index=0)
+    aspect_ratio_options = ["16:9", "9:16", "1:1"]
+    current_aspect_ratio = (
+        st.session_state.aspect_ratio
+        if st.session_state.aspect_ratio in aspect_ratio_options
+        else aspect_ratio_options[0]
+    )
+    st.session_state.aspect_ratio = st.selectbox(
+        "Aspect ratio",
+        aspect_ratio_options,
+        index=aspect_ratio_options.index(current_aspect_ratio),
+    )
     st.session_state.variations_per_scene = st.slider(
         "Variations per scene",
         1,
@@ -330,11 +345,11 @@ def tab_create_images() -> None:
             else:
                 st.info("No primary image yet.")
 
-            if s.image_variations:
+            if len(s.image_variations) > 1:
                 st.caption("Variations")
-                for vi, b in enumerate(s.image_variations):
+                for vi, b in enumerate(s.image_variations[1:], start=2):
                     if b:
-                        st.image(b, caption=f"Variation {vi + 1}", use_container_width=True)
+                        st.image(b, caption=f"Variation {vi}", use_container_width=True)
 
             if s.image_error:
                 st.error(s.image_error)
