@@ -3,6 +3,8 @@ import zipfile
 from collections import deque
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import streamlit as st
 
@@ -531,6 +533,54 @@ def tab_video_compile() -> None:
         st.caption(f"Using voiceover: {audio_files[0].name}")
     if music_files:
         st.caption(f"Using music bed: {music_files[0].name}")
+
+    st.markdown("### Background music")
+    if music_files:
+        music_rows = [
+            {"File": music_file.name, "Size (MB)": f"{music_file.stat().st_size / (1024 * 1024):.2f}"}
+            for music_file in music_files
+        ]
+        st.dataframe(music_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No background music files found yet.")
+
+    upload_cols = st.columns([2, 1])
+    with upload_cols[0]:
+        uploaded_music = st.file_uploader(
+            "Upload background music (.mp3 or .wav)",
+            type=["mp3", "wav"],
+            key="video_music_upload",
+        )
+        if uploaded_music is not None:
+            music_dir.mkdir(parents=True, exist_ok=True)
+            destination = music_dir / uploaded_music.name
+            destination.write_bytes(uploaded_music.getbuffer())
+            st.success(f"Saved {uploaded_music.name} to assets/music.")
+            st.rerun()
+    with upload_cols[1]:
+        music_url = st.text_input("Music URL", placeholder="https://example.com/track.mp3", key="video_music_url")
+        if st.button("Add from URL", use_container_width=True, key="video_music_url_add"):
+            if not music_url.strip():
+                st.error("Enter a URL to fetch music.")
+            else:
+                parsed = urlparse(music_url)
+                filename = Path(parsed.path).name
+                if not filename:
+                    st.error("URL does not include a filename.")
+                elif Path(filename).suffix.lower() not in {".mp3", ".wav"}:
+                    st.error("Only .mp3 or .wav files are supported.")
+                else:
+                    try:
+                        with urlopen(music_url) as response:
+                            music_bytes = response.read()
+                    except Exception as exc:  # noqa: BLE001 - surface download errors to user
+                        st.error(f"Failed to download music: {exc}")
+                    else:
+                        music_dir.mkdir(parents=True, exist_ok=True)
+                        destination = music_dir / filename
+                        destination.write_bytes(music_bytes)
+                        st.success(f"Downloaded {filename} to assets/music.")
+                        st.rerun()
 
     timeline_path = project_path / "timeline.json"
     meta_defaults = _load_timeline_meta(timeline_path)
