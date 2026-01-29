@@ -72,6 +72,7 @@ class Meta(BaseModel):
     aspect_ratio: str = "9:16"
     resolution: str = "1080x1920"
     fps: int = 30
+    scene_duration: Optional[float] = None
     burn_captions: bool = True
     include_voiceover: bool = True
     include_music: bool = True
