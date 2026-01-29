@@ -10,6 +10,13 @@ class CaptionStyle(BaseModel):
     font_size: int = 56
     line_spacing: int = 6
     bottom_margin: int = 140
+    position: str = "lower"
+
+    @validator("position")
+    def validate_position(cls, value: str) -> str:
+        if value not in {"lower", "center", "top"}:
+            raise ValueError("position must be 'lower', 'center', or 'top'")
+        return value
 
 
 class Ducking(BaseModel):
