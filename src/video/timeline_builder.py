@@ -18,19 +18,19 @@ def _build_motion(index: int) -> Motion:
     if zoom_in:
         return Motion(
             type="kenburns",
-            zoom_start=1.03,
-            zoom_end=1.1,
-            x_start=0.48,
-            x_end=0.52,
+            zoom_start=1.02,
+            zoom_end=1.06,
+            x_start=0.49,
+            x_end=0.51,
             y_start=0.5,
             y_end=0.5,
         )
     return Motion(
         type="kenburns",
-        zoom_start=1.1,
-        zoom_end=1.03,
-        x_start=0.52,
-        x_end=0.48,
+        zoom_start=1.06,
+        zoom_end=1.02,
+        x_start=0.51,
+        x_end=0.49,
         y_start=0.5,
         y_end=0.5,
     )
@@ -113,5 +113,5 @@ def build_default_timeline(
 
 def write_timeline_json(timeline: Timeline, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(timeline.json(indent=2), encoding="utf-8")
+    output_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
     return output_path
