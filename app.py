@@ -508,9 +508,13 @@ def _caption_style_presets() -> dict[str, CaptionStyle]:
     }
 
 
+def _caption_position_options() -> dict[str, str]:
+    return {"Lower": "lower", "Center": "center", "Top": "top"}
+
+
 def _match_caption_preset(style: CaptionStyle, presets: dict[str, CaptionStyle]) -> str:
     for name, preset in presets.items():
-        if preset.dict() == style.dict():
+        if preset.dict(exclude={"position"}) == style.dict(exclude={"position"}):
             return name
     return next(iter(presets))
 
@@ -519,15 +523,44 @@ def _render_caption_preview(style: CaptionStyle) -> None:
     preview_font_size = max(12, int(style.font_size * 0.4))
     preview_line_height = preview_font_size + max(2, int(style.line_spacing * 0.4))
     preview_margin = max(12, int(style.bottom_margin * 0.3))
+    if style.position == "top":
+        position_css = f"top: {preview_margin}px;"
+    elif style.position == "center":
+        position_css = "top: 50%; transform: translateY(-50%);"
+    else:
+        position_css = f"bottom: {preview_margin}px;"
     preview_html = f"""
     <div style="width: 240px; height: 430px; background: #111; border-radius: 12px; position: relative; overflow: hidden; border: 1px solid #333;">
       <div style="position: absolute; inset: 0; background: linear-gradient(180deg, #222 0%, #111 60%);"></div>
-      <div style="position: absolute; left: 12px; right: 12px; bottom: {preview_margin}px; text-align: center; color: #fff; font-family: '{style.font}', sans-serif; font-size: {preview_font_size}px; line-height: {preview_line_height}px; text-shadow: 0 2px 6px rgba(0,0,0,0.8);">
+      <div style="position: absolute; left: 12px; right: 12px; {position_css} text-align: center; color: #fff; font-family: '{style.font}', sans-serif; font-size: {preview_font_size}px; line-height: {preview_line_height}px; text-shadow: 0 2px 6px rgba(0,0,0,0.8);">
         The empires rise<br/>and fall
       </div>
     </div>
     """
     st.markdown(preview_html, unsafe_allow_html=True)
+
+
+def _session_scene_images() -> list[tuple[int, bytes]]:
+    scenes = st.session_state.get("scenes")
+    if not scenes:
+        return []
+    session_images: list[tuple[int, bytes]] = []
+    for scene in scenes:
+        image_bytes = getattr(scene, "image_bytes", None)
+        if image_bytes:
+            session_images.append((scene.index, image_bytes))
+    return session_images
+
+
+def _sync_session_images(images_dir: Path) -> int:
+    session_images = _session_scene_images()
+    if not session_images:
+        return 0
+    images_dir.mkdir(parents=True, exist_ok=True)
+    for scene_index, image_bytes in session_images:
+        destination = images_dir / f"s{scene_index:02d}.png"
+        destination.write_bytes(image_bytes)
+    return len(session_images)
 
 
 def tab_video_compile() -> None:
@@ -560,6 +593,16 @@ def tab_video_compile() -> None:
     cols[0].metric("Images", len(images))
     cols[1].metric("Voiceover files", len(audio_files))
     cols[2].metric("Music files", len(music_files))
+
+    session_images = _session_scene_images()
+    if session_images:
+        st.caption(f"Generated images in session: {len(session_images)}")
+        if st.button("Save generated images to assets/images", use_container_width=True, key="video_sync_images"):
+            saved_count = _sync_session_images(images_dir)
+            st.success(f"Saved {saved_count} generated image(s) to assets/images as s##.png.")
+            st.rerun()
+    else:
+        st.caption("No generated images found in the current session.")
 
     if audio_files:
         st.caption(f"Using voiceover: {audio_files[0].name}")
@@ -659,7 +702,20 @@ def tab_video_compile() -> None:
             key="video_caption_style",
             disabled=not burn_captions,
         )
-        selected_caption_style = caption_presets[caption_style_name]
+        position_options = _caption_position_options()
+        current_position_label = next(
+            (label for label, value in position_options.items() if value == current_caption_style.position),
+            "Lower",
+        )
+        caption_position_label = st.selectbox(
+            "Caption position",
+            list(position_options.keys()),
+            index=list(position_options.keys()).index(current_position_label),
+            key="video_caption_position",
+            disabled=not burn_captions,
+        )
+        selected_caption_style = caption_presets[caption_style_name].copy(deep=True)
+        selected_caption_style.position = position_options[caption_position_label]
     with captions_cols[1]:
         st.caption("Preview")
         _render_caption_preview(selected_caption_style)
