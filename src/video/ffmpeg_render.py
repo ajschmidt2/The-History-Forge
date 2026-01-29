@@ -40,7 +40,7 @@ def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     y_expr = f"({y_start} + ({y_end} - {y_start})*on/{frames})*(ih - ih/zoom)"
 
     return (
-        f"scale={width * 1.2}:{height * 1.2}:force_original_aspect_ratio=increase,"
+        f"scale={width * 1.08}:{height * 1.08}:force_original_aspect_ratio=increase,"
         f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d={frames}:s={width}x{height}:fps={fps},"
         "format=yuv420p"
     )
@@ -155,9 +155,11 @@ def _crossfade_scenes(
 
 def _subtitle_filter(timeline: Timeline, srt_path: Path) -> str:
     style = timeline.meta.caption_style
+    alignment_map = {"lower": 2, "center": 5, "top": 8}
+    alignment = alignment_map.get(style.position, 2)
     style_str = (
         f"FontName={style.font},FontSize={style.font_size},"
-        f"MarginV={style.bottom_margin},Spacing={style.line_spacing}"
+        f"MarginV={style.bottom_margin},Spacing={style.line_spacing},Alignment={alignment}"
     )
     return f"subtitles='{srt_path.as_posix()}':force_style='{style_str}'"
 
