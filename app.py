@@ -122,7 +122,7 @@ def tab_paste_script() -> None:
         placeholder="e.g., The Rise of Rome",
     )
 
-    st.text_area(
+    new_script = st.text_area(
         "Script",
         key="script_text",
         height=320,
@@ -462,6 +462,7 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
     except json.JSONDecodeError:
         return {}
 
+    return buf.getvalue()
 
 def tab_video_compile() -> None:
     st.subheader("Video Studio")
