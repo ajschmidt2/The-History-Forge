@@ -176,7 +176,7 @@ def tab_generate_script() -> None:
             st.warning("Enter a topic or use I'm Feeling Lucky.")
             return
         with st.spinner("Generating script..."):
-            st.session_state.script_text = generate_script(
+            generated_script = generate_script(
                 topic=st.session_state.topic,
                 length=st.session_state.length,
                 tone=st.session_state.tone,
