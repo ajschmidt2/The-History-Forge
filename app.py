@@ -125,7 +125,7 @@ def tab_paste_script() -> None:
         placeholder="e.g., The Rise of Rome",
     )
 
-    st.text_area(
+    new_script = st.text_area(
         "Script",
         key="script_text_input",
         height=320,
@@ -176,7 +176,7 @@ def tab_generate_script() -> None:
             st.warning("Enter a topic or use I'm Feeling Lucky.")
             return
         with st.spinner("Generating script..."):
-            generated_script = generate_script(
+            st.session_state.script_text = generate_script(
                 topic=st.session_state.topic,
                 length=st.session_state.length,
                 tone=st.session_state.tone,
@@ -459,6 +459,25 @@ def _tail_file(path: Path, lines: int = 200) -> str:
     with path.open("r", encoding="utf-8", errors="ignore") as handle:
         return "".join(deque(handle, maxlen=lines))
 
+def _tail_file(path: Path, lines: int = 200) -> str:
+    if not path.exists():
+        return ""
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        return "".join(deque(handle, maxlen=lines))
+
+def _tail_file(path: Path, lines: int = 200) -> str:
+    if not path.exists():
+        return ""
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        return "".join(deque(handle, maxlen=lines))
+
+def _load_timeline_meta(timeline_path: Path) -> dict:
+    if not timeline_path.exists():
+        return {}
+    try:
+        return json.loads(timeline_path.read_text(encoding="utf-8")).get("meta", {})
+    except json.JSONDecodeError:
+        return {}
 
 def _load_timeline_meta(timeline_path: Path) -> dict:
     if not timeline_path.exists():
