@@ -54,6 +54,7 @@ def init_state() -> None:
     st.session_state.setdefault("topic", "")
     st.session_state.setdefault("script_text", "")
     st.session_state.setdefault("script_text_input", "")
+    st.session_state.setdefault("pending_script_text_input", "")
     if st.session_state.script_text and not st.session_state.script_text_input:
         st.session_state.script_text_input = st.session_state.script_text
 
@@ -119,6 +120,10 @@ def clear_downstream(after: str) -> None:
 def tab_paste_script() -> None:
     st.subheader("Paste your own script")
 
+    if st.session_state.pending_script_text_input:
+        st.session_state.script_text_input = st.session_state.pending_script_text_input
+        st.session_state.pending_script_text_input = ""
+
     st.session_state.project_title = st.text_input(
         "Project Title",
         value=st.session_state.project_title,
@@ -182,7 +187,7 @@ def tab_generate_script() -> None:
                 tone=st.session_state.tone,
             )
         st.session_state.script_text = generated_script
-        st.session_state.script_text_input = generated_script
+        st.session_state.pending_script_text_input = generated_script
         st.session_state.project_title = st.session_state.topic or st.session_state.project_title
         clear_downstream("script")
         st.toast("Script generated.")
