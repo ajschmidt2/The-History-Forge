@@ -1,3 +1,4 @@
+import base64
 import os
 from io import BytesIO
 from typing import Any, List, Optional
@@ -34,15 +35,35 @@ def _resolve_model() -> str:
     ).strip()
 
 
+def _maybe_decode_bytes(value: Any) -> Optional[bytes]:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, str):
+        try:
+            return base64.b64decode(value, validate=True)
+        except Exception:
+            return None
+    return None
+
+
 def _image_to_png_bytes(image: Any) -> Optional[bytes]:
     if image is None:
         return None
-    if isinstance(image, (bytes, bytearray)):
-        return bytes(image)
+    if isinstance(image, (bytes, bytearray, str)):
+        return _maybe_decode_bytes(image)
+    if isinstance(image, dict):
+        for key in ("image_bytes", "bytes", "data", "b64_json", "b64"):
+            raw = _maybe_decode_bytes(image.get(key))
+            if raw:
+                return raw
+        nested = image.get("image")
+        if nested is not None:
+            return _image_to_png_bytes(nested)
     if hasattr(image, "image_bytes"):
         data = getattr(image, "image_bytes")
-        if isinstance(data, (bytes, bytearray)):
-            return bytes(data)
+        raw = _maybe_decode_bytes(data)
+        if raw:
+            return raw
     if hasattr(image, "save"):
         buf = BytesIO()
         image.save(buf, format="PNG")
@@ -58,9 +79,14 @@ def _extract_images(result: Any) -> List[bytes]:
     images: List[bytes] = []
 
     generated_images = getattr(result, "generated_images", None)
-    if generated_images:
+    if generated_images is not None:
         for item in generated_images:
             if item is None:
+                continue
+            if isinstance(item, dict):
+                raw = _image_to_png_bytes(item.get("image")) or _image_to_png_bytes(item)
+                if raw:
+                    images.append(raw)
                 continue
             img = getattr(item, "image", None)
             raw = _image_to_png_bytes(img) or _image_to_png_bytes(item)
