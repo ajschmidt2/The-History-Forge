@@ -1123,8 +1123,12 @@ def tab_video_compile() -> None:
             renders_dir.mkdir(parents=True, exist_ok=True)
             log_path = renders_dir / "render.log"
             with st.spinner("Rendering video with FFmpeg..."):
-                render_video_from_timeline(timeline_path, renders_dir / "final.mp4", log_path=log_path)
-            st.success("Render complete.")
+                try:
+                    render_video_from_timeline(timeline_path, renders_dir / "final.mp4", log_path=log_path)
+                except (RuntimeError, FileNotFoundError, ValueError) as exc:
+                    st.error(f"Render failed: {exc}")
+                else:
+                    st.success("Render complete.")
 
     st.markdown("### Render output")
     video_path = renders_dir / "final.mp4"
