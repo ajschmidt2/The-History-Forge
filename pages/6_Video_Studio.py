@@ -44,9 +44,25 @@ def _caption_position_options() -> dict[str, str]:
     return {"Lower": "lower", "Center": "center", "Top": "top"}
 
 
+def _apply_caption_preset(
+    presets: dict[str, CaptionStyle],
+    position_options: dict[str, str],
+    style_key: str = "video_caption_style",
+    font_key: str = "video_caption_font_size",
+    position_key: str = "video_caption_position",
+) -> None:
+    selected_style = st.session_state.get(style_key)
+    if not selected_style or selected_style not in presets:
+        return
+    preset = presets[selected_style]
+    st.session_state[font_key] = preset.font_size
+    label_for_position = {value: label for label, value in position_options.items()}
+    st.session_state[position_key] = label_for_position.get(preset.position, "Lower")
+
+
 def _match_caption_preset(style: CaptionStyle, presets: dict[str, CaptionStyle]) -> str:
     for name, preset in presets.items():
-        if preset.dict(exclude={"position"}) == style.dict(exclude={"position"}):
+        if preset.model_dump(exclude={"position"}) == style.model_dump(exclude={"position"}):
             return name
     return next(iter(presets))
 
@@ -290,6 +306,7 @@ with captions_cols[0]:
         current_caption_style = CaptionStyle(**caption_style_defaults)
     except (TypeError, ValueError):
         current_caption_style = CaptionStyle()
+    position_options = _caption_position_options()
     caption_default_name = _match_caption_preset(current_caption_style, caption_presets)
     caption_style_name = st.selectbox(
         "Caption style",
@@ -297,8 +314,9 @@ with captions_cols[0]:
         index=list(caption_presets.keys()).index(caption_default_name),
         key="video_caption_style",
         disabled=not burn_captions,
+        on_change=_apply_caption_preset,
+        args=(caption_presets, position_options),
     )
-    position_options = _caption_position_options()
     current_position_label = next(
         (label for label, value in position_options.items() if value == current_caption_style.position),
         "Lower",
@@ -310,7 +328,7 @@ with captions_cols[0]:
         key="video_caption_position",
         disabled=not burn_captions,
     )
-    selected_caption_style = caption_presets[caption_style_name].copy(deep=True)
+    selected_caption_style = caption_presets[caption_style_name].model_copy(deep=True)
     selected_caption_style.font_size = int(
         st.slider(
             "Caption size",
@@ -397,118 +415,50 @@ if st.button("Render video (FFmpeg)", width="stretch"):
     if include_voiceover and not audio_files:
         st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
         st.stop()
-    if include_voiceover and not audio_files:
-        st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
-        st.stop()
-    if include_voiceover and not audio_files:
-        st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
-        st.stop()
-
     if timeline_path.exists():
         try:
-            timeline = Timeline.parse_file(timeline_path)
+            timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
         except ValueError as exc:
             st.error(f"Unable to read timeline.json: {exc}")
             st.stop()
-        timeline.meta.include_voiceover = include_voiceover
-        timeline.meta.include_music = include_music
-        if include_voiceover and audio_files:
-            timeline.meta.voiceover = timeline.meta.voiceover or Voiceover(path=str(audio_files[0]))
-            timeline.meta.voiceover.path = str(audio_files[0])
+        image_paths = {str(image) for image in images}
+        timeline_images = [scene.image_path for scene in timeline.scenes]
+        if len(timeline_images) != len(images) or any(path not in image_paths for path in timeline_images):
+            timeline = _build_timeline_from_ui(
+                project_name=project_name,
+                title=title,
+                images=images,
+                audio_files=audio_files,
+                music_files=music_files,
+                aspect_ratio=aspect_ratio,
+                fps=int(fps),
+                scene_duration=effective_scene_duration,
+                burn_captions=burn_captions,
+                caption_style=selected_caption_style,
+                music_volume_db=music_volume_db,
+                include_voiceover=include_voiceover,
+                include_music=include_music,
+            )
+            write_timeline_json(timeline, timeline_path)
+            st.info("Timeline rebuilt to match current images.")
         else:
-            timeline.meta.voiceover = None
-        if include_music and music_files:
-            timeline.meta.music = timeline.meta.music or Music(path=str(music_files[0]), volume_db=music_volume_db)
-            timeline.meta.music.path = str(music_files[0])
-            timeline.meta.music.volume_db = music_volume_db
-        else:
-            timeline.meta.music = None
-        timeline.meta.burn_captions = burn_captions
-        timeline.meta.caption_style = selected_caption_style
-        timeline.meta.scene_duration = effective_scene_duration
-        write_timeline_json(timeline, timeline_path)
-    else:
-        timeline = _build_timeline_from_ui(
-            project_name=project_name,
-            title=title,
-            images=images,
-            audio_files=audio_files,
-            music_files=music_files,
-            aspect_ratio=aspect_ratio,
-            fps=int(fps),
-            scene_duration=effective_scene_duration,
-            burn_captions=burn_captions,
-            caption_style=selected_caption_style,
-            music_volume_db=music_volume_db,
-            include_voiceover=include_voiceover,
-            include_music=include_music,
-        )
-        write_timeline_json(timeline, timeline_path)
-
-    if timeline_path.exists():
-        try:
-            timeline = Timeline.parse_file(timeline_path)
-        except ValueError as exc:
-            st.error(f"Unable to read timeline.json: {exc}")
-            st.stop()
-        timeline.meta.include_voiceover = include_voiceover
-        timeline.meta.include_music = include_music
-        if include_voiceover and audio_files:
-            timeline.meta.voiceover = timeline.meta.voiceover or Voiceover(path=str(audio_files[0]))
-            timeline.meta.voiceover.path = str(audio_files[0])
-        else:
-            timeline.meta.voiceover = None
-        if include_music and music_files:
-            timeline.meta.music = timeline.meta.music or Music(path=str(music_files[0]), volume_db=music_volume_db)
-            timeline.meta.music.path = str(music_files[0])
-            timeline.meta.music.volume_db = music_volume_db
-        else:
-            timeline.meta.music = None
-        timeline.meta.burn_captions = burn_captions
-        timeline.meta.caption_style = selected_caption_style
-        timeline.meta.scene_duration = effective_scene_duration
-        write_timeline_json(timeline, timeline_path)
-    else:
-        timeline = _build_timeline_from_ui(
-            project_name=project_name,
-            title=title,
-            images=images,
-            audio_files=audio_files,
-            music_files=music_files,
-            aspect_ratio=aspect_ratio,
-            fps=int(fps),
-            scene_duration=effective_scene_duration,
-            burn_captions=burn_captions,
-            caption_style=selected_caption_style,
-            music_volume_db=music_volume_db,
-            include_voiceover=include_voiceover,
-            include_music=include_music,
-        )
-        write_timeline_json(timeline, timeline_path)
-
-    if timeline_path.exists():
-        try:
-            timeline = Timeline.parse_file(timeline_path)
-        except ValueError as exc:
-            st.error(f"Unable to read timeline.json: {exc}")
-            st.stop()
-        timeline.meta.include_voiceover = include_voiceover
-        timeline.meta.include_music = include_music
-        if include_voiceover and audio_files:
-            timeline.meta.voiceover = timeline.meta.voiceover or Voiceover(path=str(audio_files[0]))
-            timeline.meta.voiceover.path = str(audio_files[0])
-        else:
-            timeline.meta.voiceover = None
-        if include_music and music_files:
-            timeline.meta.music = timeline.meta.music or Music(path=str(music_files[0]), volume_db=music_volume_db)
-            timeline.meta.music.path = str(music_files[0])
-            timeline.meta.music.volume_db = music_volume_db
-        else:
-            timeline.meta.music = None
-        timeline.meta.burn_captions = burn_captions
-        timeline.meta.caption_style = selected_caption_style
-        timeline.meta.scene_duration = effective_scene_duration
-        write_timeline_json(timeline, timeline_path)
+            timeline.meta.include_voiceover = include_voiceover
+            timeline.meta.include_music = include_music
+            if include_voiceover and audio_files:
+                timeline.meta.voiceover = timeline.meta.voiceover or Voiceover(path=str(audio_files[0]))
+                timeline.meta.voiceover.path = str(audio_files[0])
+            else:
+                timeline.meta.voiceover = None
+            if include_music and music_files:
+                timeline.meta.music = timeline.meta.music or Music(path=str(music_files[0]), volume_db=music_volume_db)
+                timeline.meta.music.path = str(music_files[0])
+                timeline.meta.music.volume_db = music_volume_db
+            else:
+                timeline.meta.music = None
+            timeline.meta.burn_captions = burn_captions
+            timeline.meta.caption_style = selected_caption_style
+            timeline.meta.scene_duration = effective_scene_duration
+            write_timeline_json(timeline, timeline_path)
     else:
         timeline = _build_timeline_from_ui(
             project_name=project_name,

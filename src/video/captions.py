@@ -26,6 +26,17 @@ def _ass_alignment(position: str) -> int:
     return alignment_map.get(position, 2)
 
 
+def _ass_play_resolution(timeline: Timeline) -> tuple[int, int]:
+    resolution = timeline.meta.resolution
+    if "x" not in resolution:
+        return 1920, 1080
+    width, height = resolution.lower().split("x", maxsplit=1)
+    try:
+        return int(width), int(height)
+    except ValueError:
+        return 1920, 1080
+
+
 def build_srt_from_timeline(timeline: Timeline) -> str:
     lines: list[str] = []
     index = 1
@@ -42,6 +53,7 @@ def build_srt_from_timeline(timeline: Timeline) -> str:
 
 def build_ass_from_timeline(timeline: Timeline) -> str:
     style = timeline.meta.caption_style
+    play_res_x, play_res_y = _ass_play_resolution(timeline)
     primary = "&H00FFFFFF"
     secondary = "&H008A8A8A"
     outline = "&H00000000"
@@ -50,8 +62,8 @@ def build_ass_from_timeline(timeline: Timeline) -> str:
     header = [
         "[Script Info]",
         "ScriptType: v4.00+",
-        "PlayResX: 1920",
-        "PlayResY: 1080",
+        f"PlayResX: {play_res_x}",
+        f"PlayResY: {play_res_y}",
         "WrapStyle: 2",
         "ScaledBorderAndShadow: yes",
         "",
