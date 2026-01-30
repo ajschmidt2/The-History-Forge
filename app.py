@@ -6,24 +6,38 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+import os
+
 import streamlit as st
 
-from utils import (
-    Scene,
-    generate_lucky_topic,
-    generate_script,
-    split_script_into_scenes,
-    generate_prompts_for_scenes,
-    generate_image_for_scene,
-    generate_voiceover,
-    generate_thumbnail_image,
-    generate_thumbnail_prompt,
-    generate_video_titles,
-)
+import utils
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
 from src.video.timeline_schema import CaptionStyle, Music, Timeline, Voiceover
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
+
+Scene = utils.Scene
+generate_lucky_topic = utils.generate_lucky_topic
+generate_script = utils.generate_script
+split_script_into_scenes = utils.split_script_into_scenes
+generate_prompts_for_scenes = utils.generate_prompts_for_scenes
+generate_image_for_scene = utils.generate_image_for_scene
+generate_voiceover = utils.generate_voiceover
+def _thumbnail_titles_fallback(*_args: object, **_kwargs: object) -> list[str]:
+    return ["Thumbnail/title helpers are unavailable. Update utils.py and redeploy."]
+
+
+def _thumbnail_prompt_fallback(*_args: object, **_kwargs: object) -> str:
+    return "Thumbnail prompt helper is unavailable. Update utils.py and redeploy."
+
+
+def _thumbnail_image_fallback(*_args: object, **_kwargs: object) -> tuple[bytes | None, str]:
+    return None, "Thumbnail generator is unavailable. Update utils.py and redeploy."
+
+
+generate_video_titles = getattr(utils, "generate_video_titles", _thumbnail_titles_fallback)
+generate_thumbnail_prompt = getattr(utils, "generate_thumbnail_prompt", _thumbnail_prompt_fallback)
+generate_thumbnail_image = getattr(utils, "generate_thumbnail_image", _thumbnail_image_fallback)
 
 
 # ----------------------------
@@ -33,6 +47,8 @@ from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 def require_passcode() -> None:
     secret_key = "APP_PASSCODE" if "APP_PASSCODE" in st.secrets else "password"
     expected = st.secrets.get(secret_key, "")
+    if not expected:
+        expected = os.getenv("APP_PASSCODE", "") or os.getenv("PASSWORD", "")
 
     if not expected:
         return
