@@ -159,7 +159,7 @@ cols[2].metric("Music files", len(music_files))
 session_images = _session_scene_images()
 if session_images:
     st.caption(f"Generated images in session: {len(session_images)}")
-    if st.button("Save generated images to assets/images", use_container_width=True, key="video_sync_images"):
+    if st.button("Save generated images to assets/images", width="stretch", key="video_sync_images"):
         saved_count = _sync_session_images(images_dir)
         st.success(f"Saved {saved_count} generated image(s) to assets/images as s##.png.")
         st.rerun()
@@ -182,12 +182,12 @@ if audio_files:
         {"File": audio_file.name, "Size (MB)": f"{audio_file.stat().st_size / (1024 * 1024):.2f}"}
         for audio_file in audio_files
     ]
-    st.dataframe(audio_rows, use_container_width=True, hide_index=True)
+    st.dataframe(audio_rows, width="stretch", hide_index=True)
 else:
     st.info("No voiceover audio files found yet.")
 
 if st.session_state.get("voiceover_bytes"):
-    if st.button("Save generated voiceover to assets/audio", use_container_width=True, key="video_save_generated_voiceover"):
+    if st.button("Save generated voiceover to assets/audio", width="stretch", key="video_save_generated_voiceover"):
         audio_dir.mkdir(parents=True, exist_ok=True)
         destination = audio_dir / "voiceover.mp3"
         destination.write_bytes(st.session_state.voiceover_bytes)
@@ -212,7 +212,7 @@ if music_files:
         {"File": music_file.name, "Size (MB)": f"{music_file.stat().st_size / (1024 * 1024):.2f}"}
         for music_file in music_files
     ]
-    st.dataframe(music_rows, use_container_width=True, hide_index=True)
+    st.dataframe(music_rows, width="stretch", hide_index=True)
 else:
     st.info("No background music files found yet.")
 
@@ -231,7 +231,7 @@ with upload_cols[0]:
         st.rerun()
 with upload_cols[1]:
     music_url = st.text_input("Music URL", placeholder="https://example.com/track.mp3", key="video_music_url")
-    if st.button("Add from URL", use_container_width=True, key="video_music_url_add"):
+    if st.button("Add from URL", width="stretch", key="video_music_url_add"):
         if not music_url.strip():
             st.error("Enter a URL to fetch music.")
         else:
@@ -366,7 +366,7 @@ music_volume_db = st.slider(
 
 st.markdown("### Actions")
 
-if st.button("Generate timeline.json", use_container_width=True):
+if st.button("Generate timeline.json", width="stretch"):
     if not images:
         st.error("No images found in assets/images/. Add scene images to generate a timeline.")
     elif include_voiceover and not audio_files:
@@ -390,7 +390,7 @@ if st.button("Generate timeline.json", use_container_width=True):
         write_timeline_json(timeline, timeline_path)
         st.success("timeline.json generated.")
 
-if st.button("Render video (FFmpeg)", use_container_width=True):
+if st.button("Render video (FFmpeg)", width="stretch"):
     if not images:
         st.error("No images found in assets/images/. Add scene images before rendering.")
         st.stop()
