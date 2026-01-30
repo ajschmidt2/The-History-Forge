@@ -154,7 +154,7 @@ def tab_paste_script() -> None:
         placeholder="Paste your narration script here...",
     )
 
-    if st.button("Use this script →", type="primary", use_container_width=True):
+    if st.button("Use this script →", type="primary", width="stretch"):
         st.session_state.script_text = st.session_state.script_text_input
         clear_downstream("script")
         st.toast("Script loaded.")
@@ -172,7 +172,7 @@ def tab_generate_script() -> None:
             placeholder="e.g., The Rise of Rome",
         )
     with c2:
-        if st.button("🎲 I'm Feeling Lucky", use_container_width=True):
+        if st.button("🎲 I'm Feeling Lucky", width="stretch"):
             st.session_state.topic = generate_lucky_topic()
             st.session_state.project_title = st.session_state.topic
             st.toast(st.session_state.topic)
@@ -193,7 +193,7 @@ def tab_generate_script() -> None:
         else 0,
     )
 
-    if st.button("Generate Script", type="primary", use_container_width=True):
+    if st.button("Generate Script", type="primary", width="stretch"):
         if not st.session_state.topic.strip():
             st.warning("Enter a topic or use I'm Feeling Lucky.")
             return
@@ -230,7 +230,7 @@ def tab_create_scenes() -> None:
         step=1,
     )
 
-    if st.button("Split script into scenes", type="primary", use_container_width=True):
+    if st.button("Split script into scenes", type="primary", width="stretch"):
         with st.spinner("Splitting script..."):
             st.session_state.scenes = split_script_into_scenes(
                 st.session_state.script_text,
@@ -284,7 +284,7 @@ def tab_create_prompts() -> None:
         index=style_options.index(current_style),
     )
 
-    if st.button("Generate prompts for all scenes", type="primary", use_container_width=True):
+    if st.button("Generate prompts for all scenes", type="primary", width="stretch"):
         with st.spinner("Generating prompts..."):
             st.session_state.scenes = generate_prompts_for_scenes(
                 st.session_state.scenes,
@@ -332,7 +332,7 @@ def tab_create_images() -> None:
         int(st.session_state.variations_per_scene),
     )
 
-    if st.button("Generate images for all scenes", type="primary", use_container_width=True):
+    if st.button("Generate images for all scenes", type="primary", width="stretch"):
         with st.spinner("Generating images..."):
             for s in st.session_state.scenes:
                 if not (s.image_prompt or "").strip():
@@ -358,7 +358,7 @@ def tab_create_images() -> None:
     for s in st.session_state.scenes:
         with st.expander(f"{s.index:02d} — {s.title} images", expanded=False):
             if s.image_bytes:
-                st.image(s.image_bytes, use_container_width=True)
+                st.image(s.image_bytes, width="stretch")
             else:
                 st.info("No primary image yet.")
 
@@ -366,14 +366,14 @@ def tab_create_images() -> None:
                 st.caption("Variations")
                 for vi, b in enumerate(s.image_variations[1:], start=2):
                     if b:
-                        st.image(b, caption=f"Variation {vi}", use_container_width=True)
+                        st.image(b, caption=f"Variation {vi}", width="stretch")
 
             if s.image_error:
                 st.error(s.image_error)
 
             c1, c2 = st.columns([1, 1])
             with c1:
-                if st.button("Regenerate this scene", key=f"regen_{s.index}", use_container_width=True):
+                if st.button("Regenerate this scene", key=f"regen_{s.index}", width="stretch"):
                     with st.spinner("Regenerating..."):
                         updated = generate_image_for_scene(
                             s,
@@ -404,7 +404,7 @@ def tab_voiceover() -> None:
         placeholder="Paste your ElevenLabs voice_id here",
     )
 
-    if st.button("Generate voiceover", type="primary", use_container_width=True):
+    if st.button("Generate voiceover", type="primary", width="stretch"):
         with st.spinner("Generating voiceover..."):
             audio, err = generate_voiceover(
                 st.session_state.script_text,
@@ -488,7 +488,7 @@ def tab_export() -> None:
         data=zip_bytes,
         file_name=f"{st.session_state.project_title.replace(' ', '_')}.zip",
         mime="application/zip",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -503,7 +503,7 @@ def tab_thumbnail_title() -> None:
         key="thumbnail_title_seed",
     )
     title_count = st.slider("Number of title ideas", min_value=3, max_value=10, value=5, step=1)
-    if st.button("Generate title ideas", use_container_width=True, key="thumbnail_generate_titles"):
+    if st.button("Generate title ideas", width="stretch", key="thumbnail_generate_titles"):
         st.session_state.video_title_suggestions = generate_video_titles(
             title_seed,
             st.session_state.script_text,
@@ -527,7 +527,7 @@ def tab_thumbnail_title() -> None:
         index=0,
         key="thumbnail_style",
     )
-    if st.button("Generate thumbnail prompt", use_container_width=True, key="thumbnail_prompt_btn"):
+    if st.button("Generate thumbnail prompt", width="stretch", key="thumbnail_prompt_btn"):
         st.session_state.thumbnail_prompt = generate_thumbnail_prompt(
             title_seed,
             st.session_state.selected_video_title,
@@ -542,7 +542,7 @@ def tab_thumbnail_title() -> None:
         key="thumbnail_prompt_text",
     )
 
-    if st.button("Generate thumbnail image", use_container_width=True, key="thumbnail_generate_image"):
+    if st.button("Generate thumbnail image", width="stretch", key="thumbnail_generate_image"):
         image_bytes, err = generate_thumbnail_image(st.session_state.thumbnail_prompt, aspect_ratio="16:9")
         st.session_state.thumbnail_bytes = image_bytes
         st.session_state.thumbnail_error = err
@@ -561,7 +561,7 @@ def tab_thumbnail_title() -> None:
         st.error(st.session_state.thumbnail_error)
 
     if st.session_state.thumbnail_bytes:
-        st.image(st.session_state.thumbnail_bytes, caption="Generated thumbnail", use_container_width=True)
+        st.image(st.session_state.thumbnail_bytes, caption="Generated thumbnail", width="stretch")
         if st.session_state.thumbnail_saved_path:
             st.caption(f"Saved to {st.session_state.thumbnail_saved_path}")
 
@@ -731,7 +731,7 @@ def tab_video_compile() -> None:
     session_images = _session_scene_images()
     if session_images:
         st.caption(f"Generated images in session: {len(session_images)}")
-        if st.button("Save generated images to assets/images", use_container_width=True, key="video_sync_images"):
+        if st.button("Save generated images to assets/images", width="stretch", key="video_sync_images"):
             saved_count = _sync_session_images(images_dir)
             st.success(f"Saved {saved_count} generated image(s) to assets/images as s##.png.")
             st.rerun()
@@ -754,13 +754,13 @@ def tab_video_compile() -> None:
             {"File": audio_file.name, "Size (MB)": f"{audio_file.stat().st_size / (1024 * 1024):.2f}"}
             for audio_file in audio_files
         ]
-        st.dataframe(audio_rows, use_container_width=True, hide_index=True)
+        st.dataframe(audio_rows, width="stretch", hide_index=True)
     else:
         st.info("No voiceover audio files found yet.")
         if st.session_state.voiceover_bytes:
             if st.button(
                 "Save generated voiceover to assets/audio",
-                use_container_width=True,
+                width="stretch",
                 key="video_save_generated_voiceover",
             ):
                 audio_dir.mkdir(parents=True, exist_ok=True)
@@ -787,7 +787,7 @@ def tab_video_compile() -> None:
             {"File": music_file.name, "Size (MB)": f"{music_file.stat().st_size / (1024 * 1024):.2f}"}
             for music_file in music_files
         ]
-        st.dataframe(music_rows, use_container_width=True, hide_index=True)
+        st.dataframe(music_rows, width="stretch", hide_index=True)
     else:
         st.info("No background music files found yet.")
 
@@ -806,7 +806,7 @@ def tab_video_compile() -> None:
             st.rerun()
     with upload_cols[1]:
         music_url = st.text_input("Music URL", placeholder="https://example.com/track.mp3", key="video_music_url")
-        if st.button("Add from URL", use_container_width=True, key="video_music_url_add"):
+        if st.button("Add from URL", width="stretch", key="video_music_url_add"):
             if not music_url.strip():
                 st.error("Enter a URL to fetch music.")
             else:
@@ -974,7 +974,7 @@ def tab_video_compile() -> None:
     )
 
     st.markdown("### Actions")
-    if st.button("Generate timeline.json", use_container_width=True, key="video_generate_timeline"):
+    if st.button("Generate timeline.json", width="stretch", key="video_generate_timeline"):
         if not images:
             st.error("No images found in assets/images/. Add scene images to generate a timeline.")
         elif include_voiceover and not audio_files:
@@ -1001,7 +1001,7 @@ def tab_video_compile() -> None:
             write_timeline_json(timeline, timeline_path)
             st.success("timeline.json generated.")
 
-    if st.button("Render video (FFmpeg)", use_container_width=True, key="video_render"):
+    if st.button("Render video (FFmpeg)", width="stretch", key="video_render"):
         if not images:
             st.error("No images found in assets/images/. Add scene images before rendering.")
             return
