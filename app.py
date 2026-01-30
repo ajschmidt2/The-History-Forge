@@ -625,7 +625,7 @@ def _apply_caption_preset(
 
 def _match_caption_preset(style: CaptionStyle, presets: dict[str, CaptionStyle]) -> str:
     for name, preset in presets.items():
-        if preset.dict(exclude={"position"}) == style.dict(exclude={"position"}):
+        if preset.model_dump(exclude={"position"}) == style.model_dump(exclude={"position"}):
             return name
     return next(iter(presets))
 
@@ -913,7 +913,7 @@ def tab_video_compile() -> None:
             key="video_caption_position",
             disabled=not burn_captions,
         )
-        selected_caption_style = caption_presets[caption_style_name].copy(deep=True)
+        selected_caption_style = caption_presets[caption_style_name].model_copy(deep=True)
         selected_caption_style.font_size = int(
             st.slider(
                 "Caption size",
@@ -1029,7 +1029,7 @@ def tab_video_compile() -> None:
 
         if timeline_path.exists():
             try:
-                timeline = Timeline.parse_file(timeline_path)
+                timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
             except ValueError as exc:
                 st.error(f"Unable to read timeline.json: {exc}")
                 return

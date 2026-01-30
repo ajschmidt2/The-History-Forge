@@ -160,7 +160,7 @@ def _subtitle_filter(subtitle_path: Path) -> str:
 def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Path, log_path: str | Path | None = None) -> Path:
     ensure_ffmpeg_exists()
 
-    timeline = Timeline.parse_file(timeline_path)
+    timeline = Timeline.model_validate_json(Path(timeline_path).read_text(encoding="utf-8"))
     output_path = ensure_parent_dir(out_mp4_path)
     log_file = Path(log_path) if log_path else None
 
