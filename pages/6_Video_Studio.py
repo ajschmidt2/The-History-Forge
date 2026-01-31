@@ -298,11 +298,14 @@ with settings_cols[1]:
 with settings_cols[2]:
     fps = st.number_input("FPS", min_value=12, max_value=60, value=int(meta_defaults.get("fps", 30)))
 
+scene_duration_default = meta_defaults.get("scene_duration", 3.0)
+if scene_duration_default is None:
+    scene_duration_default = 3.0
 scene_duration = st.slider(
     "Seconds per image",
     min_value=1.0,
     max_value=12.0,
-    value=float(meta_defaults.get("scene_duration", 3.0)),
+    value=float(scene_duration_default),
     step=0.5,
     help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
     key="video_scene_duration",

@@ -896,11 +896,14 @@ def tab_video_compile() -> None:
             value=int(meta_defaults.get("fps", 30)),
             key="video_fps",
         )
+    scene_duration_default = meta_defaults.get("scene_duration", 3.0)
+    if scene_duration_default is None:
+        scene_duration_default = 3.0
     scene_duration = st.slider(
         "Seconds per image",
         min_value=1.0,
         max_value=12.0,
-        value=float(meta_defaults.get("scene_duration", 3.0)),
+        value=float(scene_duration_default),
         step=0.5,
         help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
         key="video_scene_duration",
