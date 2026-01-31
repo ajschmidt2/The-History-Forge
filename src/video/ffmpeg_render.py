@@ -154,13 +154,17 @@ def _crossfade_scenes(
 
 
 def _subtitle_filter(subtitle_path: Path) -> str:
-    return f"subtitles='{subtitle_path.as_posix()}'"
+    path_str = subtitle_path.as_posix()
+    escaped = path_str.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    return f"subtitles='{escaped}'"
 
 
 def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Path, log_path: str | Path | None = None) -> Path:
     ensure_ffmpeg_exists()
 
     timeline = Timeline.model_validate_json(Path(timeline_path).read_text(encoding="utf-8"))
+    if not timeline.scenes:
+        raise ValueError("Timeline has no scenes to render.")
     output_path = ensure_parent_dir(out_mp4_path)
     log_file = Path(log_path) if log_path else None
 
@@ -184,14 +188,23 @@ def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Pa
 
         stitched_path = tmp_path / "stitched.mp4"
         if timeline.meta.crossfade and len(scene_paths) > 1:
-            _crossfade_scenes(
-                scene_paths,
-                stitched_path,
-                durations,
-                fps,
-                timeline.meta.crossfade_duration,
-                log_file,
-            )
+            if len(scene_paths) > 12:
+                if log_file:
+                    with log_file.open("a", encoding="utf-8") as handle:
+                        handle.write("Crossfade disabled: too many scenes for a single filter graph.\n")
+                _concat_scenes(scene_paths, stitched_path, log_file)
+            else:
+                try:
+                    _crossfade_scenes(
+                        scene_paths,
+                        stitched_path,
+                        durations,
+                        fps,
+                        timeline.meta.crossfade_duration,
+                        log_file,
+                    )
+                except RuntimeError:
+                    _concat_scenes(scene_paths, stitched_path, log_file)
         else:
             _concat_scenes(scene_paths, stitched_path, log_file)
 
@@ -215,7 +228,7 @@ def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Pa
 
         include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
         if include_audio:
-            audio_plan = build_audio_mix_cmd(timeline.meta, timeline.total_duration)
+            audio_plan = build_audio_mix_cmd(timeline.meta, timeline.total_duration, start_index=1)
             cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
             cmd.extend(audio_plan.input_args)
             if timeline.meta.burn_captions:
