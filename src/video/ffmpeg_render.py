@@ -161,6 +161,8 @@ def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Pa
     ensure_ffmpeg_exists()
 
     timeline = Timeline.model_validate_json(Path(timeline_path).read_text(encoding="utf-8"))
+    if not timeline.scenes:
+        raise ValueError("Timeline has no scenes to render.")
     output_path = ensure_parent_dir(out_mp4_path)
     log_file = Path(log_path) if log_path else None
 
@@ -184,14 +186,23 @@ def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Pa
 
         stitched_path = tmp_path / "stitched.mp4"
         if timeline.meta.crossfade and len(scene_paths) > 1:
-            _crossfade_scenes(
-                scene_paths,
-                stitched_path,
-                durations,
-                fps,
-                timeline.meta.crossfade_duration,
-                log_file,
-            )
+            if len(scene_paths) > 12:
+                if log_file:
+                    with log_file.open("a", encoding="utf-8") as handle:
+                        handle.write("Crossfade disabled: too many scenes for a single filter graph.\n")
+                _concat_scenes(scene_paths, stitched_path, log_file)
+            else:
+                try:
+                    _crossfade_scenes(
+                        scene_paths,
+                        stitched_path,
+                        durations,
+                        fps,
+                        timeline.meta.crossfade_duration,
+                        log_file,
+                    )
+                except RuntimeError:
+                    _concat_scenes(scene_paths, stitched_path, log_file)
         else:
             _concat_scenes(scene_paths, stitched_path, log_file)
 

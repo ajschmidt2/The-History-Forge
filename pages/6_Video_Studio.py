@@ -8,6 +8,7 @@ from urllib.request import urlopen
 
 import streamlit as st
 
+from src.storage import record_asset, record_assets, upsert_project
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
 from src.video.timeline_schema import CaptionStyle, Music, Timeline, Voiceover
@@ -100,14 +101,18 @@ def _session_scene_images() -> list[tuple[int, bytes]]:
     return session_images
 
 
-def _sync_session_images(images_dir: Path) -> int:
+def _sync_session_images(images_dir: Path, project_id: str) -> int:
     session_images = _session_scene_images()
     if not session_images:
         return 0
     images_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths: list[Path] = []
     for scene_index, image_bytes in session_images:
         destination = images_dir / f"s{scene_index:02d}.png"
         destination.write_bytes(image_bytes)
+        saved_paths.append(destination)
+    if saved_paths:
+        record_assets(project_id, "image", saved_paths)
     return len(session_images)
 
 
@@ -156,6 +161,7 @@ if not project_dirs:
 
 project_name = st.selectbox("Project folder", [p.name for p in project_dirs])
 project_path = projects_root / project_name
+upsert_project(project_name, project_name.replace("_", " "))
 
 images_dir = project_path / "assets/images"
 audio_dir = project_path / "assets/audio"
@@ -165,6 +171,12 @@ renders_dir = project_path / "renders"
 images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
 audio_files = sorted([p for p in audio_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
 music_files = sorted([p for p in music_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
+if images:
+    record_assets(project_name, "image", images)
+if audio_files:
+    record_assets(project_name, "voiceover", audio_files)
+if music_files:
+    record_assets(project_name, "music", music_files)
 
 st.markdown("### Assets")
 cols = st.columns(3)
@@ -176,7 +188,7 @@ session_images = _session_scene_images()
 if session_images:
     st.caption(f"Generated images in session: {len(session_images)}")
     if st.button("Save generated images to assets/images", width="stretch", key="video_sync_images"):
-        saved_count = _sync_session_images(images_dir)
+        saved_count = _sync_session_images(images_dir, project_name)
         st.success(f"Saved {saved_count} generated image(s) to assets/images as s##.png.")
         st.rerun()
 else:
@@ -207,6 +219,7 @@ if st.session_state.get("voiceover_bytes"):
         audio_dir.mkdir(parents=True, exist_ok=True)
         destination = audio_dir / "voiceover.mp3"
         destination.write_bytes(st.session_state.voiceover_bytes)
+        record_asset(project_name, "voiceover", destination)
         st.success("Saved generated voiceover to assets/audio/voiceover.mp3.")
         st.rerun()
 
@@ -219,6 +232,7 @@ if voiceover_upload is not None:
     audio_dir.mkdir(parents=True, exist_ok=True)
     destination = audio_dir / voiceover_upload.name
     destination.write_bytes(voiceover_upload.getbuffer())
+    record_asset(project_name, "voiceover", destination)
     st.success(f"Saved {voiceover_upload.name} to assets/audio.")
     st.rerun()
 
@@ -243,6 +257,7 @@ with upload_cols[0]:
         music_dir.mkdir(parents=True, exist_ok=True)
         destination = music_dir / uploaded_music.name
         destination.write_bytes(uploaded_music.getbuffer())
+        record_asset(project_name, "music", destination)
         st.success(f"Saved {uploaded_music.name} to assets/music.")
         st.rerun()
 with upload_cols[1]:
@@ -267,6 +282,7 @@ with upload_cols[1]:
                     music_dir.mkdir(parents=True, exist_ok=True)
                     destination = music_dir / filename
                     destination.write_bytes(music_bytes)
+                    record_asset(project_name, "music", destination)
                     st.success(f"Downloaded {filename} to assets/music.")
                     st.rerun()
 
@@ -502,8 +518,12 @@ if st.button("Render video (FFmpeg)", width="stretch"):
         renders_dir.mkdir(parents=True, exist_ok=True)
         log_path = renders_dir / "render.log"
         with st.spinner("Rendering video with FFmpeg..."):
-            render_video_from_timeline(timeline_path, renders_dir / "final.mp4", log_path=log_path)
-        st.success("Render complete.")
+            try:
+                render_video_from_timeline(timeline_path, renders_dir / "final.mp4", log_path=log_path)
+            except (RuntimeError, FileNotFoundError, ValueError) as exc:
+                st.error(f"Render failed: {exc}")
+            else:
+                st.success("Render complete.")
 
 st.markdown("### Render output")
 video_path = renders_dir / "final.mp4"
