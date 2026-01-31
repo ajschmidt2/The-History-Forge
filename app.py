@@ -612,7 +612,7 @@ def tab_thumbnail_title() -> None:
         "Thumbnail prompt",
         value=st.session_state.thumbnail_prompt,
         height=120,
-        key="thumbnail_prompt_text",
+        key="thumbnail_prompt",
     )
 
     if st.button("Generate thumbnail image", width="stretch", key="thumbnail_generate_image"):
