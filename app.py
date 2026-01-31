@@ -518,14 +518,19 @@ def tab_thumbnail_title() -> None:
     )
     title_count = st.slider("Number of title ideas", min_value=3, max_value=10, value=5, step=1)
     if st.button("Generate title ideas", width="stretch", key="thumbnail_generate_titles"):
-        st.session_state.video_title_suggestions = generate_video_titles(
-            title_seed,
-            st.session_state.script_text,
-            count=title_count,
-        )
-        if st.session_state.video_title_suggestions:
-            st.session_state.selected_video_title = st.session_state.video_title_suggestions[0]
-        st.rerun()
+        try:
+            st.session_state.video_title_suggestions = generate_video_titles(
+                title_seed,
+                st.session_state.script_text,
+                count=title_count,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface title generation errors to user
+            st.session_state.video_title_suggestions = []
+            st.error(f"Title generation failed: {exc}")
+        else:
+            if st.session_state.video_title_suggestions:
+                st.session_state.selected_video_title = st.session_state.video_title_suggestions[0]
+            st.rerun()
 
     if st.session_state.video_title_suggestions:
         st.session_state.selected_video_title = st.radio(
