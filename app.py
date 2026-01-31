@@ -530,7 +530,7 @@ def tab_thumbnail_title() -> None:
             if "invalid_api_key" in message or "Incorrect API key" in message:
                 st.error(
                     "Title generation failed: invalid OpenAI API key. "
-                    "Set OPENAI_API_KEY (or the Streamlit secret) and try again."
+                    "Set openai_api_key (or the Streamlit secret) and try again."
                 )
             else:
                 st.error(f"Title generation failed: {exc}")
@@ -565,7 +565,7 @@ def tab_thumbnail_title() -> None:
             if "invalid_api_key" in message or "Incorrect API key" in message:
                 st.error(
                     "Thumbnail prompt generation failed: invalid OpenAI API key. "
-                    "Set OPENAI_API_KEY (or the Streamlit secret) and try again."
+                    "Set openai_api_key (or the Streamlit secret) and try again."
                 )
             else:
                 st.error(f"Thumbnail prompt generation failed: {exc}")
