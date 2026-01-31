@@ -608,14 +608,16 @@ def tab_thumbnail_title() -> None:
         else:
             st.rerun()
 
-    st.session_state.thumbnail_prompt = st.text_area(
+    if "thumbnail_prompt" not in st.session_state:
+        st.session_state.thumbnail_prompt = ""
+    st.text_area(
         "Thumbnail prompt",
         value=st.session_state.thumbnail_prompt,
         height=120,
         key="thumbnail_prompt",
     )
 
-    if st.button("Generate thumbnail image", width="stretch", key="thumbnail_generate_image"):
+    if st.button("Create thumbnail image", width="stretch", key="thumbnail_generate_image"):
         image_bytes, err = generate_thumbnail_image(st.session_state.thumbnail_prompt, aspect_ratio="16:9")
         st.session_state.thumbnail_bytes = image_bytes
         st.session_state.thumbnail_error = err
