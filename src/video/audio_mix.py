@@ -12,10 +12,10 @@ class AudioMixPlan:
     map_args: list[str]
 
 
-def build_audio_mix_cmd(meta: Meta, total_duration: float) -> AudioMixPlan:
+def build_audio_mix_cmd(meta: Meta, total_duration: float, start_index: int = 0) -> AudioMixPlan:
     input_args: list[str] = []
     filters: list[str] = []
-    next_index = 0
+    next_index = start_index
     vo_label: str | None = None
 
     if meta.include_voiceover and meta.voiceover and meta.voiceover.path:
