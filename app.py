@@ -554,12 +554,23 @@ def tab_thumbnail_title() -> None:
         key="thumbnail_style",
     )
     if st.button("Generate thumbnail prompt", width="stretch", key="thumbnail_prompt_btn"):
-        st.session_state.thumbnail_prompt = generate_thumbnail_prompt(
-            title_seed,
-            st.session_state.selected_video_title,
-            style,
-        )
-        st.rerun()
+        try:
+            st.session_state.thumbnail_prompt = generate_thumbnail_prompt(
+                title_seed,
+                st.session_state.selected_video_title,
+                style,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface thumbnail prompt errors to user
+            message = str(exc)
+            if "invalid_api_key" in message or "Incorrect API key" in message:
+                st.error(
+                    "Thumbnail prompt generation failed: invalid OpenAI API key. "
+                    "Set OPENAI_API_KEY (or the Streamlit secret) and try again."
+                )
+            else:
+                st.error(f"Thumbnail prompt generation failed: {exc}")
+        else:
+            st.rerun()
 
     st.session_state.thumbnail_prompt = st.text_area(
         "Thumbnail prompt",
