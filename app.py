@@ -526,7 +526,14 @@ def tab_thumbnail_title() -> None:
             )
         except Exception as exc:  # noqa: BLE001 - surface title generation errors to user
             st.session_state.video_title_suggestions = []
-            st.error(f"Title generation failed: {exc}")
+            message = str(exc)
+            if "invalid_api_key" in message or "Incorrect API key" in message:
+                st.error(
+                    "Title generation failed: invalid OpenAI API key. "
+                    "Set OPENAI_API_KEY (or the Streamlit secret) and try again."
+                )
+            else:
+                st.error(f"Title generation failed: {exc}")
         else:
             if st.session_state.video_title_suggestions:
                 st.session_state.selected_video_title = st.session_state.video_title_suggestions[0]
