@@ -226,7 +226,7 @@ def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Pa
 
         include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
         if include_audio:
-            audio_plan = build_audio_mix_cmd(timeline.meta, timeline.total_duration)
+            audio_plan = build_audio_mix_cmd(timeline.meta, timeline.total_duration, start_index=1)
             cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
             cmd.extend(audio_plan.input_args)
             if timeline.meta.burn_captions:
