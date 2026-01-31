@@ -10,8 +10,11 @@ def _get_secret(name: str, default: str = "") -> str:
     try:
         import streamlit as st  # type: ignore
 
-        if hasattr(st, "secrets") and name in st.secrets:
-            return str(st.secrets[name])
+        if hasattr(st, "secrets"):
+            candidates = {name, name.lower(), name.upper()}
+            for key in candidates:
+                if key in st.secrets:
+                    return str(st.secrets[key])
     except Exception:
         pass
     return os.getenv(name, os.getenv(name.upper(), default))
