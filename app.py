@@ -550,14 +550,20 @@ def tab_thumbnail_title() -> None:
             )
         except Exception as exc:  # noqa: BLE001 - surface title generation errors to user
             st.session_state.video_title_suggestions = []
-            message = str(exc)
-            if "invalid_api_key" in message or "Incorrect API key" in message:
-                st.error(
-                    "Title generation failed: invalid OpenAI API key. "
-                    "Set openai_api_key (or the Streamlit secret) and try again."
-                )
+            if isinstance(
+                exc,
+                (AuthenticationError, RateLimitError, APIConnectionError, APIError),
+            ):
+                st.error(_openai_error_message(exc))
             else:
-                st.error(f"Title generation failed: {exc}")
+                message = str(exc)
+                if "invalid_api_key" in message or "Incorrect API key" in message:
+                    st.error(
+                        "Title generation failed: invalid OpenAI API key. "
+                        "Set openai_api_key (or the Streamlit secret) and try again."
+                    )
+                else:
+                    st.error(f"Title generation failed: {exc}")
         else:
             if st.session_state.video_title_suggestions:
                 st.session_state.selected_video_title = st.session_state.video_title_suggestions[0]
@@ -585,14 +591,20 @@ def tab_thumbnail_title() -> None:
                 style,
             )
         except Exception as exc:  # noqa: BLE001 - surface thumbnail prompt errors to user
-            message = str(exc)
-            if "invalid_api_key" in message or "Incorrect API key" in message:
-                st.error(
-                    "Thumbnail prompt generation failed: invalid OpenAI API key. "
-                    "Set openai_api_key (or the Streamlit secret) and try again."
-                )
+            if isinstance(
+                exc,
+                (AuthenticationError, RateLimitError, APIConnectionError, APIError),
+            ):
+                st.error(_openai_error_message(exc))
             else:
-                st.error(f"Thumbnail prompt generation failed: {exc}")
+                message = str(exc)
+                if "invalid_api_key" in message or "Incorrect API key" in message:
+                    st.error(
+                        "Thumbnail prompt generation failed: invalid OpenAI API key. "
+                        "Set openai_api_key (or the Streamlit secret) and try again."
+                    )
+                else:
+                    st.error(f"Thumbnail prompt generation failed: {exc}")
         else:
             st.rerun()
 
