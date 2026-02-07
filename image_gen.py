@@ -1,7 +1,7 @@
 import base64
 import os
 from io import BytesIO
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 from google import genai
 
@@ -34,7 +34,7 @@ def _resolve_model() -> str:
         _get_secret("GOOGLE_AI_STUDIO_IMAGE_MODEL", "")
         or _get_secret("IMAGEN_MODEL", "")
         or _get_secret("imagen_model", "")
-        or "models/imagen-4.0-generate-001"
+        or "models/gemini-2.5-flash-image-preview"
     ).strip()
 
 
@@ -42,8 +42,26 @@ def _maybe_decode_bytes(value: Any) -> Optional[bytes]:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value)
     if isinstance(value, str):
+        normalized = value.strip()
+        if "," in normalized and normalized.startswith("data:"):
+            normalized = normalized.split(",", 1)[1]
+
+        # Try strict decode first, then progressively more permissive formats
+        # to cover SDK variations (whitespace, missing padding, urlsafe chars).
         try:
-            return base64.b64decode(value, validate=True)
+            return base64.b64decode(normalized, validate=True)
+        except Exception:
+            pass
+
+        try:
+            padded = normalized + ("=" * (-len(normalized) % 4))
+            return base64.b64decode(padded)
+        except Exception:
+            pass
+
+        try:
+            padded = normalized + ("=" * (-len(normalized) % 4))
+            return base64.urlsafe_b64decode(padded)
         except Exception:
             return None
     return None
@@ -55,7 +73,15 @@ def _image_to_png_bytes(image: Any) -> Optional[bytes]:
     if isinstance(image, (bytes, bytearray, str)):
         return _maybe_decode_bytes(image)
     if isinstance(image, dict):
-        for key in ("image_bytes", "bytes", "data", "b64_json", "b64"):
+        for key in (
+            "image_bytes",
+            "bytes",
+            "data",
+            "inline_data",
+            "b64_json",
+            "b64",
+            "encoded_image",
+        ):
             raw = _maybe_decode_bytes(image.get(key))
             if raw:
                 return raw
@@ -65,6 +91,15 @@ def _image_to_png_bytes(image: Any) -> Optional[bytes]:
     if hasattr(image, "image_bytes"):
         data = getattr(image, "image_bytes")
         raw = _maybe_decode_bytes(data)
+        if raw:
+            return raw
+    for key in ("bytes", "data", "inline_data", "b64_json", "b64", "encoded_image"):
+        if hasattr(image, key):
+            raw = _maybe_decode_bytes(getattr(image, key))
+            if raw:
+                return raw
+    if hasattr(image, "image"):
+        raw = _image_to_png_bytes(getattr(image, "image"))
         if raw:
             return raw
     if hasattr(image, "save"):
@@ -109,6 +144,60 @@ def _extract_images(result: Any) -> List[bytes]:
     return images
 
 
+def _sequence_length(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, Sequence):
+        return len(value)
+    try:
+        return len(value)
+    except Exception:
+        return None
+
+
+def _is_likely_filtered_or_empty(result: Any) -> bool:
+    generated_images = getattr(result, "generated_images", None)
+    generated_len = _sequence_length(generated_images)
+
+    result_dict = getattr(result, "__dict__", {})
+    response_keys = set(result_dict.keys()) if isinstance(result_dict, dict) else set()
+
+    has_generated_images_field = hasattr(result, "generated_images") or "generated_images" in response_keys
+    has_safety_field = (
+        hasattr(result, "positive_prompt_safety_attributes")
+        or "positive_prompt_safety_attributes" in response_keys
+    )
+
+    # If Imagen returned generated_images metadata but no decodable bytes,
+    # treat it as an empty/filtered prompt result (not parser failure).
+    if has_generated_images_field:
+        return True
+
+    # Also treat explicit safety metadata as a likely filtered response.
+    if has_safety_field and generated_len in (None, 0):
+        return True
+
+    return False
+
+
+def _describe_empty_result(result: Any) -> str:
+    keys = list(getattr(result, "__dict__", {}).keys())
+    details: List[str] = [f"Response keys: {keys}"]
+
+    generated_images = getattr(result, "generated_images", None)
+    if generated_images is not None:
+        try:
+            details.append(f"generated_images length: {len(generated_images)}")
+        except Exception:
+            details.append("generated_images present but length unavailable")
+
+    safety = getattr(result, "positive_prompt_safety_attributes", None)
+    if safety is not None:
+        details.append("positive_prompt_safety_attributes present")
+
+    return "; ".join(details)
+
+
 def generate_imagen_images(
     prompt: str,
     number_of_images: int = 1,
@@ -143,10 +232,16 @@ def generate_imagen_images(
         )
 
     images = _extract_images(result)
-    if not images:
-        shape = list(getattr(result, "__dict__", {}).keys())
-        raise RuntimeError(
-            "No images returned from Imagen response (unexpected response shape). "
-            f"Response keys: {shape}"
-        )
-    return images
+    if images:
+        return images
+
+    if _is_likely_filtered_or_empty(result):
+        # Return an empty list so callers can handle prompt-level filtering
+        # gracefully without treating it as a transport/parsing exception.
+        return []
+
+    raise RuntimeError(
+        "No images returned from Imagen response. This can happen when the prompt "
+        "is blocked by safety filters or when the SDK response payload shape changes. "
+        f"{_describe_empty_result(result)}"
+    )
