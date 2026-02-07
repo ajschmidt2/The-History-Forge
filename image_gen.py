@@ -34,7 +34,7 @@ def _resolve_model() -> str:
         _get_secret("GOOGLE_AI_STUDIO_IMAGE_MODEL", "")
         or _get_secret("IMAGEN_MODEL", "")
         or _get_secret("imagen_model", "")
-        or "models/imagen-4.0-generate-001"
+        or "models/gemini-2.5-flash-image-preview"
     ).strip()
 
 
@@ -157,12 +157,24 @@ def _sequence_length(value: Any) -> Optional[int]:
 
 def _is_likely_filtered_or_empty(result: Any) -> bool:
     generated_images = getattr(result, "generated_images", None)
-    has_generated_images_field = hasattr(result, "generated_images")
     generated_len = _sequence_length(generated_images)
-    has_safety = getattr(result, "positive_prompt_safety_attributes", None) is not None
 
-    # Imagen can return metadata + safety attributes with no rendered bytes.
-    if has_generated_images_field and (generated_len == 0 or has_safety):
+    result_dict = getattr(result, "__dict__", {})
+    response_keys = set(result_dict.keys()) if isinstance(result_dict, dict) else set()
+
+    has_generated_images_field = hasattr(result, "generated_images") or "generated_images" in response_keys
+    has_safety_field = (
+        hasattr(result, "positive_prompt_safety_attributes")
+        or "positive_prompt_safety_attributes" in response_keys
+    )
+
+    # If Imagen returned generated_images metadata but no decodable bytes,
+    # treat it as an empty/filtered prompt result (not parser failure).
+    if has_generated_images_field:
+        return True
+
+    # Also treat explicit safety metadata as a likely filtered response.
+    if has_safety_field and generated_len in (None, 0):
         return True
 
     return False
