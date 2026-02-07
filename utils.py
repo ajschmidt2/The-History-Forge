@@ -270,7 +270,7 @@ def generate_thumbnail_image(prompt: str, aspect_ratio: str = "16:9") -> Tuple[O
     except Exception as exc:  # noqa: BLE001 - surface image generation errors
         return None, str(exc)
     if not images:
-        return None, "No image bytes returned."
+        return None, "No image returned for this prompt (possibly safety-filtered)."
     return images[0], ""
 
 
@@ -628,7 +628,9 @@ def generate_image_for_scene(
             )
             raw = raw_images[0] if raw_images else None
             if not raw:
-                raise RuntimeError("Imagen returned no image bytes.")
+                raise RuntimeError(
+                    "Imagen returned no image bytes for this prompt (likely safety-filtered)."
+                )
 
             img = Image.open(BytesIO(raw)).convert("RGB")
             img = _crop_to_aspect(img, aspect_ratio)
