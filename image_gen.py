@@ -1,7 +1,7 @@
 import base64
 import os
 from io import BytesIO
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 from google import genai
 
@@ -144,6 +144,30 @@ def _extract_images(result: Any) -> List[bytes]:
     return images
 
 
+def _sequence_length(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, Sequence):
+        return len(value)
+    try:
+        return len(value)
+    except Exception:
+        return None
+
+
+def _is_likely_filtered_or_empty(result: Any) -> bool:
+    generated_images = getattr(result, "generated_images", None)
+    has_generated_images_field = hasattr(result, "generated_images")
+    generated_len = _sequence_length(generated_images)
+    has_safety = getattr(result, "positive_prompt_safety_attributes", None) is not None
+
+    # Imagen can return metadata + safety attributes with no rendered bytes.
+    if has_generated_images_field and (generated_len == 0 or has_safety):
+        return True
+
+    return False
+
+
 def _describe_empty_result(result: Any) -> str:
     keys = list(getattr(result, "__dict__", {}).keys())
     details: List[str] = [f"Response keys: {keys}"]
@@ -196,10 +220,16 @@ def generate_imagen_images(
         )
 
     images = _extract_images(result)
-    if not images:
-        raise RuntimeError(
-            "No images returned from Imagen response. This can happen when the prompt "
-            "is blocked by safety filters or when the SDK response payload shape changes. "
-            f"{_describe_empty_result(result)}"
-        )
-    return images
+    if images:
+        return images
+
+    if _is_likely_filtered_or_empty(result):
+        # Return an empty list so callers can handle prompt-level filtering
+        # gracefully without treating it as a transport/parsing exception.
+        return []
+
+    raise RuntimeError(
+        "No images returned from Imagen response. This can happen when the prompt "
+        "is blocked by safety filters or when the SDK response payload shape changes. "
+        f"{_describe_empty_result(result)}"
+    )
