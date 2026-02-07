@@ -42,8 +42,26 @@ def _maybe_decode_bytes(value: Any) -> Optional[bytes]:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value)
     if isinstance(value, str):
+        normalized = value.strip()
+        if "," in normalized and normalized.startswith("data:"):
+            normalized = normalized.split(",", 1)[1]
+
+        # Try strict decode first, then progressively more permissive formats
+        # to cover SDK variations (whitespace, missing padding, urlsafe chars).
         try:
-            return base64.b64decode(value, validate=True)
+            return base64.b64decode(normalized, validate=True)
+        except Exception:
+            pass
+
+        try:
+            padded = normalized + ("=" * (-len(normalized) % 4))
+            return base64.b64decode(padded)
+        except Exception:
+            pass
+
+        try:
+            padded = normalized + ("=" * (-len(normalized) % 4))
+            return base64.urlsafe_b64decode(padded)
         except Exception:
             return None
     return None
@@ -55,7 +73,15 @@ def _image_to_png_bytes(image: Any) -> Optional[bytes]:
     if isinstance(image, (bytes, bytearray, str)):
         return _maybe_decode_bytes(image)
     if isinstance(image, dict):
-        for key in ("image_bytes", "bytes", "data", "b64_json", "b64"):
+        for key in (
+            "image_bytes",
+            "bytes",
+            "data",
+            "inline_data",
+            "b64_json",
+            "b64",
+            "encoded_image",
+        ):
             raw = _maybe_decode_bytes(image.get(key))
             if raw:
                 return raw
@@ -65,6 +91,15 @@ def _image_to_png_bytes(image: Any) -> Optional[bytes]:
     if hasattr(image, "image_bytes"):
         data = getattr(image, "image_bytes")
         raw = _maybe_decode_bytes(data)
+        if raw:
+            return raw
+    for key in ("bytes", "data", "inline_data", "b64_json", "b64", "encoded_image"):
+        if hasattr(image, key):
+            raw = _maybe_decode_bytes(getattr(image, key))
+            if raw:
+                return raw
+    if hasattr(image, "image"):
+        raw = _image_to_png_bytes(getattr(image, "image"))
         if raw:
             return raw
     if hasattr(image, "save"):
@@ -109,6 +144,24 @@ def _extract_images(result: Any) -> List[bytes]:
     return images
 
 
+def _describe_empty_result(result: Any) -> str:
+    keys = list(getattr(result, "__dict__", {}).keys())
+    details: List[str] = [f"Response keys: {keys}"]
+
+    generated_images = getattr(result, "generated_images", None)
+    if generated_images is not None:
+        try:
+            details.append(f"generated_images length: {len(generated_images)}")
+        except Exception:
+            details.append("generated_images present but length unavailable")
+
+    safety = getattr(result, "positive_prompt_safety_attributes", None)
+    if safety is not None:
+        details.append("positive_prompt_safety_attributes present")
+
+    return "; ".join(details)
+
+
 def generate_imagen_images(
     prompt: str,
     number_of_images: int = 1,
@@ -144,9 +197,9 @@ def generate_imagen_images(
 
     images = _extract_images(result)
     if not images:
-        shape = list(getattr(result, "__dict__", {}).keys())
         raise RuntimeError(
-            "No images returned from Imagen response (unexpected response shape). "
-            f"Response keys: {shape}"
+            "No images returned from Imagen response. This can happen when the prompt "
+            "is blocked by safety filters or when the SDK response payload shape changes. "
+            f"{_describe_empty_result(result)}"
         )
     return images
