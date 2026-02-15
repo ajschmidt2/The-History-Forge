@@ -57,6 +57,27 @@ def require_passcode() -> None:
 # State
 # ----------------------------
 
+PREFERENCES_PATH = Path("data/user_preferences.json")
+
+
+def _load_saved_voice_id() -> str:
+    if not PREFERENCES_PATH.exists():
+        return ""
+    try:
+        data = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    voice_id = data.get("voice_id", "") if isinstance(data, dict) else ""
+    return str(voice_id).strip()
+
+
+def _save_voice_id(voice_id: str) -> None:
+    sanitized = (voice_id or "").strip()
+    PREFERENCES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"voice_id": sanitized}
+    PREFERENCES_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def init_state() -> None:
     st.session_state.setdefault("project_title", "Untitled Project")
     st.session_state.setdefault("topic", "")
@@ -76,7 +97,7 @@ def init_state() -> None:
     st.session_state.setdefault("max_scenes", 12)
     st.session_state.setdefault("scenes", [])
 
-    st.session_state.setdefault("voice_id", "")
+    st.session_state.setdefault("voice_id", _load_saved_voice_id())
     st.session_state.setdefault("voiceover_bytes", None)
     st.session_state.setdefault("voiceover_error", None)
     st.session_state.setdefault("voiceover_saved_path", "")
@@ -441,26 +462,41 @@ def tab_voiceover() -> None:
         placeholder="Paste your ElevenLabs voice_id here",
     )
 
-    if st.button("Generate voiceover", type="primary", width="stretch"):
-        with st.spinner("Generating voiceover..."):
-            audio, err = generate_voiceover(
-                st.session_state.script_text,
-                voice_id=st.session_state.voice_id,
-                output_format="mp3",
-            )
-        st.session_state.voiceover_bytes = audio
-        st.session_state.voiceover_error = err
-        if err:
-            st.error(err)
-        else:
-            project_folder = Path("data/projects") / _project_folder_name() / "assets/audio"
-            project_folder.mkdir(parents=True, exist_ok=True)
-            output_path = project_folder / "voiceover.mp3"
-            output_path.write_bytes(audio)
-            st.session_state.voiceover_saved_path = str(output_path)
-            record_asset(_project_folder_name(), "voiceover", output_path)
-            st.toast("Voiceover generated.")
-        st.rerun()
+    controls_left, controls_right = st.columns([1, 1])
+    with controls_left:
+        if st.button("Save voice ID", width="stretch"):
+            try:
+                _save_voice_id(st.session_state.voice_id)
+            except OSError as exc:
+                st.error(f"Could not save voice ID: {exc}")
+            else:
+                st.toast("Voice ID saved.")
+    with controls_right:
+        if st.button("Generate voiceover", type="primary", width="stretch"):
+            try:
+                _save_voice_id(st.session_state.voice_id)
+            except OSError:
+                pass
+
+            with st.spinner("Generating voiceover..."):
+                audio, err = generate_voiceover(
+                    st.session_state.script_text,
+                    voice_id=st.session_state.voice_id,
+                    output_format="mp3",
+                )
+            st.session_state.voiceover_bytes = audio
+            st.session_state.voiceover_error = err
+            if err:
+                st.error(err)
+            else:
+                project_folder = Path("data/projects") / _project_folder_name() / "assets/audio"
+                project_folder.mkdir(parents=True, exist_ok=True)
+                output_path = project_folder / "voiceover.mp3"
+                output_path.write_bytes(audio)
+                st.session_state.voiceover_saved_path = str(output_path)
+                record_asset(_project_folder_name(), "voiceover", output_path)
+                st.toast("Voiceover generated.")
+            st.rerun()
 
     if st.session_state.voiceover_error:
         st.error(st.session_state.voiceover_error)

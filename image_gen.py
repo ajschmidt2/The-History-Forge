@@ -34,7 +34,7 @@ def _resolve_model() -> str:
         _get_secret("GOOGLE_AI_STUDIO_IMAGE_MODEL", "")
         or _get_secret("IMAGEN_MODEL", "")
         or _get_secret("imagen_model", "")
-        or "models/imagen-3.0-generate-002"
+        or "models/imagen-3.0-generate-001"
     ).strip()
 
 
@@ -207,7 +207,7 @@ def generate_imagen_images(
     if not api_key:
         raise RuntimeError("missing google_ai_studio_api_key")
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
     model = _resolve_model()
 
     config = {
