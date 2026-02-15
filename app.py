@@ -109,6 +109,7 @@ def init_state() -> None:
     st.session_state.setdefault("thumbnail_bytes", None)
     st.session_state.setdefault("thumbnail_error", None)
     st.session_state.setdefault("thumbnail_saved_path", "")
+    st.session_state.setdefault("thumbnail_aspect_ratio", "16:9")
     st.session_state.setdefault("video_description_direction", "")
     st.session_state.setdefault("video_description_text", "")
 
@@ -695,6 +696,15 @@ def tab_thumbnail_title() -> None:
         index=0,
         key="thumbnail_style",
     )
+
+    thumbnail_aspect_ratio = st.selectbox(
+        "Thumbnail aspect ratio",
+        ["16:9", "1:1", "9:16", "4:3"],
+        index=["16:9", "1:1", "9:16", "4:3"].index(st.session_state.thumbnail_aspect_ratio)
+        if st.session_state.thumbnail_aspect_ratio in ["16:9", "1:1", "9:16", "4:3"]
+        else 0,
+        key="thumbnail_aspect_ratio",
+    )
     if st.button("Generate thumbnail prompt", width="stretch", key="thumbnail_prompt_btn"):
         try:
             st.session_state.thumbnail_prompt = generate_thumbnail_prompt(
@@ -730,7 +740,7 @@ def tab_thumbnail_title() -> None:
     )
 
     if st.button("Create thumbnail image", width="stretch", key="thumbnail_generate_image"):
-        image_bytes, err = generate_thumbnail_image(st.session_state.thumbnail_prompt, aspect_ratio="16:9")
+        image_bytes, err = generate_thumbnail_image(st.session_state.thumbnail_prompt, aspect_ratio=thumbnail_aspect_ratio)
         st.session_state.thumbnail_bytes = image_bytes
         st.session_state.thumbnail_error = err
         if err:
