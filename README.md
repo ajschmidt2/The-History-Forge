@@ -25,7 +25,7 @@ Imagen models) for images.
 * **Scene planning & prompts** – uses structured JSON planning so visuals stay
   coherent and aligned with the narration.
 * **Optional image generation** – generates real images using AI Studio Imagen
-  models (e.g. `models/gemini-2.5-flash-image-preview`). When image generation fails, the app
+  models (e.g. `models/imagen-3.0-generate-002`). When image generation fails, the app
   falls back to placeholders so you can still export a usable package.
 * **Per-scene regeneration & refinement** – refine the whole script or just a
   single scene prompt, then regenerate only that scene’s image.
@@ -88,7 +88,7 @@ GEMINI_API_KEY = "AIza..."
 
 # Optional overrides
 openai_model = "gpt-4.1-mini"
-GOOGLE_AI_STUDIO_IMAGE_MODEL = "models/gemini-2.5-flash-image-preview"
+GOOGLE_AI_STUDIO_IMAGE_MODEL = "models/imagen-3.0-generate-002"
 ```
 
 4. Run the app:
@@ -146,7 +146,7 @@ async function generateFlashImage() {
 generateFlashImage();
 ```
 
-## Python SDK quickstart (Nano Banana / Gemini 2.5 Flash Preview Image)
+## Python SDK quickstart (Imagen 3)
 
 ```bash
 pip install google-genai
@@ -159,7 +159,7 @@ import os
 def generate():
     client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
     result = client.models.generate_images(
-        model="models/gemini-2.5-flash-image-preview",
+        model="models/imagen-3.0-generate-002",
         prompt="INSERT_INPUT_HERE",
         config=dict(
             number_of_images=1,
