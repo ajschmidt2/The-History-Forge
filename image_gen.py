@@ -34,7 +34,7 @@ def _resolve_model() -> str:
         _get_secret("GOOGLE_AI_STUDIO_IMAGE_MODEL", "")
         or _get_secret("IMAGEN_MODEL", "")
         or _get_secret("imagen_model", "")
-        or "models/gemini-2.5-flash-image-preview"
+        or "models/imagen-3.0-generate-002"
     ).strip()
 
 
