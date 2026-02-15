@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 
 import streamlit as st
+import utils as forge_utils
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
 
 from utils import (
@@ -169,6 +170,40 @@ def _openai_error_message(exc: Exception) -> str:
     if isinstance(exc, APIError):
         return f"OpenAI API error: {exc}"
     return f"OpenAI request failed: {exc}"
+
+
+def _generate_video_description_fallback(topic: str, title: str, direction: str, hashtag_count: int) -> str:
+    base = (title or topic or "This history story").strip()
+    creator_direction = (direction or "").strip()
+    direction_line = f" Angle: {creator_direction}" if creator_direction else ""
+    hashtags = ["#History", "#Documentary", "#Storytelling", "#WorldHistory", "#HistoricalFacts"]
+    hashtags_text = " ".join(hashtags[: max(1, min(hashtag_count, len(hashtags)))])
+    return (
+        f"{base} changed the course of history in ways most people never hear about. "
+        "In this episode, we break down the key events, major figures, and why this story still matters today."
+        f"{direction_line}\n\n"
+        "If you enjoyed this story, subscribe for more history deep-dives.\n\n"
+        f"{hashtags_text}"
+    )
+
+
+def generate_video_description_safe(
+    topic: str,
+    title: str,
+    script: str,
+    direction: str,
+    hashtag_count: int,
+) -> str:
+    generator = getattr(forge_utils, "generate_video_description", None)
+    if callable(generator):
+        return generator(
+            topic=topic,
+            title=title,
+            script=script,
+            direction=direction,
+            hashtag_count=hashtag_count,
+        )
+    return _generate_video_description_fallback(topic, title, direction, hashtag_count)
 
 
 # ----------------------------
@@ -628,7 +663,7 @@ def tab_thumbnail_title() -> None:
     hashtag_count = st.slider("Hashtag count", min_value=3, max_value=15, value=8, step=1)
     if st.button("Generate description + hashtags", width="stretch", key="thumbnail_generate_description"):
         try:
-            st.session_state.video_description_text = generate_video_description(
+            st.session_state.video_description_text = generate_video_description_safe(
                 topic=title_seed,
                 title=st.session_state.selected_video_title,
                 script=st.session_state.script_text,
