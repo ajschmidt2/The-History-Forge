@@ -24,8 +24,8 @@ Imagen models) for images.
   (not chat logs), with progressive generation steps and per-scene controls.
 * **Scene planning & prompts** – uses structured JSON planning so visuals stay
   coherent and aligned with the narration.
-* **Optional image generation** – generates real images using AI Studio Imagen
-  models (e.g. `models/gemini-2.5-flash-image-preview`). When image generation fails, the app
+* **Optional image generation** – generates real images using Google AI Studio image-capable
+  Gemini models (e.g. `gemini-2.5-flash-image`). When image generation fails, the app
   falls back to placeholders so you can still export a usable package.
 * **Per-scene regeneration & refinement** – refine the whole script or just a
   single scene prompt, then regenerate only that scene’s image.
@@ -88,7 +88,7 @@ GEMINI_API_KEY = "AIza..."
 
 # Optional overrides
 openai_model = "gpt-4.1-mini"
-GOOGLE_AI_STUDIO_IMAGE_MODEL = "models/gemini-2.5-flash-image-preview"
+GOOGLE_AI_STUDIO_IMAGE_MODEL = "gemini-2.5-flash-image"
 ```
 
 4. Run the app:
@@ -146,7 +146,7 @@ async function generateFlashImage() {
 generateFlashImage();
 ```
 
-## Python SDK quickstart (Nano Banana / Gemini 2.5 Flash Preview Image)
+## Python SDK quickstart (Gemini 2.5 Flash Image)
 
 ```bash
 pip install google-genai
@@ -154,28 +154,31 @@ pip install google-genai
 
 ```python
 from google import genai
+import base64
 import os
 
 def generate():
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-    result = client.models.generate_images(
-        model="models/gemini-2.5-flash-image-preview",
-        prompt="INSERT_INPUT_HERE",
-        config=dict(
-            number_of_images=1,
-            output_mime_type="image/jpeg",
-            person_generation="ALLOW_ALL",
-            aspect_ratio="1:1",
-            image_size="1K",
-        ),
+    client = genai.Client(
+        api_key=os.environ.get("GEMINI_API_KEY"),
+        http_options={"api_version": "v1beta"},
+    )
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-image",
+        contents="INSERT_INPUT_HERE",
+        config={"response_modalities": ["IMAGE"]},
     )
 
-    if not result.generated_images:
+    if not response.candidates:
         print("No images generated.")
         return
 
-    for n, generated_image in enumerate(result.generated_images):
-        generated_image.image.save(f"generated_image_{n}.jpg")
+    for i, candidate in enumerate(response.candidates):
+        parts = getattr(candidate.content, "parts", [])
+        for part in parts:
+            if getattr(part, "inline_data", None) and getattr(part.inline_data, "data", None):
+                image_bytes = base64.b64decode(part.inline_data.data)
+                with open(f"generated_image_{i}.png", "wb") as f:
+                    f.write(image_bytes)
 
 if __name__ == "__main__":
     generate()

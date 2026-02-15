@@ -34,8 +34,13 @@ def _resolve_model() -> str:
         _get_secret("GOOGLE_AI_STUDIO_IMAGE_MODEL", "")
         or _get_secret("IMAGEN_MODEL", "")
         or _get_secret("imagen_model", "")
-        or "models/gemini-2.5-flash-image-preview"
+        or "gemini-2.5-flash-image"
     ).strip()
+
+
+def _is_gemini_image_model(model: str) -> bool:
+    normalized = (model or "").lower().strip()
+    return normalized.startswith("gemini-") or normalized.startswith("models/gemini-")
 
 
 def _maybe_decode_bytes(value: Any) -> Optional[bytes]:
@@ -141,6 +146,22 @@ def _extract_images(result: Any) -> List[bytes]:
             if raw:
                 images.append(raw)
 
+    if images:
+        return images
+
+    candidates = getattr(result, "candidates", None)
+    if candidates:
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None)
+            if not parts:
+                continue
+            for part in parts:
+                inline_data = getattr(part, "inline_data", None)
+                raw = _image_to_png_bytes(inline_data) or _image_to_png_bytes(part)
+                if raw:
+                    images.append(raw)
+
     return images
 
 
@@ -167,10 +188,11 @@ def _is_likely_filtered_or_empty(result: Any) -> bool:
         hasattr(result, "positive_prompt_safety_attributes")
         or "positive_prompt_safety_attributes" in response_keys
     )
+    has_candidates_field = hasattr(result, "candidates") or "candidates" in response_keys
 
-    # If Imagen returned generated_images metadata but no decodable bytes,
-    # treat it as an empty/filtered prompt result (not parser failure).
-    if has_generated_images_field:
+    # If image metadata exists but no decodable bytes, this is usually
+    # a filtered/empty response rather than a parser bug.
+    if has_generated_images_field or has_candidates_field:
         return True
 
     # Also treat explicit safety metadata as a likely filtered response.
@@ -191,11 +213,46 @@ def _describe_empty_result(result: Any) -> str:
         except Exception:
             details.append("generated_images present but length unavailable")
 
+    candidates = getattr(result, "candidates", None)
+    if candidates is not None:
+        try:
+            details.append(f"candidates length: {len(candidates)}")
+        except Exception:
+            details.append("candidates present but length unavailable")
+
     safety = getattr(result, "positive_prompt_safety_attributes", None)
     if safety is not None:
         details.append("positive_prompt_safety_attributes present")
 
     return "; ".join(details)
+
+
+def _generate_images_with_model(client: genai.Client, model: str, prompt: str, config: dict[str, Any]) -> Any:
+    if _is_gemini_image_model(model):
+        generation_config: dict[str, Any] = {
+            "response_modalities": ["IMAGE"],
+            "candidate_count": max(1, int(config.get("number_of_images", 1))),
+        }
+        return client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=generation_config,
+        )
+
+    try:
+        return client.models.generate_images(
+            model=model,
+            prompt=prompt,
+            config={**config, "person_generation": "ALLOW_ALL"},
+        )
+    except ValueError as exc:
+        if "PersonGeneration.ALLOW_ALL" not in str(exc):
+            raise
+        return client.models.generate_images(
+            model=model,
+            prompt=prompt,
+            config=config,
+        )
 
 
 def generate_imagen_images(
@@ -207,7 +264,7 @@ def generate_imagen_images(
     if not api_key:
         raise RuntimeError("missing google_ai_studio_api_key")
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
     model = _resolve_model()
 
     config = {
@@ -216,20 +273,7 @@ def generate_imagen_images(
         "aspect_ratio": aspect_ratio,
     }
 
-    try:
-        result = client.models.generate_images(
-            model=model,
-            prompt=prompt,
-            config={**config, "person_generation": "ALLOW_ALL"},
-        )
-    except ValueError as exc:
-        if "PersonGeneration.ALLOW_ALL" not in str(exc):
-            raise
-        result = client.models.generate_images(
-            model=model,
-            prompt=prompt,
-            config=config,
-        )
+    result = _generate_images_with_model(client=client, model=model, prompt=prompt, config=config)
 
     images = _extract_images(result)
     if images:
@@ -241,7 +285,7 @@ def generate_imagen_images(
         return []
 
     raise RuntimeError(
-        "No images returned from Imagen response. This can happen when the prompt "
+        "No images returned from image generation response. This can happen when the prompt "
         "is blocked by safety filters or when the SDK response payload shape changes. "
         f"{_describe_empty_result(result)}"
     )
