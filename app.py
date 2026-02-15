@@ -20,6 +20,7 @@ from utils import (
     generate_voiceover,
     generate_thumbnail_image,
     generate_thumbnail_prompt,
+    generate_video_description,
     generate_video_titles,
 )
 from src.storage import record_asset, record_assets, upsert_project
