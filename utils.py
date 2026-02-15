@@ -228,6 +228,55 @@ def generate_video_titles(topic: str, script: str, count: int = 5) -> List[str]:
     return [line.strip("- ").strip() for line in raw.splitlines() if line.strip()][:count]
 
 
+def generate_video_description(
+    topic: str,
+    title: str,
+    script: str,
+    direction: str,
+    hashtag_count: int = 8,
+) -> str:
+    topic = (topic or "").strip()
+    title = (title or "").strip()
+    script = (script or "").strip()
+    direction = (direction or "").strip()
+    hashtag_count = max(3, min(int(hashtag_count), 15))
+
+    client = _openai_client()
+    if client is None:
+        base = title or topic or "This history story"
+        return (
+            f"{base} changed the course of history in ways most people never hear about. "
+            "In this episode, we break down the turning points, key figures, and the real stakes behind the event.\n\n"
+            f"#{(topic or 'history').replace(' ', '')} #History #Documentary #Storytelling #WorldHistory"
+        )
+
+    system = (
+        "You are a YouTube metadata writer for history channels. "
+        "Write clear descriptions optimized for watch-time and discovery while staying factual."
+    )
+    user = (
+        f"Topic: {topic or 'History documentary'}\n"
+        f"Video title: {title or 'Untitled'}\n"
+        f"Creator direction: {direction or 'No extra direction provided.'}\n"
+        f"Script excerpt:\n{script[:2500]}\n\n"
+        "Write a YouTube description with: \n"
+        "1) A strong 2-3 sentence hook paragraph\n"
+        "2) A short context paragraph\n"
+        "3) A one-line call to action\n"
+        f"4) Exactly {hashtag_count} relevant hashtags at the end\n"
+        "Return plain text only."
+    )
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.7,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content.strip()
+
+
 def generate_thumbnail_prompt(topic: str, title: str, style: str) -> str:
     topic = (topic or "").strip()
     title = (title or "").strip()

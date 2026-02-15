@@ -227,6 +227,34 @@ def _describe_empty_result(result: Any) -> str:
     return "; ".join(details)
 
 
+def _model_not_found_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        "not_found" in msg
+        or "is not found" in msg
+        or "not supported for predict" in msg
+        or "404" in msg
+    )
+
+
+def _candidate_models(primary_model: str) -> list[str]:
+    candidates = [
+        primary_model,
+        "gemini-2.5-flash-image",
+        "imagen-3.0-generate-002",
+        "imagen-3.0-generate-001",
+    ]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for model in candidates:
+        normalized = (model or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
 def _generate_images_with_model(client: genai.Client, model: str, prompt: str, config: dict[str, Any]) -> Any:
     if _is_gemini_image_model(model):
         generation_config: dict[str, Any] = {
@@ -273,19 +301,40 @@ def generate_imagen_images(
         "aspect_ratio": aspect_ratio,
     }
 
-    result = _generate_images_with_model(client=client, model=model, prompt=prompt, config=config)
+    last_error: Optional[Exception] = None
+    for candidate_model in _candidate_models(model):
+        try:
+            result = _generate_images_with_model(
+                client=client,
+                model=candidate_model,
+                prompt=prompt,
+                config=config,
+            )
+        except Exception as exc:  # noqa: BLE001 - bubble non-model errors after fallback attempts
+            last_error = exc
+            if _model_not_found_error(exc):
+                continue
+            raise
 
-    images = _extract_images(result)
-    if images:
-        return images
+        images = _extract_images(result)
+        if images:
+            return images
 
-    if _is_likely_filtered_or_empty(result):
-        # Return an empty list so callers can handle prompt-level filtering
-        # gracefully without treating it as a transport/parsing exception.
-        return []
+        if _is_likely_filtered_or_empty(result):
+            # Return an empty list so callers can handle prompt-level filtering
+            # gracefully without treating it as a transport/parsing exception.
+            return []
 
-    raise RuntimeError(
-        "No images returned from image generation response. This can happen when the prompt "
-        "is blocked by safety filters or when the SDK response payload shape changes. "
-        f"{_describe_empty_result(result)}"
-    )
+        raise RuntimeError(
+            "No images returned from image generation response. This can happen when the prompt "
+            "is blocked by safety filters or when the SDK response payload shape changes. "
+            f"{_describe_empty_result(result)}"
+        )
+
+    if last_error is not None:
+        raise RuntimeError(
+            "Image model was unavailable for this API version. "
+            f"Tried models: {', '.join(_candidate_models(model))}. Last error: {last_error}"
+        ) from last_error
+
+    raise RuntimeError("Image generation failed before receiving a response.")
