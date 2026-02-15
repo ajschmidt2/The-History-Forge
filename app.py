@@ -653,12 +653,11 @@ def tab_thumbnail_title() -> None:
         )
 
     st.markdown("#### Description + hashtags")
-    st.session_state.video_description_direction = st.text_area(
+    st.text_area(
         "Direction for description",
-        value=st.session_state.video_description_direction,
         height=110,
         placeholder="e.g., Focus on military strategy, keep tone serious, mention leadership lessons.",
-        key="thumbnail_description_direction",
+        key="video_description_direction",
         help="Tell the AI what angle, tone, and key points you want in the description.",
     )
     hashtag_count = st.slider("Hashtag count", min_value=3, max_value=15, value=8, step=1)
@@ -668,7 +667,7 @@ def tab_thumbnail_title() -> None:
                 topic=title_seed,
                 title=st.session_state.selected_video_title,
                 script=st.session_state.script_text,
-                direction=st.session_state.video_description_direction,
+                direction=st.session_state.get("video_description_direction", ""),
                 hashtag_count=hashtag_count,
             )
         except Exception as exc:  # noqa: BLE001 - surface description generation errors to user
@@ -680,13 +679,13 @@ def tab_thumbnail_title() -> None:
             else:
                 st.error(f"Description generation failed: {exc}")
         else:
+            st.toast("Video description generated.")
             st.rerun()
 
     st.text_area(
         "Video description (editable)",
-        value=st.session_state.video_description_text,
         height=220,
-        key="thumbnail_video_description",
+        key="video_description_text",
         help="Edit this before copying into YouTube.",
     )
 
