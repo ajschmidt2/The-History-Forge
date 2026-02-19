@@ -15,6 +15,14 @@ from src.video.timeline_schema import CaptionStyle, Music, Timeline, Voiceover
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 
 
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
+
+
+def _is_video(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
         return ""
@@ -130,9 +138,10 @@ def _build_timeline_from_ui(
     music_volume_db: float,
     include_voiceover: bool,
     include_music: bool,
+    scene_edits: list[dict[str, str | float]] | None = None,
 ) -> Timeline:
     voiceover_path = audio_files[0] if include_voiceover and audio_files else None
-    return build_default_timeline(
+    timeline = build_default_timeline(
         project_id=project_name,
         title=title,
         images=images,
@@ -147,6 +156,75 @@ def _build_timeline_from_ui(
         include_voiceover=include_voiceover,
         include_music=include_music,
     )
+    if scene_edits:
+        current_start = 0.0
+        for scene, edit in zip(timeline.scenes, scene_edits):
+            custom_duration = float(edit.get("duration", scene.duration))
+            scene.duration = round(max(0.25, custom_duration), 3)
+            scene.start = round(current_start, 3)
+            scene.caption = str(edit.get("caption", "")).strip() or None
+            current_start += scene.duration
+        timeline.meta.scene_duration = None
+    return timeline
+
+
+def _default_scene_edits(media_files: list[Path], timeline_path: Path, default_duration: float) -> list[dict[str, str | float]]:
+    timeline_scenes_by_path: dict[str, dict[str, str | float]] = {}
+    if timeline_path.exists():
+        try:
+            timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
+        except ValueError:
+            timeline = None
+        if timeline:
+            timeline_scenes_by_path = {
+                scene.image_path: {"duration": scene.duration, "caption": scene.caption or ""}
+                for scene in timeline.scenes
+            }
+
+    edits: list[dict[str, str | float]] = []
+    for media_path in media_files:
+        from_timeline = timeline_scenes_by_path.get(str(media_path), {})
+        edits.append(
+            {
+                "duration": float(from_timeline.get("duration", default_duration)),
+                "caption": str(from_timeline.get("caption", "")),
+            }
+        )
+    return edits
+
+
+def _collect_scene_edits(media_files: list[Path], timeline_path: Path, default_duration: float) -> list[dict[str, str | float]]:
+    state_key = f"video_scene_edits::{timeline_path}"
+    if state_key not in st.session_state or len(st.session_state[state_key]) != len(media_files):
+        st.session_state[state_key] = _default_scene_edits(media_files, timeline_path, default_duration)
+
+    edits: list[dict[str, str | float]] = st.session_state[state_key]
+    for index, media_path in enumerate(media_files, start=1):
+        row = edits[index - 1]
+        with st.expander(f"Scene {index}: {media_path.name}"):
+            col_a, col_b = st.columns([1, 2])
+            with col_a:
+                if _is_video(media_path):
+                    st.video(str(media_path))
+                else:
+                    st.image(str(media_path), width=220)
+            with col_b:
+                row["duration"] = st.number_input(
+                    "Duration (seconds)",
+                    min_value=0.25,
+                    max_value=30.0,
+                    step=0.25,
+                    value=float(row.get("duration", default_duration)),
+                    key=f"video_scene_duration_{index}_{media_path.name}",
+                )
+                row["caption"] = st.text_area(
+                    "Subtitle line(s) for this scene",
+                    value=str(row.get("caption", "")),
+                    height=80,
+                    key=f"video_scene_caption_{index}_{media_path.name}",
+                    placeholder="Optional subtitle text shown during this scene.",
+                )
+    return edits
 
 
 st.set_page_config(page_title="Video Studio", layout="wide")
@@ -164,15 +242,20 @@ project_path = projects_root / project_name
 upsert_project(project_name, project_name.replace("_", " "))
 
 images_dir = project_path / "assets/images"
+videos_dir = project_path / "assets/videos"
 audio_dir = project_path / "assets/audio"
 music_dir = project_path / "assets/music"
 renders_dir = project_path / "renders"
 
-images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
+images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in IMAGE_EXTENSIONS])
+videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in VIDEO_EXTENSIONS])
+media_files = sorted(images + videos)
 audio_files = sorted([p for p in audio_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
 music_files = sorted([p for p in music_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
 if images:
     record_assets(project_name, "image", images)
+if videos:
+    record_assets(project_name, "video", videos)
 if audio_files:
     record_assets(project_name, "voiceover", audio_files)
 if music_files:
@@ -180,7 +263,7 @@ if music_files:
 
 st.markdown("### Assets")
 cols = st.columns(3)
-cols[0].metric("Images", len(images))
+cols[0].metric("Scene media", len(media_files))
 cols[1].metric("Voiceover files", len(audio_files))
 cols[2].metric("Music files", len(music_files))
 
@@ -193,6 +276,26 @@ if session_images:
         st.rerun()
 else:
     st.caption("No generated images found in the current session.")
+
+uploaded_scene_media = st.file_uploader(
+    "Upload scene media (.png, .jpg, .jpeg, .mp4, .mov, .webm, .mkv)",
+    type=["png", "jpg", "jpeg", "mp4", "mov", "webm", "mkv"],
+    key="video_scene_media_upload",
+)
+if uploaded_scene_media is not None:
+    suffix = Path(uploaded_scene_media.name).suffix.lower()
+    if suffix in VIDEO_EXTENSIONS:
+        destination_dir = videos_dir
+        asset_type = "video"
+    else:
+        destination_dir = images_dir
+        asset_type = "image"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / uploaded_scene_media.name
+    destination.write_bytes(uploaded_scene_media.getbuffer())
+    record_asset(project_name, asset_type, destination)
+    st.success(f"Saved {uploaded_scene_media.name} to {destination_dir.relative_to(project_path)}.")
+    st.rerun()
 
 if audio_files:
     st.caption(f"Using voiceover: {audio_files[0].name}")
@@ -302,203 +405,170 @@ scene_duration_default = meta_defaults.get("scene_duration", 3.0)
 if scene_duration_default is None:
     scene_duration_default = 3.0
 scene_duration = st.slider(
-    "Seconds per image",
+    "Default seconds per scene",
     min_value=1.0,
     max_value=12.0,
     value=float(scene_duration_default),
     step=0.5,
-    help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
+    help="Default used for new scene rows. You can override each scene duration in the Scene editor tab.",
     key="video_scene_duration",
 )
 
-st.markdown("### Closed captions")
-captions_cols = st.columns([2, 1])
-with captions_cols[0]:
-    burn_captions = st.checkbox(
-        "Enable captions (burn-in)",
-        value=bool(meta_defaults.get("burn_captions", True)),
-        key="video_burn_captions",
-    )
-    caption_presets = _caption_style_presets()
-    caption_style_defaults = meta_defaults.get("caption_style", {}) or {}
-    try:
-        current_caption_style = CaptionStyle(**caption_style_defaults)
-    except (TypeError, ValueError):
-        current_caption_style = CaptionStyle()
-    position_options = _caption_position_options()
-    caption_default_name = _match_caption_preset(current_caption_style, caption_presets)
-    caption_style_name = st.selectbox(
-        "Caption style",
-        list(caption_presets.keys()),
-        index=list(caption_presets.keys()).index(caption_default_name),
-        key="video_caption_style",
-        disabled=not burn_captions,
-        on_change=_apply_caption_preset,
-        args=(caption_presets, position_options),
-    )
-    current_position_label = next(
-        (label for label, value in position_options.items() if value == current_caption_style.position),
-        "Lower",
-    )
-    caption_position_label = st.selectbox(
-        "Caption position",
-        list(position_options.keys()),
-        index=list(position_options.keys()).index(current_position_label),
-        key="video_caption_position",
-        disabled=not burn_captions,
-    )
-    selected_caption_style = caption_presets[caption_style_name].model_copy(deep=True)
-    selected_caption_style.font_size = int(
-        st.slider(
-            "Caption size",
-            min_value=12,
-            max_value=48,
-            value=selected_caption_style.font_size,
-            step=2,
-            key="video_caption_font_size",
+edit_tab, render_tab = st.tabs(["Scene editor", "Render settings"])
+
+with edit_tab:
+    st.caption("Set per-scene timing and subtitles. These values are written into timeline.json.")
+    if media_files:
+        scene_edits = _collect_scene_edits(media_files, timeline_path, float(scene_duration))
+    else:
+        scene_edits = []
+        st.info("No media found in assets/images or assets/videos. Add media to edit scene timing and subtitles.")
+
+with render_tab:
+    st.caption("Global render settings and caption style controls.")
+
+    st.markdown("### Closed captions")
+    captions_cols = st.columns([2, 1])
+    with captions_cols[0]:
+        burn_captions = st.checkbox(
+            "Enable captions (burn-in)",
+            value=bool(meta_defaults.get("burn_captions", True)),
+            key="video_burn_captions",
+        )
+        caption_presets = _caption_style_presets()
+        caption_style_defaults = meta_defaults.get("caption_style", {}) or {}
+        try:
+            current_caption_style = CaptionStyle(**caption_style_defaults)
+        except (TypeError, ValueError):
+            current_caption_style = CaptionStyle()
+        position_options = _caption_position_options()
+        caption_default_name = _match_caption_preset(current_caption_style, caption_presets)
+        caption_style_name = st.selectbox(
+            "Caption style",
+            list(caption_presets.keys()),
+            index=list(caption_presets.keys()).index(caption_default_name),
+            key="video_caption_style",
+            disabled=not burn_captions,
+            on_change=_apply_caption_preset,
+            args=(caption_presets, position_options),
+        )
+        current_position_label = next(
+            (label for label, value in position_options.items() if value == current_caption_style.position),
+            "Lower",
+        )
+        caption_position_label = st.selectbox(
+            "Caption position",
+            list(position_options.keys()),
+            index=list(position_options.keys()).index(current_position_label),
+            key="video_caption_position",
             disabled=not burn_captions,
         )
+        selected_caption_style = caption_presets[caption_style_name].model_copy(deep=True)
+        selected_caption_style.font_size = int(
+            st.slider(
+                "Caption size",
+                min_value=12,
+                max_value=48,
+                value=selected_caption_style.font_size,
+                step=2,
+                key="video_caption_font_size",
+                disabled=not burn_captions,
+            )
+        )
+        selected_caption_style.position = position_options[caption_position_label]
+    with captions_cols[1]:
+        st.caption("Preview")
+        _render_caption_preview(selected_caption_style)
+
+    include_voiceover_default = meta_defaults.get("include_voiceover")
+    if include_voiceover_default is None:
+        include_voiceover_default = bool(audio_files)
+    include_music_default = meta_defaults.get("include_music")
+    if include_music_default is None:
+        include_music_default = bool(music_files)
+
+    options_cols = st.columns(2)
+    with options_cols[0]:
+        include_voiceover = st.checkbox("Include voiceover", value=bool(include_voiceover_default))
+    with options_cols[1]:
+        include_music = st.checkbox("Include background music", value=bool(include_music_default))
+
+    music_defaults = meta_defaults.get("music") or {}
+    music_volume_db = st.slider(
+        "Music volume (dB)",
+        min_value=-36.0,
+        max_value=0.0,
+        value=float(music_defaults.get("volume_db", -18)),
+        step=1.0,
     )
-    selected_caption_style.position = position_options[caption_position_label]
-with captions_cols[1]:
-    st.caption("Preview")
-    _render_caption_preview(selected_caption_style)
 
-include_voiceover_default = meta_defaults.get("include_voiceover")
-if include_voiceover_default is None:
-    include_voiceover_default = bool(audio_files)
-include_music_default = meta_defaults.get("include_music")
-if include_music_default is None:
-    include_music_default = bool(music_files)
-
-options_cols = st.columns(2)
-with options_cols[0]:
-    include_voiceover = st.checkbox("Include voiceover", value=bool(include_voiceover_default))
-with options_cols[1]:
-    include_music = st.checkbox("Include background music", value=bool(include_music_default))
-
-include_voiceover_default = meta_defaults.get("include_voiceover")
-if include_voiceover_default is None:
-    include_voiceover_default = bool(audio_files)
-include_music_default = meta_defaults.get("include_music")
-if include_music_default is None:
-    include_music_default = bool(music_files)
-
-options_cols = st.columns(2)
-with options_cols[0]:
-    include_voiceover = st.checkbox("Include voiceover", value=bool(include_voiceover_default))
-with options_cols[1]:
-    include_music = st.checkbox("Include background music", value=bool(include_music_default))
-
-effective_scene_duration = None if include_voiceover and audio_files else scene_duration
-
-music_defaults = meta_defaults.get("music") or {}
-music_volume_db = st.slider(
-    "Music volume (dB)",
-    min_value=-36.0,
-    max_value=0.0,
-    value=float(music_defaults.get("volume_db", -18)),
-    step=1.0,
-)
+if burn_captions and not any(str(edit.get("caption", "")).strip() for edit in scene_edits):
+    st.warning("Captions are enabled, but no per-scene subtitle text is set yet. Add lines in the Scene editor tab.")
 
 st.markdown("### Actions")
 
 if st.button("Generate timeline.json", width="stretch"):
-    if not images:
-        st.error("No images found in assets/images/. Add scene images to generate a timeline.")
+    if not media_files:
+        st.error("No scene media found in assets/images or assets/videos. Add media to generate a timeline.")
     elif include_voiceover and not audio_files:
         st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
     else:
         timeline = _build_timeline_from_ui(
             project_name=project_name,
             title=title,
-            images=images,
+            images=media_files,
             audio_files=audio_files,
             music_files=music_files,
             aspect_ratio=aspect_ratio,
             fps=int(fps),
-            scene_duration=effective_scene_duration,
+            scene_duration=float(scene_duration),
             burn_captions=burn_captions,
             caption_style=selected_caption_style,
             music_volume_db=music_volume_db,
             include_voiceover=include_voiceover,
             include_music=include_music,
+            scene_edits=scene_edits,
         )
         write_timeline_json(timeline, timeline_path)
         st.success("timeline.json generated.")
 
 if st.button("Render video (FFmpeg)", width="stretch"):
-    if not images:
-        st.error("No images found in assets/images/. Add scene images before rendering.")
+    if not media_files:
+        st.error("No scene media found in assets/images or assets/videos. Add media before rendering.")
         st.stop()
     if include_voiceover and not audio_files:
         st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
         st.stop()
-    if timeline_path.exists():
-        try:
-            timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
-        except ValueError as exc:
-            st.error(f"Unable to read timeline.json: {exc}")
-            st.stop()
-        image_paths = {str(image) for image in images}
-        timeline_images = [scene.image_path for scene in timeline.scenes]
-        if len(timeline_images) != len(images) or any(path not in image_paths for path in timeline_images):
-            timeline = _build_timeline_from_ui(
-                project_name=project_name,
-                title=title,
-                images=images,
-                audio_files=audio_files,
-                music_files=music_files,
-                aspect_ratio=aspect_ratio,
-                fps=int(fps),
-                scene_duration=effective_scene_duration,
-                burn_captions=burn_captions,
-                caption_style=selected_caption_style,
-                music_volume_db=music_volume_db,
-                include_voiceover=include_voiceover,
-                include_music=include_music,
-            )
-            write_timeline_json(timeline, timeline_path)
-            st.info("Timeline rebuilt to match current images.")
-        else:
-            timeline.meta.include_voiceover = include_voiceover
-            timeline.meta.include_music = include_music
-            if include_voiceover and audio_files:
-                timeline.meta.voiceover = timeline.meta.voiceover or Voiceover(path=str(audio_files[0]))
-                timeline.meta.voiceover.path = str(audio_files[0])
-            else:
-                timeline.meta.voiceover = None
-            if include_music and music_files:
-                timeline.meta.music = timeline.meta.music or Music(path=str(music_files[0]), volume_db=music_volume_db)
-                timeline.meta.music.path = str(music_files[0])
-                timeline.meta.music.volume_db = music_volume_db
-            else:
-                timeline.meta.music = None
-            timeline.meta.burn_captions = burn_captions
-            timeline.meta.caption_style = selected_caption_style
-            timeline.meta.scene_duration = effective_scene_duration
-            write_timeline_json(timeline, timeline_path)
+
+    timeline = _build_timeline_from_ui(
+        project_name=project_name,
+        title=title,
+        images=media_files,
+        audio_files=audio_files,
+        music_files=music_files,
+        aspect_ratio=aspect_ratio,
+        fps=int(fps),
+        scene_duration=float(scene_duration),
+        burn_captions=burn_captions,
+        caption_style=selected_caption_style,
+        music_volume_db=music_volume_db,
+        include_voiceover=include_voiceover,
+        include_music=include_music,
+        scene_edits=scene_edits,
+    )
+    if include_voiceover and audio_files:
+        timeline.meta.voiceover = Voiceover(path=str(audio_files[0]))
     else:
-        timeline = _build_timeline_from_ui(
-            project_name=project_name,
-            title=title,
-            images=images,
-            audio_files=audio_files,
-            music_files=music_files,
-            aspect_ratio=aspect_ratio,
-            fps=int(fps),
-            scene_duration=effective_scene_duration,
-            burn_captions=burn_captions,
-            caption_style=selected_caption_style,
-            music_volume_db=music_volume_db,
-            include_voiceover=include_voiceover,
-            include_music=include_music,
-        )
-        write_timeline_json(timeline, timeline_path)
+        timeline.meta.voiceover = None
+    if include_music and music_files:
+        timeline.meta.music = Music(path=str(music_files[0]), volume_db=music_volume_db)
+    else:
+        timeline.meta.music = None
+    write_timeline_json(timeline, timeline_path)
 
     missing_images = [scene.image_path for scene in timeline.scenes if not Path(scene.image_path).exists()]
     if missing_images:
-        st.error("Missing scene images referenced by timeline.json.")
+        st.error("Missing scene media referenced by timeline.json.")
         st.code("\n".join(missing_images))
         st.stop()
     if timeline.meta.include_voiceover:
