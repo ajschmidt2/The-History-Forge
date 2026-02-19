@@ -156,7 +156,7 @@ def _crossfade_scenes(
 def _subtitle_filter(subtitle_path: Path) -> str:
     path_str = subtitle_path.as_posix()
     escaped = path_str.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    return f"subtitles='{escaped}'"
+    return f"subtitles=filename='{escaped}':charenc=UTF-8"
 
 
 def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Path, log_path: str | Path | None = None) -> Path:
