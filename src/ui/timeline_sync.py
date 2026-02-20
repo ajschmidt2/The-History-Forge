@@ -16,6 +16,29 @@ def _scene_index_from_stem(stem: str, fallback: int) -> int:
     return fallback
 
 
+def _scene_number_from_path(path: Path) -> int | None:
+    stem = path.stem.lower()
+    if stem.startswith("s"):
+        digits = "".join(ch for ch in stem[1:] if ch.isdigit())
+        if digits:
+            return int(digits)
+    return None
+
+
+def _media_sort_key(path: Path) -> tuple[int, int, str]:
+    scene_number = _scene_number_from_path(path)
+    if scene_number is not None:
+        return (0, scene_number, path.name.lower())
+    return (1, 10**9, path.name.lower())
+
+
+def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: int) -> list[str]:
+    captions = [str(caption or "") for caption in (scene_captions or [])[:expected_count]]
+    if len(captions) < expected_count:
+        captions.extend([""] * (expected_count - len(captions)))
+    return captions
+
+
 def sync_timeline_for_project(
     project_path: Path,
     project_id: str,
@@ -31,7 +54,8 @@ def sync_timeline_for_project(
     music_dir = project_path / "assets/music"
 
     if media_files is None:
-        media_files = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
+        media_files = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}], key=_media_sort_key)
+    media_files = sorted(media_files, key=_media_sort_key)
     if not media_files:
         return None
 
@@ -103,9 +127,39 @@ def sync_timeline_for_project(
         narration_max_sec=narration_max_sec,
     )
 
-    if scene_captions:
-        for scene, caption in zip(timeline.scenes, scene_captions):
-            formatted = format_caption(str(caption or ""))
+    normalized_captions = _normalize_scene_captions(scene_captions, len(media_files))
+    if len(timeline.scenes) != len(normalized_captions):
+        timeline = build_default_timeline(
+            project_id=project_id,
+            title=title,
+            images=media_files,
+            voiceover_path=audio_files[0] if include_voiceover else None,
+            aspect_ratio=aspect_ratio,
+            fps=fps,
+            burn_captions=burn_captions,
+            caption_style=caption_style,
+            music_path=music_files[0] if include_music else None,
+            music_volume_db=music_volume_db,
+            include_voiceover=include_voiceover,
+            include_music=include_music,
+            enable_motion=True,
+            crossfade=crossfade,
+            crossfade_duration=crossfade_duration,
+            scene_duration=float(scene_duration) if scene_duration is not None else None,
+            scene_excerpts=scene_excerpts,
+            narration_wpm=narration_wpm,
+            narration_min_sec=narration_min_sec,
+            narration_max_sec=narration_max_sec,
+        )
+    if len(timeline.scenes) != len(normalized_captions):
+        raise ValueError(
+            f"Caption mapping mismatch: {len(timeline.scenes)} timeline scenes vs {len(normalized_captions)} captions. "
+            "Regenerate timeline and verify scene media ordering."
+        )
+
+    if normalized_captions:
+        for scene, caption in zip(timeline.scenes, normalized_captions):
+            formatted = format_caption(caption)
             scene.caption = formatted or None
     elif session_scenes:
         excerpt_by_index: dict[int, str] = {}
@@ -118,6 +172,10 @@ def sync_timeline_for_project(
             scene_index = _scene_index_from_stem(Path(scene.image_path).stem, i)
             formatted = format_caption(excerpt_by_index.get(scene_index) or "")
             scene.caption = formatted or f"Scene {i}"
+
+    for scene in timeline.scenes:
+        if scene.caption is None:
+            scene.caption = ""
 
     write_timeline_json(timeline, timeline_path)
     return timeline_path

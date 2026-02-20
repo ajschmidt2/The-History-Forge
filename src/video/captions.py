@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .timeline_schema import Timeline
+from .timeline_schema import CaptionStyle, Timeline
 
 
 def _format_srt_time(seconds: float) -> str:
@@ -37,23 +37,32 @@ def _ass_play_resolution(timeline: Timeline) -> tuple[int, int]:
         return 1920, 1080
 
 
+def normalize_caption_style(style: CaptionStyle, width: int, height: int) -> CaptionStyle:
+    """Normalize caption style font size to readable ASS pixel values."""
+    normalized = style.model_copy(deep=True)
+    if normalized.font_size <= 20:
+        normalized.font_size = int(max(36, normalized.font_size * 5))
+    return normalized
+
+
 def build_srt_from_timeline(timeline: Timeline) -> str:
     lines: list[str] = []
-    index = 1
-    for scene in timeline.scenes:
+    current_start = 0.0
+
+    for index, scene in enumerate(timeline.scenes, start=1):
         caption = (scene.caption or "").strip()
-        if not caption:
-            continue
-        start = _format_srt_time(scene.start)
-        end = _format_srt_time(scene.end)
+        start = _format_srt_time(current_start)
+        end_time = current_start + max(0.0, float(scene.duration))
+        end = _format_srt_time(end_time)
         lines.extend([str(index), f"{start} --> {end}", caption, ""])
-        index += 1
+        current_start = end_time
+
     return "\n".join(lines).strip() + ("\n" if lines else "")
 
 
 def build_ass_from_timeline(timeline: Timeline) -> str:
-    style = timeline.meta.caption_style
     play_res_x, play_res_y = _ass_play_resolution(timeline)
+    style = normalize_caption_style(timeline.meta.caption_style, play_res_x, play_res_y)
     primary = "&H00FFFFFF"
     secondary = "&H008A8A8A"
     outline = "&H00000000"
@@ -111,9 +120,13 @@ def write_ass_file(output_path: str | Path, timeline: Timeline) -> Path:
     return output_path
 
 
-def write_srt_file(output_path: str | Path, timeline: Timeline) -> Path:
+def write_srt(timeline: Timeline, out_path: str | Path) -> Path:
     srt_text = build_srt_from_timeline(timeline)
-    output_path = Path(output_path)
+    output_path = Path(out_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(srt_text, encoding="utf-8")
     return output_path
+
+
+def write_srt_file(output_path: str | Path, timeline: Timeline) -> Path:
+    return write_srt(timeline, output_path)

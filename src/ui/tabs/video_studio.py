@@ -42,13 +42,36 @@ def _load_render_report(report_path: Path) -> dict:
         return {}
 
 
+def _trim_debug_text(value: str, limit: int = 140) -> str:
+    normalized = (value or "").strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1] + "…"
+
+
+def _render_debug_samples(items: list[str], label: str) -> None:
+    st.markdown(f"**{label}**")
+    if not items:
+        st.caption("(none)")
+        return
+
+    st.caption("First 3")
+    for idx, item in enumerate(items[:3]):
+        st.code(f"[{idx}] repr={item!r}\ntrimmed={_trim_debug_text(item)!r}")
+
+    st.caption("Last 3")
+    start_idx = max(0, len(items) - 3)
+    for idx in range(start_idx, len(items)):
+        item = items[idx]
+        st.code(f"[{idx}] repr={item!r}\ntrimmed={_trim_debug_text(item)!r}")
+
 def _caption_style_presets() -> dict[str, CaptionStyle]:
     return {
-        "Bold Impact": CaptionStyle(font="Impact", font_size=10, line_spacing=6, bottom_margin=120),
-        "Clean Sans": CaptionStyle(font="Arial", font_size=9, line_spacing=5, bottom_margin=120),
-        "Tall Outline": CaptionStyle(font="Helvetica", font_size=10, line_spacing=6, bottom_margin=130),
-        "Compact": CaptionStyle(font="Verdana", font_size=9, line_spacing=4, bottom_margin=110),
-        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=12, line_spacing=7, bottom_margin=140),
+        "Bold Impact": CaptionStyle(font="Impact", font_size=56, line_spacing=6, bottom_margin=120),
+        "Clean Sans": CaptionStyle(font="Arial", font_size=48, line_spacing=5, bottom_margin=120),
+        "Tall Outline": CaptionStyle(font="Helvetica", font_size=52, line_spacing=6, bottom_margin=130),
+        "Compact": CaptionStyle(font="Verdana", font_size=42, line_spacing=4, bottom_margin=110),
+        "Large Center": CaptionStyle(font="Trebuchet MS", font_size=64, line_spacing=7, bottom_margin=140),
     }
 
 
@@ -137,6 +160,20 @@ def _scene_number_from_path(path: Path) -> int | None:
         return None
 
 
+def _media_sort_key(path: Path) -> tuple[int, int, str]:
+    scene_number = _scene_number_from_path(path)
+    if scene_number is not None:
+        return (0, scene_number, path.name.lower())
+    return (1, 10**9, path.name.lower())
+
+
+def _normalize_caption_list(captions: list[str], expected_count: int) -> list[str]:
+    normalized = [str(caption or "") for caption in captions[:expected_count]]
+    if len(normalized) < expected_count:
+        normalized.extend([""] * (expected_count - len(normalized)))
+    return normalized
+
+
 def _script_chunks_for_scene_count(script_text: str, scene_count: int) -> list[str]:
     text = (script_text or "").strip()
     if scene_count <= 0:
@@ -216,9 +253,10 @@ def _default_scene_captions(media_files: list[Path], timeline_path: Path) -> lis
 def _collect_scene_captions(media_files: list[Path], timeline_path: Path) -> list[str]:
     state_key = f"video_scene_captions::{timeline_path}"
     if state_key not in st.session_state or len(st.session_state[state_key]) != len(media_files):
-        st.session_state[state_key] = _default_scene_captions(media_files, timeline_path)
+        st.session_state[state_key] = _normalize_caption_list(_default_scene_captions(media_files, timeline_path), len(media_files))
 
-    captions: list[str] = st.session_state[state_key]
+    captions: list[str] = _normalize_caption_list(st.session_state[state_key], len(media_files))
+    st.session_state[state_key] = captions
     for idx, media_path in enumerate(media_files, start=1):
         with st.expander(f"Scene {idx}: {media_path.name}"):
             if media_path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
@@ -233,6 +271,9 @@ def _collect_scene_captions(media_files: list[Path], timeline_path: Path) -> lis
                 key=f"video_scene_caption_{idx}_{media_path.name}",
             )
             captions[idx - 1] = format_caption(edited_caption) or f"Scene {idx}"
+
+    captions = _normalize_caption_list(captions, len(media_files))
+    st.session_state[state_key] = captions
     return captions
 
 
@@ -266,7 +307,7 @@ def tab_video_compile() -> None:
 
     images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
     videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}])
-    media_files = sorted(images + videos)
+    media_files = sorted(images + videos, key=_media_sort_key)
     audio_files = sorted([p for p in audio_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
     music_files = sorted([p for p in music_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
     if images:
@@ -405,7 +446,7 @@ def tab_video_compile() -> None:
     with settings_cols[2]:
         fps = st.number_input(
             "FPS",
-            min_value=12,
+            min_value=24,
             max_value=60,
             value=int(meta_defaults.get("fps", 30)),
             key="video_fps",
@@ -427,7 +468,7 @@ def tab_video_compile() -> None:
     if media_files:
         scene_captions = _collect_scene_captions(media_files, timeline_path)
         if st.button("Auto-fill subtitles from scene script excerpts", width="stretch", key="video_auto_captions"):
-            scene_captions = _default_scene_captions(media_files, timeline_path)
+            scene_captions = _normalize_caption_list(_default_scene_captions(media_files, timeline_path), len(media_files))
             st.session_state[f"video_scene_captions::{timeline_path}"] = scene_captions
             st.success("Subtitles auto-filled from script and scene excerpts.")
             st.rerun()
@@ -475,10 +516,11 @@ def tab_video_compile() -> None:
         selected_caption_style.font_size = int(
             st.slider(
                 "Caption size",
-                min_value=12,
-                max_value=48,
+                min_value=24,
+                max_value=96,
                 value=selected_caption_style.font_size,
                 step=2,
+                help="Font size in output pixels for burned-in captions.",
                 key="video_caption_font_size",
                 disabled=not burn_captions,
             )
@@ -586,23 +628,7 @@ def tab_video_compile() -> None:
     }
 
     if media_files:
-        sync_timeline_for_project(
-            project_path=project_path,
-            project_id=project_name,
-            title=title,
-            media_files=media_files,
-            session_scenes=st.session_state.get("scenes", []),
-            scene_captions=scene_captions,
-            meta_overrides=timeline_meta_overrides,
-        )
-
-    st.markdown("### Actions")
-    if st.button("Generate timeline.json", width="stretch", key="video_generate_timeline"):
-        if not media_files:
-            st.error("No scene media found in assets/images or assets/videos. Add media to generate a timeline.")
-        elif include_voiceover and not audio_files:
-            st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
-        else:
+        try:
             sync_timeline_for_project(
                 project_path=project_path,
                 project_id=project_name,
@@ -612,7 +638,62 @@ def tab_video_compile() -> None:
                 scene_captions=scene_captions,
                 meta_overrides=timeline_meta_overrides,
             )
-            st.success("timeline.json generated.")
+        except ValueError as exc:
+            st.error(f"Timeline sync failed: {exc}")
+
+    st.markdown("### Actions")
+    if st.button("Generate timeline.json", width="stretch", key="video_generate_timeline"):
+        if not media_files:
+            st.error("No scene media found in assets/images or assets/videos. Add media to generate a timeline.")
+        elif include_voiceover and not audio_files:
+            st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
+        else:
+            try:
+                sync_timeline_for_project(
+                    project_path=project_path,
+                    project_id=project_name,
+                    title=title,
+                    media_files=media_files,
+                    session_scenes=st.session_state.get("scenes", []),
+                    scene_captions=scene_captions,
+                    meta_overrides=timeline_meta_overrides,
+                )
+            except ValueError as exc:
+                st.error(f"timeline.json generation failed: {exc}")
+            else:
+                st.success("timeline.json generated.")
+
+    with st.expander("Debug: Captions & Timeline", expanded=False):
+        st.write(f"len(images): {len(media_files)}")
+        st.write(f"len(scene_captions): {len(scene_captions)}")
+        _render_debug_samples(scene_captions, "Scene captions")
+
+        if timeline_path.exists():
+            try:
+                timeline_debug = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
+            except ValueError as exc:
+                st.error(f"Unable to parse timeline.json for debugging: {exc}")
+            else:
+                st.write(f"len(timeline.scenes): {len(timeline_debug.scenes)}")
+                _render_debug_samples([scene.caption or "" for scene in timeline_debug.scenes], "timeline.scenes[*].caption")
+                _render_debug_samples([scene.image_path for scene in timeline_debug.scenes], "timeline.scenes[*].image_path")
+                st.write("timeline.meta.caption_style:")
+                st.json(timeline_debug.meta.caption_style.model_dump())
+                st.write(f"timeline.meta.burn_captions: {timeline_debug.meta.burn_captions}")
+        else:
+            st.caption("timeline.json not found.")
+
+        debug_srt_path = renders_dir / "captions.srt"
+        st.write(f"captions.srt exists: {debug_srt_path.exists()}")
+        if debug_srt_path.exists():
+            srt_lines = debug_srt_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            st.write(f"captions.srt line count: {len(srt_lines)}")
+            first_lines = "\n".join(srt_lines[:30])
+            last_lines = "\n".join(srt_lines[-30:])
+            st.markdown("**captions.srt first 30 lines**")
+            st.code(first_lines or "(empty)")
+            st.markdown("**captions.srt last 30 lines**")
+            st.code(last_lines or "(empty)")
 
     if st.button("Render video (FFmpeg)", width="stretch", key="video_render"):
         if not media_files:
