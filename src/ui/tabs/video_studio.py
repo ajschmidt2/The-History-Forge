@@ -33,6 +33,15 @@ def _load_timeline_meta(timeline_path: Path) -> dict:
         return {}
 
 
+def _load_render_report(report_path: Path) -> dict:
+    if not report_path.exists():
+        return {}
+    try:
+        return json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
 def _caption_style_presets() -> dict[str, CaptionStyle]:
     return {
         "Bold Impact": CaptionStyle(font="Impact", font_size=10, line_spacing=6, bottom_margin=120),
@@ -652,11 +661,28 @@ def tab_video_compile() -> None:
         else:
             renders_dir.mkdir(parents=True, exist_ok=True)
             log_path = renders_dir / "render.log"
+            report_path = renders_dir / "render_report.json"
             with st.spinner("Rendering video with FFmpeg..."):
                 try:
-                    render_video_from_timeline(timeline_path, renders_dir / "final.mp4", log_path=log_path)
+                    render_video_from_timeline(
+                        timeline_path,
+                        renders_dir / "final.mp4",
+                        log_path=log_path,
+                        report_path=report_path,
+                    )
                 except (RuntimeError, FileNotFoundError, ValueError) as exc:
-                    st.error(f"Render failed: {exc}")
+                    st.error(
+                        "Render failed. Verify media paths/codecs and inspect the FFmpeg diagnostics below for the"
+                        f" exact command error.\n\nDetails: {exc}"
+                    )
+                    failure_log = _tail_file(log_path, lines=50)
+                    if failure_log:
+                        st.markdown("#### Last 50 log lines")
+                        st.code(failure_log, language="bash")
+                    report = _load_render_report(report_path)
+                    if report:
+                        st.markdown("#### Structured render report")
+                        st.json(report)
                 else:
                     st.success("Render complete.")
 
@@ -664,6 +690,7 @@ def tab_video_compile() -> None:
     video_path = renders_dir / "final.mp4"
     srt_path = renders_dir / "captions.srt"
     log_path = renders_dir / "render.log"
+    report_path = renders_dir / "render_report.json"
 
     if video_path.exists():
         st.video(str(video_path))
@@ -677,3 +704,8 @@ def tab_video_compile() -> None:
     if log_text:
         st.markdown("#### Render log")
         st.code(log_text, language="bash")
+
+    report = _load_render_report(report_path)
+    if report:
+        st.markdown("#### Render report")
+        st.json(report)
