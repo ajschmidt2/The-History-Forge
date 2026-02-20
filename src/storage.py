@@ -77,3 +77,10 @@ def record_assets(project_id: str, asset_type: str, paths: Iterable[Path]) -> No
                 """,
                 (project_id, asset_type, path.name, str(resolved), resolved.stat().st_size),
             )
+
+
+def delete_project_records(project_id: str) -> None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM assets WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
