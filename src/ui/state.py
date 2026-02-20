@@ -139,14 +139,15 @@ def render_project_selector() -> None:
     )
 
     if selected_option == new_label:
-        st.session_state.new_project_title = st.text_input(
+        default_new_project_title = st.session_state.get("new_project_title") or st.session_state.project_title
+        new_project_title_input = st.text_input(
             "New project title",
-            value=st.session_state.new_project_title or st.session_state.project_title,
+            value=default_new_project_title,
             key="new_project_title",
             placeholder="e.g., The Rise of Rome",
         )
         if st.button("Create and use project", width="stretch"):
-            new_title = (st.session_state.new_project_title or "").strip()
+            new_title = (new_project_title_input or "").strip()
             if not new_title:
                 st.warning("Enter a project title first.")
                 return
@@ -154,7 +155,6 @@ def render_project_selector() -> None:
             ensure_project_exists(project_id)
             st.session_state.project_id = project_id
             st.session_state.project_title = new_title
-            st.session_state.project_selector = project_id
             st.toast(f"Using project: {project_id}")
             st.rerun()
     else:
