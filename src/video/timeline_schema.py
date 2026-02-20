@@ -78,6 +78,9 @@ class Meta(BaseModel):
     include_music: bool = True
     crossfade: bool = False
     crossfade_duration: float = 0.3
+    narration_wpm: float = 160
+    narration_min_sec: float = 1.5
+    narration_max_sec: float = 12.0
     caption_style: CaptionStyle = Field(default_factory=CaptionStyle)
     music: Optional[Music] = None
     voiceover: Optional[Voiceover] = None
