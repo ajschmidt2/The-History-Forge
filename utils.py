@@ -62,6 +62,7 @@ class Scene:
     primary_image_index: int = 0
     status: str = "active"
     image_error: str = ""
+    estimated_duration_sec: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -74,7 +75,276 @@ class Scene:
 # ----------------------------
 # Script generation
 # ----------------------------
-def generate_script(topic: str, length: str, tone: str) -> str:
+def generate_research_brief(topic: str, tone: str, length: str, audience: str, angle: str) -> str:
+    topic = (topic or "").strip()
+    if not topic:
+        return "Please enter a topic."
+
+    tone_clean = (tone or "Documentary").strip() or "Documentary"
+    length_clean = (length or "8–10 minutes").strip() or "8–10 minutes"
+    audience_clean = (audience or "General audience").strip() or "General audience"
+    angle_clean = (angle or "Balanced overview").strip() or "Balanced overview"
+
+    client = _openai_client()
+    if client is None:
+        return (
+            f"# Research Brief: {topic}\n\n"
+            "## Key Facts\n"
+            "- [Missing openai_api_key] Add `openai_api_key` to generate AI research briefs.\n"
+            "- Placeholder fact set is shown to preserve output format.\n"
+            f"- Topic focus: {topic}.\n"
+            f"- Tone target: {tone_clean}.\n"
+            f"- Audience target: {audience_clean}.\n"
+            f"- Story angle: {angle_clean}.\n"
+            "- Verify names, dates, and primary-source claims before publishing.\n"
+            "- Confirm modern historian consensus where interpretations differ.\n"
+            "- Mark disputed casualty numbers and uncertain statistics.\n"
+            "- Avoid unsourced quotes in final script.\n\n"
+            "## Timeline\n"
+            "- c. [date] — Early context event relevant to the topic.\n"
+            "- c. [date] — Key turning point.\n"
+            "- c. [date] — Consequence or expansion phase.\n"
+            "- c. [date] — Major conflict or transition.\n"
+            "- c. [date] — Legacy milestone.\n\n"
+            "## Key People and Places\n"
+            "- People: [Person 1], [Person 2], [Person 3].\n"
+            "- Places: [Place 1], [Place 2], [Place 3].\n\n"
+            "## Suggested Angles\n"
+            "1. The hidden turning point and why it mattered.\n"
+            "2. The human story behind policy and power.\n"
+            "3. What modern audiences misunderstand about this topic.\n\n"
+            "## Risky Claims / Uncertain Areas\n"
+            "- Claims with missing primary-source citations.\n"
+            "- Conflicting date ranges across references.\n"
+            "- National narratives that may introduce bias.\n"
+            "- Attribution of motives stated as fact without documentation."
+        )
+
+    system = (
+        "You are a meticulous history research assistant for documentary scripting. "
+        "Return concise, factual notes and flag uncertainty clearly."
+    )
+    user = (
+        "Create a research brief with deterministic markdown headings and structure.\n"
+        f"Topic: {topic}\n"
+        f"Tone: {tone_clean}\n"
+        f"Video length target: {length_clean}\n"
+        f"Audience: {audience_clean}\n"
+        f"Preferred angle: {angle_clean}\n\n"
+        "Output format requirements (must follow exactly):\n"
+        "# Research Brief: <topic>\n"
+        "## Key Facts\n"
+        "- 10 to 15 bullet points\n"
+        "## Timeline\n"
+        "- 5 to 10 dated events when applicable (use c. for approximate dates)\n"
+        "## Key People and Places\n"
+        "- Bulleted list of notable people and places\n"
+        "## Suggested Angles\n"
+        "1. Option one\n2. Option two\n3. Option three\n"
+        "## Risky Claims / Uncertain Areas\n"
+        "- Bulleted list of claims requiring verification\n"
+        "Do not add any other headings or sections."
+    )
+
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content.strip()
+
+
+
+def _default_outline(topic: str) -> dict[str, Any]:
+    topic_clean = (topic or "History topic").strip() or "History topic"
+    return {
+        "hook": f"Open with a surprising truth about {topic_clean}.",
+        "context": f"Set the historical stage so viewers understand the stakes behind {topic_clean}.",
+        "beats": [
+            {
+                "title": "Origins",
+                "bullets": [
+                    "Introduce the early conditions and major forces at play.",
+                    "Name the first major decision or event that changes momentum.",
+                ],
+            },
+            {
+                "title": "Escalation",
+                "bullets": [
+                    "Show how conflict or pressure grows over time.",
+                    "Connect at least one key person or place to the turning point.",
+                ],
+            },
+            {
+                "title": "Consequences",
+                "bullets": [
+                    "Describe immediate outcomes for institutions and everyday people.",
+                    "Highlight one long-term effect that still matters now.",
+                ],
+            },
+        ],
+        "twist_or_insight": "Reveal a lesser-known interpretation or misunderstood fact.",
+        "modern_relevance": "Explain how this history still shapes current politics, culture, or strategy.",
+        "cta": "Close by inviting viewers to subscribe for more deep history stories.",
+    }
+
+
+def _normalize_outline_payload(payload: object, topic: str) -> dict[str, Any]:
+    fallback = _default_outline(topic)
+    if not isinstance(payload, dict):
+        return fallback
+
+    hook = str(payload.get("hook", fallback["hook"]) or fallback["hook"])
+    context = str(payload.get("context", fallback["context"]) or fallback["context"])
+    twist = str(payload.get("twist_or_insight", fallback["twist_or_insight"]) or fallback["twist_or_insight"])
+    relevance = str(payload.get("modern_relevance", fallback["modern_relevance"]) or fallback["modern_relevance"])
+    cta = str(payload.get("cta", fallback["cta"]) or fallback["cta"])
+
+    beats_raw = payload.get("beats", [])
+    beats: list[dict[str, Any]] = []
+    if isinstance(beats_raw, list):
+        for beat in beats_raw[:8]:
+            if not isinstance(beat, dict):
+                continue
+            title = str(beat.get("title", "") or "").strip()
+            bullets_raw = beat.get("bullets", [])
+            bullets = [str(item).strip() for item in bullets_raw if str(item).strip()] if isinstance(bullets_raw, list) else []
+            bullets = bullets[:4]
+            if title and bullets:
+                beats.append({"title": title, "bullets": bullets})
+
+    if not beats:
+        beats = fallback["beats"]
+
+    return {
+        "hook": hook,
+        "context": context,
+        "beats": beats,
+        "twist_or_insight": twist,
+        "modern_relevance": relevance,
+        "cta": cta,
+    }
+
+
+def generate_outline(
+    topic: str,
+    research_brief: str,
+    tone: str,
+    length: str,
+    audience: str,
+    angle: str,
+) -> dict[str, Any]:
+    topic_clean = (topic or "").strip()
+    if not topic_clean:
+        return _default_outline("History topic")
+
+    client = _openai_client()
+    if client is None:
+        return _default_outline(topic_clean)
+
+    brief_text = (research_brief or "").strip()
+    brief_block = f"\n\nResearch brief context:\n{brief_text}" if brief_text else ""
+
+    system = (
+        "You are a history documentary story editor. Build concise, coherent beat maps before scriptwriting."
+    )
+    user = (
+        f"Topic: {topic_clean}\n"
+        f"Tone: {(tone or 'Documentary').strip()}\n"
+        f"Length target: {(length or '8–10 minutes').strip()}\n"
+        f"Audience: {(audience or 'General audience').strip()}\n"
+        f"Angle: {(angle or 'Balanced overview').strip()}\n"
+        "\nReturn strict JSON with keys: hook, context, beats, twist_or_insight, modern_relevance, cta.\n"
+        "- beats must be an array with 3 to 8 beat objects\n"
+        "- each beat object must have: title, bullets\n"
+        "- bullets must contain 2 to 4 concise strings\n"
+        "No markdown. No extra keys."
+        f"{brief_block}"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.4,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        return _default_outline(topic_clean)
+
+    raw = resp.choices[0].message.content.strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    return _normalize_outline_payload(parsed, topic_clean)
+
+
+def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_level: str, pacing: str) -> str:
+    normalized_outline = _normalize_outline_payload(outline, str(outline.get("hook", "History topic")) if isinstance(outline, dict) else "History topic")
+
+    client = _openai_client()
+    if client is None:
+        beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
+        return (
+            f"[Missing openai_api_key] Placeholder script from outline.\n\n"
+            f"Hook: {normalized_outline['hook']}\n"
+            f"Context: {normalized_outline['context']}\n"
+            f"Beats: {beat_titles}\n"
+            f"Twist: {normalized_outline['twist_or_insight']}\n"
+            f"Modern relevance: {normalized_outline['modern_relevance']}\n"
+            f"CTA: {normalized_outline['cta']}"
+        )
+
+    system = (
+        "You are a YouTube history scriptwriter. Convert an outline into a smooth, engaging narration. "
+        "Use natural transitions between beats and preserve factual caution."
+    )
+    user = (
+        f"Tone: {(tone or 'Documentary').strip()}\n"
+        f"Reading level: {(reading_level or 'General').strip()}\n"
+        f"Pacing: {(pacing or 'Balanced').strip()}\n\n"
+        f"Outline JSON:\n{json.dumps(normalized_outline, indent=2)}\n\n"
+        "Write one continuous script with no headings or bullet points. "
+        "Cover each beat in order, include natural transitions, and end with the CTA."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.6,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
+        return (
+            "[OpenAI request failed] Placeholder script from outline.\n\n"
+            f"Hook: {normalized_outline['hook']}\n"
+            f"Context: {normalized_outline['context']}\n"
+            f"Beats: {beat_titles}\n"
+            f"Twist: {normalized_outline['twist_or_insight']}\n"
+            f"Modern relevance: {normalized_outline['modern_relevance']}\n"
+            f"CTA: {normalized_outline['cta']}"
+        )
+
+    return resp.choices[0].message.content.strip()
+
+def generate_script(
+    topic: str,
+    length: str,
+    tone: str,
+    audience: str = "",
+    angle: str = "",
+    research_brief: str = "",
+) -> str:
     topic = (topic or "").strip()
     if not topic:
         return "Please enter a topic."
@@ -98,15 +368,23 @@ def generate_script(topic: str, length: str, tone: str) -> str:
         "End with a quick call-to-action to subscribe."
     )
 
+    brief_text = (research_brief or "").strip()
+    brief_block = f"\n\nResearch brief (use this as source context):\n{brief_text}" if brief_text else ""
+    audience_block = f"Audience: {(audience or 'General audience').strip()}\n"
+    angle_block = f"Story angle: {(angle or 'Balanced overview').strip()}\n"
+
     user = (
         f"Topic: {topic}\n"
         f"Tone: {tone}\n"
-        f"Target length: ~{target_words} words\n\n"
-        "Write a single continuous narration script with:\n"
+        f"Target length: ~{target_words} words\n"
+        f"{audience_block}"
+        f"{angle_block}"
+        "\nWrite a single continuous narration script with:\n"
         "1) Hook (1–3 sentences)\n"
         "2) Main story (well-structured paragraphs)\n"
         "3) Ending CTA (1–2 sentences)\n"
         "No headings. No bullet lists."
+        f"{brief_block}"
     )
 
     resp = client.chat.completions.create(
@@ -174,14 +452,27 @@ def rewrite_description(script: str, description: str, mode: str = "refresh") ->
         "Return only the rewritten description."
     )
 
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0.6,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.6,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
+        return (
+            "[OpenAI request failed] Placeholder script from outline.\n\n"
+            f"Hook: {normalized_outline['hook']}\n"
+            f"Context: {normalized_outline['context']}\n"
+            f"Beats: {beat_titles}\n"
+            f"Twist: {normalized_outline['twist_or_insight']}\n"
+            f"Modern relevance: {normalized_outline['modern_relevance']}\n"
+            f"CTA: {normalized_outline['cta']}"
+        )
+
     return resp.choices[0].message.content.strip()
 
 
@@ -384,82 +675,135 @@ def _fallback_chunk_scenes(script: str, target_n: int) -> List[Scene]:
 
 
 # ----------------------------
-# Scene splitting (LLM + ENFORCE exact N)
+# Scene splitting (beat-aware + deterministic duration estimates)
 # ----------------------------
-def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
+_STOPWORDS = {
+    "the", "and", "that", "with", "from", "this", "into", "about", "after", "before", "their", "there",
+    "were", "have", "has", "had", "been", "being", "they", "them", "than", "then", "when", "where",
+    "while", "which", "whose", "what", "your", "you", "our", "for", "are", "was", "will", "would",
+    "could", "should", "over", "under", "between", "through", "across", "during", "because", "very",
+}
+
+
+def _estimate_duration_sec(text: str, wpm: int) -> float:
+    words = len((text or "").split())
+    rate = max(90, min(int(wpm or 160), 240))
+    seconds = (words / rate) * 60.0 if words else 0.0
+    return round(max(2.0, seconds), 1)
+
+
+def _extract_visual_keywords(text: str, min_items: int = 5, max_items: int = 10) -> str:
+    tokens = re.findall(r"[A-Za-z][A-Za-z\-']+", (text or "").lower())
+    ranked: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if len(token) < 4 or token in _STOPWORDS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        ranked.append(token)
+        if len(ranked) >= max_items:
+            break
+    if len(ranked) < min_items:
+        defaults = ["era", "location", "architecture", "wardrobe", "atmosphere", "props", "lighting"]
+        for item in defaults:
+            if item not in seen:
+                ranked.append(item)
+            if len(ranked) >= min_items:
+                break
+    return ", ".join(ranked[:max_items])
+
+
+def _split_by_headings_paragraphs(script: str, target_n: int) -> list[str]:
+    chunks = [c.strip() for c in re.split(r"\n\s*\n+", script) if c.strip()]
+    if not chunks:
+        chunks = [script.strip()]
+
+    grouped: list[str] = []
+    for chunk in chunks:
+        if len(chunk.split()) > 180:
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", chunk) if s.strip()]
+            grouped.extend(sentences if sentences else [chunk])
+        else:
+            grouped.append(chunk)
+
+    if len(grouped) >= target_n:
+        return [" ".join(group).strip() for group in _split_into_groups(grouped, target_n)]
+
+    words = script.split()
+    if not words:
+        return []
+    return [" ".join(group).strip() for group in _split_into_groups(words, target_n)]
+
+
+def _outline_beats(outline: object) -> list[dict[str, Any]]:
+    if not isinstance(outline, dict):
+        return []
+    beats = outline.get("beats", [])
+    if not isinstance(beats, list):
+        return []
+    clean: list[dict[str, Any]] = []
+    for beat in beats:
+        if not isinstance(beat, dict):
+            continue
+        title = str(beat.get("title", "") or "").strip()
+        bullets_raw = beat.get("bullets", [])
+        bullets = [str(b).strip() for b in bullets_raw if str(b).strip()] if isinstance(bullets_raw, list) else []
+        if title:
+            clean.append({"title": title, "bullets": bullets[:4]})
+    return clean
+
+
+def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str, Any] | None = None, wpm: int = 160) -> List[Scene]:
     script = (script or "").strip()
     if not script:
         return []
 
-    max_scenes = min(max_scenes, 75)
+    target = max(1, min(int(max_scenes or 8), 75))
+    beats = _outline_beats(outline)
 
-    # 1) Start with deterministic fallback that ALWAYS produces exactly N
-    fallback = _fallback_chunk_scenes(script, max_scenes)
+    if beats:
+        target = min(target, len(beats))
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
+        base_units = sentences if len(sentences) >= target else [p.strip() for p in re.split(r"\n\s*\n+", script) if p.strip()]
+        if not base_units:
+            base_units = [script]
+        groups = _split_into_groups(base_units, target)
 
-    client = _openai_client()
-    if client is None:
-        return fallback
+        scenes: list[Scene] = []
+        for i in range(target):
+            beat = beats[i]
+            excerpt = " ".join(groups[i]).strip() if i < len(groups) else ""
+            excerpt = excerpt or script[:280].strip()
+            beat_text = " ".join(beat.get("bullets", []))
+            keyword_source = f"{beat.get('title', '')} {beat_text} {excerpt}"
+            scenes.append(
+                Scene(
+                    index=i + 1,
+                    title=str(beat.get("title", "") or f"Beat {i+1}"),
+                    script_excerpt=excerpt,
+                    visual_intent=_extract_visual_keywords(keyword_source),
+                    estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
+                )
+            )
+        return scenes
 
-    payload = {
-        "task": "Split narration into scenes for visuals.",
-        "max_scenes": max_scenes,
-        "return": {"format": "json", "field": "scenes"},
-        "scene_schema": {"title": "string", "text": "1–3 sentences", "visual_intent": "one sentence"},
-        "script": script,
-    }
-
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            temperature=0.3,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": "Return ONLY valid JSON."},
-                {"role": "user", "content": json.dumps(payload)},
-            ],
+    chunks = _split_by_headings_paragraphs(script, target)
+    scenes: list[Scene] = []
+    for i, txt in enumerate(chunks[:target], start=1):
+        excerpt = txt.strip() or script[:280].strip()
+        scenes.append(
+            Scene(
+                index=i,
+                title=f"Scene {i}",
+                script_excerpt=excerpt,
+                visual_intent=_extract_visual_keywords(excerpt),
+                estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
+            )
         )
 
-        data = json.loads(resp.choices[0].message.content)
-        raw = data.get("scenes", [])
-        if not isinstance(raw, list):
-            raw = []
-
-        # 2) Only overlay when the model returns a full set to preserve even coverage.
-        if len(raw) >= max_scenes:
-            for i in range(min(len(raw), max_scenes)):
-                sc = raw[i] if isinstance(raw[i], dict) else {}
-                title = str(sc.get("title", fallback[i].title)).strip() or fallback[i].title
-                text = str(sc.get("text", fallback[i].script_excerpt)).strip() or fallback[i].script_excerpt
-                vi = str(sc.get("visual_intent", fallback[i].visual_intent)).strip() or fallback[i].visual_intent
-
-                fallback[i] = Scene(
-                    index=i + 1,
-                    title=title,
-                    script_excerpt=text,
-                    visual_intent=vi,
-                    image_prompt=fallback[i].image_prompt,
-                    image_bytes=fallback[i].image_bytes,
-                )
-
-    except Exception:
-        # If OpenAI fails or returns weird JSON, we still return fallback
-        pass
-
-    # 3) Guarantee numbering + exact length
-    fallback = fallback[:max_scenes]
-    for i, s in enumerate(fallback, start=1):
-        s.index = i
-        if not s.title:
-            s.title = f"Scene {i}"
-        if not s.script_excerpt:
-            s.script_excerpt = script[:240].strip()
-        if not s.visual_intent:
-            s.visual_intent = (
-                "Create a strong historical visual. Identify the time period and location from the excerpt: "
-                f"{s.script_excerpt[:180]}..."
-            )
-
-    return fallback
+    return scenes
 
 # ----------------------------
 # Prompt generation (ENFORCE one prompt per scene)
