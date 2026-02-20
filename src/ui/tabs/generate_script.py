@@ -5,8 +5,20 @@ import streamlit as st
 
 from src.research.web_research import Source, search_topic, summarize_sources
 from src.ui.state import active_project_id, clear_downstream, openai_error_message, script_ready
-from utils import generate_lucky_topic, generate_research_brief, generate_script
+from utils import generate_lucky_topic, generate_outline, generate_research_brief, generate_script, generate_script_from_outline
 
+
+
+
+def _save_outline_json(outline_text: str) -> None:
+    outline_dir = Path("data/projects") / active_project_id()
+    outline_dir.mkdir(parents=True, exist_ok=True)
+    outline_path = outline_dir / "outline.json"
+    try:
+        parsed = json.loads(outline_text)
+    except json.JSONDecodeError:
+        return
+    outline_path.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
 
 def _save_research_artifacts(brief_markdown: str, sources: list[Source]) -> None:
     research_dir = Path("data/projects") / active_project_id() / "research"
@@ -113,6 +125,78 @@ def tab_generate_script() -> None:
                 "Use this brief to generate script",
                 key="use_research_brief_for_script",
             )
+
+    st.session_state.reading_level = st.selectbox(
+        "Reading level",
+        ["General", "Middle School", "High School", "College"],
+        index=["General", "Middle School", "High School", "College"].index(st.session_state.reading_level)
+        if st.session_state.reading_level in ["General", "Middle School", "High School", "College"]
+        else 0,
+    )
+    st.session_state.pacing = st.selectbox(
+        "Pacing",
+        ["Balanced", "Fast", "Slow and reflective"],
+        index=["Balanced", "Fast", "Slow and reflective"].index(st.session_state.pacing)
+        if st.session_state.pacing in ["Balanced", "Fast", "Slow and reflective"]
+        else 0,
+    )
+
+    if st.button("Generate Outline", width="stretch"):
+        if not st.session_state.topic.strip():
+            st.warning("Enter a topic before generating an outline.")
+            return
+        with st.spinner("Generating outline..."):
+            try:
+                outline_payload = generate_outline(
+                    topic=st.session_state.topic,
+                    research_brief=st.session_state.research_brief_text,
+                    tone=st.session_state.tone,
+                    length=st.session_state.length,
+                    audience=st.session_state.audience,
+                    angle=st.session_state.story_angle,
+                )
+            except Exception as exc:  # noqa: BLE001
+                st.error(openai_error_message(exc))
+                return
+        st.session_state.outline_json_text = json.dumps(outline_payload, indent=2)
+        _save_outline_json(st.session_state.outline_json_text)
+        st.toast("Outline generated.")
+
+    st.text_area(
+        "Outline (editable JSON)",
+        value=st.session_state.outline_json_text,
+        height=260,
+        key="outline_json_text",
+        help="Edit hook/context/beats/twist/modern relevance/CTA before generating script.",
+    )
+
+    if st.button("Generate Script from Outline", width="stretch"):
+        if not st.session_state.outline_json_text.strip():
+            st.warning("Generate or paste an outline first.")
+            return
+        try:
+            outline_payload = json.loads(st.session_state.outline_json_text)
+        except json.JSONDecodeError:
+            st.warning("Outline must be valid JSON before script generation.")
+            return
+        _save_outline_json(st.session_state.outline_json_text)
+        with st.spinner("Generating script from outline..."):
+            try:
+                generated_script = generate_script_from_outline(
+                    outline=outline_payload,
+                    tone=st.session_state.tone,
+                    reading_level=st.session_state.reading_level,
+                    pacing=st.session_state.pacing,
+                )
+            except Exception as exc:  # noqa: BLE001
+                st.error(openai_error_message(exc))
+                return
+        st.session_state.script_text = generated_script
+        st.session_state.pending_script_text_input = generated_script
+        st.session_state.project_title = st.session_state.topic or st.session_state.project_title
+        clear_downstream("script")
+        st.toast("Script generated from outline.")
+        st.rerun()
 
     if st.button("Generate Script", type="primary", width="stretch"):
         if not st.session_state.topic.strip():

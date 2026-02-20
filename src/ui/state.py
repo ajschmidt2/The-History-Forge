@@ -168,6 +168,9 @@ def save_project_state(project_id: str) -> None:
         "use_research_brief_for_script": bool(st.session_state.get("use_research_brief_for_script", False)),
         "use_web_research": bool(st.session_state.get("use_web_research", False)),
         "research_sources": st.session_state.get("research_sources", []),
+        "outline_json_text": str(st.session_state.get("outline_json_text", "") or ""),
+        "reading_level": str(st.session_state.get("reading_level", "General") or "General"),
+        "pacing": str(st.session_state.get("pacing", "Balanced") or "Balanced"),
         "visual_style": str(st.session_state.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic"),
         "aspect_ratio": str(st.session_state.get("aspect_ratio", "16:9") or "16:9"),
         "variations_per_scene": int(st.session_state.get("variations_per_scene", 1) or 1),
@@ -197,6 +200,9 @@ def load_project_state(project_id: str) -> None:
         st.session_state.use_research_brief_for_script = False
         st.session_state.use_web_research = False
         st.session_state.research_sources = []
+        st.session_state.outline_json_text = ""
+        st.session_state.reading_level = "General"
+        st.session_state.pacing = "Balanced"
         st.session_state.scenes = []
         return
 
@@ -221,6 +227,9 @@ def load_project_state(project_id: str) -> None:
     st.session_state.use_web_research = bool(raw.get("use_web_research", False))
     raw_sources = raw.get("research_sources", [])
     st.session_state.research_sources = raw_sources if isinstance(raw_sources, list) else []
+    st.session_state.outline_json_text = str(raw.get("outline_json_text", "") or "")
+    st.session_state.reading_level = str(raw.get("reading_level", "General") or "General")
+    st.session_state.pacing = str(raw.get("pacing", "Balanced") or "Balanced")
     st.session_state.visual_style = str(raw.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic")
     st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "16:9") or "16:9")
     st.session_state.variations_per_scene = int(raw.get("variations_per_scene", 1) or 1)
@@ -261,6 +270,9 @@ def init_state() -> None:
     st.session_state.setdefault("use_research_brief_for_script", False)
     st.session_state.setdefault("use_web_research", False)
     st.session_state.setdefault("research_sources", [])
+    st.session_state.setdefault("outline_json_text", "")
+    st.session_state.setdefault("reading_level", "General")
+    st.session_state.setdefault("pacing", "Balanced")
 
     st.session_state.setdefault("visual_style", "Photorealistic cinematic")
     st.session_state.setdefault("aspect_ratio", "16:9")
@@ -379,6 +391,9 @@ def render_project_selector() -> None:
                 st.session_state.use_research_brief_for_script = False
                 st.session_state.use_web_research = False
                 st.session_state.research_sources = []
+                st.session_state.outline_json_text = ""
+                st.session_state.reading_level = "General"
+                st.session_state.pacing = "Balanced"
                 st.session_state.scenes = []
                 ensure_project_exists(fallback)
             st.toast(f"Deleted project: {selected}")

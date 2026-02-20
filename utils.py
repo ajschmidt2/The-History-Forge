@@ -156,6 +156,186 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
     return resp.choices[0].message.content.strip()
 
 
+
+def _default_outline(topic: str) -> dict[str, Any]:
+    topic_clean = (topic or "History topic").strip() or "History topic"
+    return {
+        "hook": f"Open with a surprising truth about {topic_clean}.",
+        "context": f"Set the historical stage so viewers understand the stakes behind {topic_clean}.",
+        "beats": [
+            {
+                "title": "Origins",
+                "bullets": [
+                    "Introduce the early conditions and major forces at play.",
+                    "Name the first major decision or event that changes momentum.",
+                ],
+            },
+            {
+                "title": "Escalation",
+                "bullets": [
+                    "Show how conflict or pressure grows over time.",
+                    "Connect at least one key person or place to the turning point.",
+                ],
+            },
+            {
+                "title": "Consequences",
+                "bullets": [
+                    "Describe immediate outcomes for institutions and everyday people.",
+                    "Highlight one long-term effect that still matters now.",
+                ],
+            },
+        ],
+        "twist_or_insight": "Reveal a lesser-known interpretation or misunderstood fact.",
+        "modern_relevance": "Explain how this history still shapes current politics, culture, or strategy.",
+        "cta": "Close by inviting viewers to subscribe for more deep history stories.",
+    }
+
+
+def _normalize_outline_payload(payload: object, topic: str) -> dict[str, Any]:
+    fallback = _default_outline(topic)
+    if not isinstance(payload, dict):
+        return fallback
+
+    hook = str(payload.get("hook", fallback["hook"]) or fallback["hook"])
+    context = str(payload.get("context", fallback["context"]) or fallback["context"])
+    twist = str(payload.get("twist_or_insight", fallback["twist_or_insight"]) or fallback["twist_or_insight"])
+    relevance = str(payload.get("modern_relevance", fallback["modern_relevance"]) or fallback["modern_relevance"])
+    cta = str(payload.get("cta", fallback["cta"]) or fallback["cta"])
+
+    beats_raw = payload.get("beats", [])
+    beats: list[dict[str, Any]] = []
+    if isinstance(beats_raw, list):
+        for beat in beats_raw[:8]:
+            if not isinstance(beat, dict):
+                continue
+            title = str(beat.get("title", "") or "").strip()
+            bullets_raw = beat.get("bullets", [])
+            bullets = [str(item).strip() for item in bullets_raw if str(item).strip()] if isinstance(bullets_raw, list) else []
+            bullets = bullets[:4]
+            if title and bullets:
+                beats.append({"title": title, "bullets": bullets})
+
+    if not beats:
+        beats = fallback["beats"]
+
+    return {
+        "hook": hook,
+        "context": context,
+        "beats": beats,
+        "twist_or_insight": twist,
+        "modern_relevance": relevance,
+        "cta": cta,
+    }
+
+
+def generate_outline(
+    topic: str,
+    research_brief: str,
+    tone: str,
+    length: str,
+    audience: str,
+    angle: str,
+) -> dict[str, Any]:
+    topic_clean = (topic or "").strip()
+    if not topic_clean:
+        return _default_outline("History topic")
+
+    client = _openai_client()
+    if client is None:
+        return _default_outline(topic_clean)
+
+    brief_text = (research_brief or "").strip()
+    brief_block = f"\n\nResearch brief context:\n{brief_text}" if brief_text else ""
+
+    system = (
+        "You are a history documentary story editor. Build concise, coherent beat maps before scriptwriting."
+    )
+    user = (
+        f"Topic: {topic_clean}\n"
+        f"Tone: {(tone or 'Documentary').strip()}\n"
+        f"Length target: {(length or '8–10 minutes').strip()}\n"
+        f"Audience: {(audience or 'General audience').strip()}\n"
+        f"Angle: {(angle or 'Balanced overview').strip()}\n"
+        "\nReturn strict JSON with keys: hook, context, beats, twist_or_insight, modern_relevance, cta.\n"
+        "- beats must be an array with 3 to 8 beat objects\n"
+        "- each beat object must have: title, bullets\n"
+        "- bullets must contain 2 to 4 concise strings\n"
+        "No markdown. No extra keys."
+        f"{brief_block}"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.4,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        return _default_outline(topic_clean)
+
+    raw = resp.choices[0].message.content.strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    return _normalize_outline_payload(parsed, topic_clean)
+
+
+def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_level: str, pacing: str) -> str:
+    normalized_outline = _normalize_outline_payload(outline, str(outline.get("hook", "History topic")) if isinstance(outline, dict) else "History topic")
+
+    client = _openai_client()
+    if client is None:
+        beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
+        return (
+            f"[Missing openai_api_key] Placeholder script from outline.\n\n"
+            f"Hook: {normalized_outline['hook']}\n"
+            f"Context: {normalized_outline['context']}\n"
+            f"Beats: {beat_titles}\n"
+            f"Twist: {normalized_outline['twist_or_insight']}\n"
+            f"Modern relevance: {normalized_outline['modern_relevance']}\n"
+            f"CTA: {normalized_outline['cta']}"
+        )
+
+    system = (
+        "You are a YouTube history scriptwriter. Convert an outline into a smooth, engaging narration. "
+        "Use natural transitions between beats and preserve factual caution."
+    )
+    user = (
+        f"Tone: {(tone or 'Documentary').strip()}\n"
+        f"Reading level: {(reading_level or 'General').strip()}\n"
+        f"Pacing: {(pacing or 'Balanced').strip()}\n\n"
+        f"Outline JSON:\n{json.dumps(normalized_outline, indent=2)}\n\n"
+        "Write one continuous script with no headings or bullet points. "
+        "Cover each beat in order, include natural transitions, and end with the CTA."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.6,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
+        return (
+            "[OpenAI request failed] Placeholder script from outline.\n\n"
+            f"Hook: {normalized_outline['hook']}\n"
+            f"Context: {normalized_outline['context']}\n"
+            f"Beats: {beat_titles}\n"
+            f"Twist: {normalized_outline['twist_or_insight']}\n"
+            f"Modern relevance: {normalized_outline['modern_relevance']}\n"
+            f"CTA: {normalized_outline['cta']}"
+        )
+
+    return resp.choices[0].message.content.strip()
+
 def generate_script(
     topic: str,
     length: str,
@@ -271,14 +451,27 @@ def rewrite_description(script: str, description: str, mode: str = "refresh") ->
         "Return only the rewritten description."
     )
 
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0.6,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.6,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
+        return (
+            "[OpenAI request failed] Placeholder script from outline.\n\n"
+            f"Hook: {normalized_outline['hook']}\n"
+            f"Context: {normalized_outline['context']}\n"
+            f"Beats: {beat_titles}\n"
+            f"Twist: {normalized_outline['twist_or_insight']}\n"
+            f"Modern relevance: {normalized_outline['modern_relevance']}\n"
+            f"CTA: {normalized_outline['cta']}"
+        )
+
     return resp.choices[0].message.content.strip()
 
 
