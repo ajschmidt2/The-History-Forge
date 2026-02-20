@@ -1,4 +1,5 @@
 import json
+import re
 import zipfile
 from collections import deque
 from io import BytesIO
@@ -9,6 +10,7 @@ from urllib.request import urlopen
 import streamlit as st
 import utils as forge_utils
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
+from PIL import Image, ImageDraw, ImageFont
 
 from utils import (
     Scene,
@@ -908,6 +910,84 @@ def _sync_session_images(images_dir: Path, project_id: str) -> int:
     return len(session_images)
 
 
+def _scene_number_from_path(path: Path) -> int | None:
+    match = re.search(r"s(\d+)", path.stem.lower())
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _render_subtitle_preview(image_path: Path, subtitle: str) -> bytes:
+    with Image.open(image_path) as image:
+        canvas = image.convert("RGB")
+
+    width, height = canvas.size
+    overlay_height = max(80, int(height * 0.2))
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    draw.rectangle([(0, height - overlay_height), (width, height)], fill=(0, 0, 0, 150))
+
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", max(18, int(height * 0.04)))
+    except OSError:
+        font = ImageFont.load_default()
+
+    text = (subtitle or "").strip() or "(No subtitle)"
+    draw.text((24, height - overlay_height + 18), text, fill=(255, 255, 255, 255), font=font)
+
+    buffer = BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _default_scene_captions(images: list[Path], timeline_path: Path) -> list[str]:
+    caption_by_path: dict[str, str] = {}
+    if timeline_path.exists():
+        try:
+            timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
+        except ValueError:
+            timeline = None
+        if timeline:
+            caption_by_path = {scene.image_path: scene.caption or "" for scene in timeline.scenes}
+
+    script_excerpt_by_index: dict[int, str] = {}
+    for scene in st.session_state.get("scenes", []):
+        scene_index = getattr(scene, "index", None)
+        excerpt = str(getattr(scene, "script_excerpt", "") or "").strip()
+        if isinstance(scene_index, int) and excerpt:
+            script_excerpt_by_index[scene_index] = excerpt
+
+    captions: list[str] = []
+    for i, image_path in enumerate(images, start=1):
+        from_timeline = caption_by_path.get(str(image_path), "").strip()
+        if from_timeline:
+            captions.append(from_timeline)
+            continue
+        scene_number = _scene_number_from_path(image_path) or i
+        captions.append(script_excerpt_by_index.get(scene_number, ""))
+    return captions
+
+
+def _collect_scene_captions(images: list[Path], timeline_path: Path) -> list[str]:
+    state_key = f"video_scene_captions::{timeline_path}"
+    if state_key not in st.session_state or len(st.session_state[state_key]) != len(images):
+        st.session_state[state_key] = _default_scene_captions(images, timeline_path)
+
+    captions: list[str] = st.session_state[state_key]
+    for idx, image_path in enumerate(images, start=1):
+        with st.expander(f"Scene {idx}: {image_path.name}"):
+            st.image(_render_subtitle_preview(image_path, captions[idx - 1]), width="stretch")
+            captions[idx - 1] = st.text_area(
+                "Subtitle for this scene",
+                value=captions[idx - 1],
+                height=90,
+                key=f"video_scene_caption_{idx}_{image_path.name}",
+            )
+    return captions
+
+
 def _build_timeline_from_ui(
     project_name: str,
     title: str,
@@ -925,9 +1005,10 @@ def _build_timeline_from_ui(
     enable_motion: bool,
     crossfade: bool,
     crossfade_duration: float,
+    scene_captions: list[str] | None = None,
 ) -> Timeline:
     voiceover_path = audio_files[0] if include_voiceover and audio_files else None
-    return build_default_timeline(
+    timeline = build_default_timeline(
         project_id=project_name,
         title=title,
         images=images,
@@ -945,6 +1026,10 @@ def _build_timeline_from_ui(
         crossfade=crossfade,
         crossfade_duration=crossfade_duration,
     )
+    if scene_captions:
+        for scene, caption in zip(timeline.scenes, scene_captions):
+            scene.caption = str(caption or "").strip() or None
+    return timeline
 
 
 def tab_video_compile() -> None:
@@ -1125,6 +1210,18 @@ def tab_video_compile() -> None:
         key="video_scene_duration",
     )
 
+    st.markdown("### Scene subtitle review")
+    if images:
+        scene_captions = _collect_scene_captions(images, timeline_path)
+        if st.button("Auto-fill subtitles from scene script excerpts", width="stretch", key="video_auto_captions"):
+            scene_captions = _default_scene_captions(images, timeline_path)
+            st.session_state[f"video_scene_captions::{timeline_path}"] = scene_captions
+            st.success("Subtitles auto-filled from scene script excerpts.")
+            st.rerun()
+    else:
+        scene_captions = []
+        st.info("Add scene images to review subtitles per scene.")
+
     st.markdown("### Closed captions")
     captions_cols = st.columns([2, 1])
     with captions_cols[0]:
@@ -1263,6 +1360,7 @@ def tab_video_compile() -> None:
                 enable_motion=enable_motion,
                 crossfade=crossfade,
                 crossfade_duration=crossfade_duration,
+                scene_captions=scene_captions,
             )
             write_timeline_json(timeline, timeline_path)
             st.success("timeline.json generated.")
@@ -1301,6 +1399,7 @@ def tab_video_compile() -> None:
                     enable_motion=enable_motion,
                     crossfade=crossfade,
                     crossfade_duration=crossfade_duration,
+                    scene_captions=scene_captions,
                 )
                 write_timeline_json(timeline, timeline_path)
                 st.info("Timeline rebuilt to match current images.")
@@ -1324,6 +1423,8 @@ def tab_video_compile() -> None:
                 timeline.meta.burn_captions = burn_captions
                 timeline.meta.caption_style = selected_caption_style
                 timeline.meta.scene_duration = effective_scene_duration
+                for scene, caption in zip(timeline.scenes, scene_captions):
+                    scene.caption = str(caption or "").strip() or None
                 write_timeline_json(timeline, timeline_path)
         else:
             timeline = _build_timeline_from_ui(
@@ -1343,6 +1444,7 @@ def tab_video_compile() -> None:
                 enable_motion=enable_motion,
                 crossfade=crossfade,
                 crossfade_duration=crossfade_duration,
+                scene_captions=scene_captions,
             )
             write_timeline_json(timeline, timeline_path)
 
@@ -1415,7 +1517,7 @@ def main() -> None:
             "🖼️ Images",
             "🎙️ Voiceover",
             "📦 Export",
-            "🎞️ Video Compile",
+            "🎬 Video Studio",
             "🖼️ Title + Thumbnail",
         ]
     )
