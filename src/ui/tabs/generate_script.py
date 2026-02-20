@@ -4,6 +4,7 @@ from pathlib import Path
 import streamlit as st
 
 from src.research.web_research import Source, search_topic, summarize_sources
+from src.script.refine import flag_uncertain_claims, refine_for_clarity, refine_for_retention
 from src.ui.state import active_project_id, clear_downstream, openai_error_message, script_ready
 from utils import generate_lucky_topic, generate_outline, generate_research_brief, generate_script, generate_script_from_outline
 
@@ -19,6 +20,18 @@ def _save_outline_json(outline_text: str) -> None:
     except json.JSONDecodeError:
         return
     outline_path.write_text(json.dumps(parsed, indent=2), encoding="utf-8")
+
+
+
+def _apply_refinement_passes(script: str) -> str:
+    revised = script
+    if st.session_state.run_clarity_pass:
+        revised = refine_for_clarity(revised)
+    if st.session_state.run_retention_pass:
+        revised = refine_for_retention(revised)
+    if st.session_state.run_safety_pass:
+        revised = flag_uncertain_claims(revised, st.session_state.research_brief_text)
+    return revised
 
 def _save_research_artifacts(brief_markdown: str, sources: list[Source]) -> None:
     research_dir = Path("data/projects") / active_project_id() / "research"
@@ -141,6 +154,23 @@ def tab_generate_script() -> None:
         else 0,
     )
 
+    st.markdown("**Refinement passes**")
+    st.session_state.run_clarity_pass = st.checkbox(
+        "Consistency + clarity pass",
+        value=bool(st.session_state.run_clarity_pass),
+        help="Checks setup/payoff continuity and improves clarity.",
+    )
+    st.session_state.run_retention_pass = st.checkbox(
+        "Retention pass",
+        value=bool(st.session_state.run_retention_pass),
+        help="Tightens pacing and reduces filler.",
+    )
+    st.session_state.run_safety_pass = st.checkbox(
+        "Safety / claims pass",
+        value=bool(st.session_state.run_safety_pass),
+        help="Flags uncertain claims and appends verification notes.",
+    )
+
     if st.button("Generate Outline", width="stretch"):
         if not st.session_state.topic.strip():
             st.warning("Enter a topic before generating an outline.")
@@ -188,6 +218,7 @@ def tab_generate_script() -> None:
                     reading_level=st.session_state.reading_level,
                     pacing=st.session_state.pacing,
                 )
+                generated_script = _apply_refinement_passes(generated_script)
             except Exception as exc:  # noqa: BLE001
                 st.error(openai_error_message(exc))
                 return
@@ -213,6 +244,7 @@ def tab_generate_script() -> None:
                     angle=st.session_state.story_angle,
                     research_brief=brief_for_script,
                 )
+                generated_script = _apply_refinement_passes(generated_script)
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
                 st.error(openai_error_message(exc))
                 return
