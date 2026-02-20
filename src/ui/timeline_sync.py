@@ -39,6 +39,63 @@ def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: 
     return captions
 
 
+def _caption_wrap_settings(aspect_ratio: str) -> tuple[int, int]:
+    if str(aspect_ratio or "9:16") == "9:16":
+        return (14, 28)
+    return (12, 42)
+
+
+def _apply_manual_scene_durations(
+    timeline: Timeline,
+    session_scenes: list[Any] | None,
+    *,
+    lock_total_duration_to_timeline: bool = False,
+) -> None:
+    if not session_scenes:
+        return
+
+    durations_by_index: dict[int, float] = {}
+    for session_scene in session_scenes:
+        idx = getattr(session_scene, "index", None)
+        raw_duration = getattr(session_scene, "estimated_duration_sec", None)
+        if not isinstance(idx, int):
+            continue
+        try:
+            duration = float(raw_duration)
+        except (TypeError, ValueError):
+            continue
+        if duration <= 0:
+            continue
+        durations_by_index[idx] = max(0.5, duration)
+
+    if not durations_by_index:
+        return
+
+    target_total = float(timeline.total_duration)
+
+    start = 0.0
+    for i, scene in enumerate(timeline.scenes, start=1):
+        scene_index = _scene_index_from_stem(Path(scene.image_path).stem, i)
+        scene.duration = float(durations_by_index.get(scene_index, scene.duration))
+        scene.start = start
+        start += scene.duration
+
+    if lock_total_duration_to_timeline and timeline.scenes and target_total > 0:
+        current_total = sum(scene.duration for scene in timeline.scenes)
+        if current_total > 0:
+            scale = target_total / current_total
+            for scene in timeline.scenes:
+                scene.duration = max(0.1, float(scene.duration) * scale)
+
+    start = 0.0
+    for scene in timeline.scenes:
+        scene.start = start
+        start += scene.duration
+
+    if timeline.scenes:
+        timeline.meta.scene_duration = round(sum(scene.duration for scene in timeline.scenes) / len(timeline.scenes), 3)
+
+
 def sync_timeline_for_project(
     project_path: Path,
     project_id: str,
@@ -73,7 +130,7 @@ def sync_timeline_for_project(
     crossfade = bool(merged_meta.get("crossfade", False))
     crossfade_duration = float(merged_meta.get("crossfade_duration", 0.3))
     scene_duration = merged_meta.get("scene_duration")
-    include_voiceover_requested = bool(merged_meta.get("include_voiceover", False))
+    include_voiceover_requested = bool(merged_meta.get("include_voiceover", True))
     include_music_requested = bool(merged_meta.get("include_music", False))
     narration_wpm = float(merged_meta.get("narration_wpm", 160))
     narration_min_sec = float(merged_meta.get("narration_min_sec", 1.5))
@@ -127,6 +184,8 @@ def sync_timeline_for_project(
         narration_max_sec=narration_max_sec,
     )
 
+    _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
+
     normalized_captions = _normalize_scene_captions(scene_captions, len(media_files))
     if len(timeline.scenes) != len(normalized_captions):
         timeline = build_default_timeline(
@@ -151,15 +210,18 @@ def sync_timeline_for_project(
             narration_min_sec=narration_min_sec,
             narration_max_sec=narration_max_sec,
         )
+        _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
     if len(timeline.scenes) != len(normalized_captions):
         raise ValueError(
             f"Caption mapping mismatch: {len(timeline.scenes)} timeline scenes vs {len(normalized_captions)} captions. "
             "Regenerate timeline and verify scene media ordering."
         )
 
+    caption_max_lines, caption_max_chars = _caption_wrap_settings(aspect_ratio)
+
     if normalized_captions:
         for scene, caption in zip(timeline.scenes, normalized_captions):
-            formatted = format_caption(caption)
+            formatted = format_caption(caption, max_lines=caption_max_lines, max_chars_per_line=caption_max_chars)
             scene.caption = formatted or None
     elif session_scenes:
         excerpt_by_index: dict[int, str] = {}
@@ -170,7 +232,7 @@ def sync_timeline_for_project(
                 excerpt_by_index[idx] = excerpt
         for i, scene in enumerate(timeline.scenes, start=1):
             scene_index = _scene_index_from_stem(Path(scene.image_path).stem, i)
-            formatted = format_caption(excerpt_by_index.get(scene_index) or "")
+            formatted = format_caption(excerpt_by_index.get(scene_index) or "", max_lines=caption_max_lines, max_chars_per_line=caption_max_chars)
             scene.caption = formatted or f"Scene {i}"
 
     for scene in timeline.scenes:

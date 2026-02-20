@@ -145,6 +145,7 @@ def _clear_scene_widget_state() -> None:
         "story_visual_",
         "story_prompt_",
         "story_caption_",
+        "story_duration_",
         "bulk_title_",
         "bulk_txt_",
         "bulk_vi_",
