@@ -10,6 +10,19 @@ from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.utils import get_media_duration
 
 
+_TRANSITION_OPTIONS = [
+    "fade",
+    "fadeblack",
+    "fadewhite",
+    "wipeleft",
+    "wiperight",
+    "slideleft",
+    "slideright",
+    "smoothleft",
+    "smoothright",
+]
+
+
 def _project_path() -> Path:
     return Path("data/projects") / active_project_id()
 
@@ -22,12 +35,26 @@ def _captions_from_scenes(scenes: list[Scene]) -> list[str]:
     return [str(scene.script_excerpt or "") for scene in scenes]
 
 
+def _normalize_scene_transitions(scene_count: int) -> list[str]:
+    needed = max(0, scene_count - 1)
+    current = st.session_state.get("scene_transition_types", [])
+    transitions = [str(item or "fade") for item in current] if isinstance(current, list) else []
+    transitions = [item if item in _TRANSITION_OPTIONS else "fade" for item in transitions[:needed]]
+    if len(transitions) < needed:
+        transitions.extend(["fade"] * (needed - len(transitions)))
+    st.session_state.scene_transition_types = transitions
+    return transitions
+
+
 def _sync_timeline_from_scenes() -> None:
+    scenes = st.session_state.get("scenes", [])
+    transitions = _normalize_scene_transitions(len(scenes) if isinstance(scenes, list) else 0)
     sync_timeline_for_project(
         project_path=_project_path(),
         project_id=active_project_id(),
         title=st.session_state.project_title,
-        session_scenes=st.session_state.get("scenes", []),
+        session_scenes=scenes,
+        meta_overrides={"transition_types": transitions},
     )
 
 
@@ -201,6 +228,7 @@ def tab_create_scenes() -> None:
                 wpm=int(st.session_state.scene_wpm),
             )
         clear_downstream("scenes")
+        st.session_state.scene_transition_types = ["fade"] * max(0, len(st.session_state.scenes) - 1)
         st.session_state.storyboard_selected_pos = 0
         _recompute_estimated_runtime()
         _sync_timeline_from_scenes()
@@ -212,6 +240,7 @@ def tab_create_scenes() -> None:
         return
 
     scenes: list[Scene] = st.session_state.scenes
+    transitions = _normalize_scene_transitions(len(scenes))
     _recompute_estimated_runtime()
     st.caption(f"Estimated runtime: {_fmt_runtime(float(st.session_state.get('estimated_total_runtime_sec', 0.0)))}")
 
@@ -226,6 +255,21 @@ def tab_create_scenes() -> None:
         0,
         min(int(st.session_state.storyboard_selected_pos), len(scenes) - 1),
     )
+
+    with st.expander("Transitions between scenes", expanded=False):
+        transitions = _normalize_scene_transitions(len(scenes))
+        if not transitions:
+            st.caption("At least 2 scenes are required for transitions.")
+        for i in range(len(transitions)):
+            left_title = scenes[i].title or f"Scene {i+1}"
+            right_title = scenes[i + 1].title or f"Scene {i+2}"
+            transitions[i] = st.selectbox(
+                f"{i+1:02d} — {left_title} → {right_title}",
+                _TRANSITION_OPTIONS,
+                index=_TRANSITION_OPTIONS.index(transitions[i]) if transitions[i] in _TRANSITION_OPTIONS else 0,
+                key=f"scene_transition_{i+1}",
+            )
+        st.session_state.scene_transition_types = transitions
 
     left, center, right = st.columns([1.2, 2, 2])
 
@@ -315,6 +359,7 @@ def tab_create_scenes() -> None:
             title=st.session_state.project_title,
             session_scenes=scenes,
             scene_captions=_captions_from_scenes(scenes),
+            meta_overrides={"transition_types": _normalize_scene_transitions(len(scenes))},
         )
         st.toast("Storyboard updates saved.")
         st.rerun()

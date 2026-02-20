@@ -734,6 +734,7 @@ def tab_video_compile() -> None:
         "enable_motion": enable_motion,
         "crossfade": crossfade,
         "crossfade_duration": crossfade_duration,
+        "transition_types": st.session_state.get("scene_transition_types", []),
         "music": {"volume_db": music_volume_db},
         "narration_wpm": narration_wpm,
         "narration_min_sec": narration_min_sec,

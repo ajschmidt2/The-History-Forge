@@ -15,6 +15,12 @@ from .utils import ensure_ffmpeg_exists, ensure_parent_dir, run_cmd
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
+_ALLOWED_XFADE_TRANSITIONS = {"fade", "fadeblack", "fadewhite", "wipeleft", "wiperight", "slideleft", "slideright", "smoothleft", "smoothright", "circleopen", "circleclose", "distance"}
+
+
+def _normalize_xfade_transition(name: str | None) -> str:
+    transition = str(name or "fade").strip().lower()
+    return transition if transition in _ALLOWED_XFADE_TRANSITIONS else "fade"
 
 
 def _parse_resolution(resolution: str) -> tuple[int, int]:
@@ -168,6 +174,7 @@ def _crossfade_scenes(
     crossfade_duration: float,
     log_path: Path | None,
     ffmpeg_commands: list[list[str]],
+    transition_types: list[str] | None = None,
 ) -> None:
     input_args: list[str] = []
     for path in scene_paths:
@@ -179,8 +186,11 @@ def _crossfade_scenes(
     for idx in range(1, len(scene_paths)):
         next_label = f"[{idx}:v]"
         output_label = f"[v{idx}]"
+        transition_name = _normalize_xfade_transition(
+            transition_types[idx - 1] if transition_types and idx - 1 < len(transition_types) else "fade"
+        )
         filters.append(
-            f"{current_label}{next_label}xfade=transition=fade:duration={crossfade_duration}:offset={offset}{output_label}"
+            f"{current_label}{next_label}xfade=transition={transition_name}:duration={crossfade_duration}:offset={offset}{output_label}"
         )
         current_label = output_label
         offset += max(0.0, durations[idx] - crossfade_duration)
@@ -284,6 +294,7 @@ def render_video_from_timeline(
                             timeline.meta.crossfade_duration,
                             log_file,
                             ffmpeg_commands,
+                            transition_types=getattr(timeline.meta, "transition_types", []),
                         )
                     except RuntimeError:
                         _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)

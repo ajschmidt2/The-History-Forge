@@ -32,3 +32,19 @@ def test_build_default_timeline_disable_motion_sets_none() -> None:
     )
 
     assert all(scene.motion is None for scene in timeline.scenes)
+
+
+def test_build_default_timeline_persists_transition_types() -> None:
+    images = [Path("s01.png"), Path("s02.png"), Path("s03.png")]
+
+    timeline = build_default_timeline(
+        project_id="p1",
+        title="t",
+        images=images,
+        voiceover_path=None,
+        include_voiceover=False,
+        include_music=False,
+        transition_types=["fade", "wipeleft"],
+    )
+
+    assert timeline.meta.transition_types == ["fade", "wipeleft"]

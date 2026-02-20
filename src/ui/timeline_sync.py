@@ -134,6 +134,8 @@ def sync_timeline_for_project(
     burn_captions = bool(merged_meta.get("burn_captions", True))
     crossfade = bool(merged_meta.get("crossfade", False))
     crossfade_duration = float(merged_meta.get("crossfade_duration", 0.3))
+    raw_transition_types = merged_meta.get("transition_types", [])
+    transition_types = raw_transition_types if isinstance(raw_transition_types, list) else []
     scene_duration = merged_meta.get("scene_duration")
     include_voiceover_requested = bool(merged_meta.get("include_voiceover", True))
     include_music_requested = bool(merged_meta.get("include_music", False))
@@ -183,6 +185,7 @@ def sync_timeline_for_project(
         enable_motion=enable_motion,
         crossfade=crossfade,
         crossfade_duration=crossfade_duration,
+        transition_types=transition_types,
         scene_duration=float(scene_duration) if scene_duration is not None else None,
         scene_excerpts=scene_excerpts,
         narration_wpm=narration_wpm,
@@ -210,6 +213,7 @@ def sync_timeline_for_project(
             enable_motion=enable_motion,
             crossfade=crossfade,
             crossfade_duration=crossfade_duration,
+        transition_types=transition_types,
             scene_duration=float(scene_duration) if scene_duration is not None else None,
             scene_excerpts=scene_excerpts,
             narration_wpm=narration_wpm,

@@ -186,6 +186,7 @@ def save_project_state(project_id: str) -> None:
         "max_scenes": int(st.session_state.get("max_scenes", 12) or 12),
         "scene_wpm": int(st.session_state.get("scene_wpm", 160) or 160),
         "estimated_total_runtime_sec": float(st.session_state.get("estimated_total_runtime_sec", 0.0) or 0.0),
+        "scene_transition_types": st.session_state.get("scene_transition_types", []),
         "scenes": [_scene_to_serializable(scene) for scene in scenes if isinstance(scene, Scene)],
     }
     state_path = _project_state_path(normalized)
@@ -220,6 +221,7 @@ def load_project_state(project_id: str) -> None:
         st.session_state.scene_wpm = 160
         st.session_state.estimated_total_runtime_sec = 0.0
         st.session_state.scenes = []
+        st.session_state.scene_transition_types = []
         return
 
     try:
@@ -255,6 +257,8 @@ def load_project_state(project_id: str) -> None:
     st.session_state.max_scenes = int(raw.get("max_scenes", 12) or 12)
     st.session_state.scene_wpm = int(raw.get("scene_wpm", 160) or 160)
     st.session_state.estimated_total_runtime_sec = float(raw.get("estimated_total_runtime_sec", 0.0) or 0.0)
+    raw_transitions = raw.get("scene_transition_types", [])
+    st.session_state.scene_transition_types = raw_transitions if isinstance(raw_transitions, list) else []
 
     scenes: list[Scene] = []
     for scene_raw in raw.get("scenes", []):
@@ -306,6 +310,7 @@ def init_state() -> None:
     st.session_state.setdefault("scene_wpm", 160)
     st.session_state.setdefault("estimated_total_runtime_sec", 0.0)
     st.session_state.setdefault("scenes", [])
+    st.session_state.setdefault("scene_transition_types", [])
 
     st.session_state.setdefault("voice_id", _load_saved_voice_id())
     st.session_state.setdefault("voiceover_bytes", None)
@@ -426,6 +431,7 @@ def render_project_selector() -> None:
                 st.session_state.scene_wpm = 160
                 st.session_state.estimated_total_runtime_sec = 0.0
                 st.session_state.scenes = []
+                st.session_state.scene_transition_types = []
                 ensure_project_exists(fallback)
             st.toast(f"Deleted project: {selected}")
             st.rerun()
@@ -442,6 +448,7 @@ def script_ready() -> bool:
 def clear_downstream(after: str) -> None:
     if after in ("script",):
         st.session_state.scenes = []
+        st.session_state.scene_transition_types = []
         st.session_state.voiceover_bytes = None
         st.session_state.voiceover_error = None
 
