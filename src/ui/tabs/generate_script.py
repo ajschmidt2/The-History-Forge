@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import streamlit as st
@@ -32,6 +33,30 @@ def _apply_refinement_passes(script: str) -> str:
     if st.session_state.run_safety_pass:
         revised = flag_uncertain_claims(revised, st.session_state.research_brief_text)
     return revised
+
+
+def _clean_generated_script(script: str) -> str:
+    text = str(script or "").strip()
+    if not text:
+        return ""
+
+    text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+
+    lines = text.splitlines()
+    cutoff = len(lines)
+    for idx, raw in enumerate(lines):
+        normalized = raw.strip().lower().lstrip("#").strip()
+        if normalized in {"notes to verify", "verification notes", "fact-check notes", "sources"}:
+            cutoff = idx
+            break
+    trimmed = "\n".join(lines[:cutoff]).strip()
+
+    trimmed = re.sub(r"(?im)^\s*(script|narration)\s*:\s*", "", trimmed).strip()
+    trimmed = re.sub(r"(?m)^\s*[-*]\s+", "", trimmed)
+    trimmed = re.sub(r"\n{3,}", "\n\n", trimmed)
+    return trimmed.strip()
 
 def _save_research_artifacts(brief_markdown: str, sources: list[Source]) -> None:
     research_dir = Path("data/projects") / active_project_id() / "research"
@@ -256,7 +281,7 @@ def tab_generate_script() -> None:
                     reading_level=st.session_state.reading_level,
                     pacing=st.session_state.pacing,
                 )
-                generated_script = _apply_refinement_passes(generated_script)
+                generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001
                 st.error(openai_error_message(exc))
                 return
@@ -282,7 +307,7 @@ def tab_generate_script() -> None:
                     angle=st.session_state.story_angle,
                     research_brief=brief_for_script,
                 )
-                generated_script = _apply_refinement_passes(generated_script)
+                generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
                 st.error(openai_error_message(exc))
                 return
