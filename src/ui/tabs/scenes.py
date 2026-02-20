@@ -7,6 +7,7 @@ from utils import Scene, split_script_into_scenes
 
 from src.ui.state import active_project_id, clear_downstream, scenes_ready, script_ready
 from src.ui.timeline_sync import sync_timeline_for_project
+from src.video.utils import get_media_duration
 
 
 def _project_path() -> Path:
@@ -39,6 +40,51 @@ def _outline_payload() -> dict[str, object] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _primary_voiceover_path() -> Path | None:
+    audio_dir = _project_path() / "assets/audio"
+    preferred = audio_dir / "voiceover.mp3"
+    if preferred.exists():
+        return preferred
+    candidates = sorted([p for p in audio_dir.glob("*.*") if p.suffix.lower() in {".mp3", ".wav"}])
+    return candidates[0] if candidates else None
+
+
+def _equal_scene_durations(scene_count: int, total_duration: float) -> list[float]:
+    if scene_count <= 0 or total_duration <= 0:
+        return []
+    even = float(total_duration) / float(scene_count)
+    durations = [even] * scene_count
+    correction = float(total_duration) - sum(durations)
+    if durations:
+        durations[-1] += correction
+    return durations
+
+
+def _auto_match_scene_lengths_to_voiceover_equal(scenes: list[Scene]) -> tuple[bool, str]:
+    voiceover_path = _primary_voiceover_path()
+    if voiceover_path is None:
+        return False, "No voiceover file found in assets/audio. Generate or add voiceover first."
+
+    try:
+        voiceover_duration = float(get_media_duration(voiceover_path))
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Could not read voiceover duration: {exc}"
+
+    durations = _equal_scene_durations(len(scenes), voiceover_duration)
+    if not durations:
+        return False, "No scenes available to adjust."
+
+    for idx, (scene, duration) in enumerate(zip(scenes, durations), start=1):
+        scene.estimated_duration_sec = float(duration)
+        st.session_state[f"story_duration_{idx}"] = float(duration)
+
+    st.session_state[_timeline_state_key()] = _captions_from_scenes(scenes)
+    _recompute_estimated_runtime()
+    _sync_timeline_from_scenes()
+
+    return True, f"Updated {len(scenes)} scene(s) to evenly match voiceover length ({_fmt_runtime(voiceover_duration)})."
 
 
 def _recompute_estimated_runtime() -> None:
@@ -168,6 +214,13 @@ def tab_create_scenes() -> None:
     scenes: list[Scene] = st.session_state.scenes
     _recompute_estimated_runtime()
     st.caption(f"Estimated runtime: {_fmt_runtime(float(st.session_state.get('estimated_total_runtime_sec', 0.0)))}")
+
+    if st.button("Auto-match scene lengths to voiceover (equal)", width="stretch", key="scene_auto_match_vo_equal"):
+        ok, message = _auto_match_scene_lengths_to_voiceover_equal(scenes)
+        if ok:
+            st.success(message)
+            st.rerun()
+        st.warning(message)
     st.session_state.setdefault("storyboard_selected_pos", 0)
     st.session_state.storyboard_selected_pos = max(
         0,
