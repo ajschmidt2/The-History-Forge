@@ -27,19 +27,18 @@ def _parse_resolution(resolution: str) -> tuple[int, int]:
 def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     motion = scene.motion
     if motion is None:
-        zoom_start = 1.0
-        zoom_end = 1.0
-        x_start = 0.5
-        x_end = 0.5
-        y_start = 0.5
-        y_end = 0.5
-    else:
-        zoom_start = motion.zoom_start if motion.type != "pan" else 1.0
-        zoom_end = motion.zoom_end if motion.type != "pan" else 1.0
-        x_start = motion.x_start
-        x_end = motion.x_end
-        y_start = motion.y if motion.type == "pan" and motion.y is not None else motion.y_start
-        y_end = motion.y if motion.type == "pan" and motion.y is not None else motion.y_end
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            "format=yuv420p"
+        )
+
+    zoom_start = motion.zoom_start if motion.type != "pan" else 1.0
+    zoom_end = motion.zoom_end if motion.type != "pan" else 1.0
+    x_start = motion.x_start
+    x_end = motion.x_end
+    y_start = motion.y if motion.type == "pan" and motion.y is not None else motion.y_start
+    y_end = motion.y if motion.type == "pan" and motion.y is not None else motion.y_end
 
     frames = max(1, int(math.ceil(scene.duration * fps)))
     zoom_expr = f"{zoom_start} + ({zoom_end} - {zoom_start})*on/{frames}"
@@ -47,7 +46,7 @@ def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     y_expr = f"({y_start} + ({y_end} - {y_start})*on/{frames})*(ih - ih/zoom)"
 
     return (
-        f"scale={width * 1.08}:{height * 1.08}:force_original_aspect_ratio=increase,"
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d={frames}:s={width}x{height}:fps={fps},"
         "format=yuv420p"
     )
