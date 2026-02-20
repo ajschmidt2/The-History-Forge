@@ -39,6 +39,38 @@ def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: 
     return captions
 
 
+def _apply_manual_scene_durations(timeline: Timeline, session_scenes: list[Any] | None) -> None:
+    if not session_scenes:
+        return
+
+    durations_by_index: dict[int, float] = {}
+    for session_scene in session_scenes:
+        idx = getattr(session_scene, "index", None)
+        raw_duration = getattr(session_scene, "estimated_duration_sec", None)
+        if not isinstance(idx, int):
+            continue
+        try:
+            duration = float(raw_duration)
+        except (TypeError, ValueError):
+            continue
+        if duration <= 0:
+            continue
+        durations_by_index[idx] = max(0.5, duration)
+
+    if not durations_by_index:
+        return
+
+    start = 0.0
+    for i, scene in enumerate(timeline.scenes, start=1):
+        scene_index = _scene_index_from_stem(Path(scene.image_path).stem, i)
+        scene.duration = float(durations_by_index.get(scene_index, scene.duration))
+        scene.start = start
+        start += scene.duration
+
+    if timeline.scenes:
+        timeline.meta.scene_duration = round(sum(scene.duration for scene in timeline.scenes) / len(timeline.scenes), 3)
+
+
 def sync_timeline_for_project(
     project_path: Path,
     project_id: str,
@@ -127,6 +159,8 @@ def sync_timeline_for_project(
         narration_max_sec=narration_max_sec,
     )
 
+    _apply_manual_scene_durations(timeline, session_scenes)
+
     normalized_captions = _normalize_scene_captions(scene_captions, len(media_files))
     if len(timeline.scenes) != len(normalized_captions):
         timeline = build_default_timeline(
@@ -151,6 +185,7 @@ def sync_timeline_for_project(
             narration_min_sec=narration_min_sec,
             narration_max_sec=narration_max_sec,
         )
+        _apply_manual_scene_durations(timeline, session_scenes)
     if len(timeline.scenes) != len(normalized_captions):
         raise ValueError(
             f"Caption mapping mismatch: {len(timeline.scenes)} timeline scenes vs {len(normalized_captions)} captions. "
@@ -159,7 +194,7 @@ def sync_timeline_for_project(
 
     if normalized_captions:
         for scene, caption in zip(timeline.scenes, normalized_captions):
-            formatted = format_caption(caption)
+            formatted = format_caption(caption, max_lines=12, max_chars_per_line=42)
             scene.caption = formatted or None
     elif session_scenes:
         excerpt_by_index: dict[int, str] = {}
@@ -170,7 +205,7 @@ def sync_timeline_for_project(
                 excerpt_by_index[idx] = excerpt
         for i, scene in enumerate(timeline.scenes, start=1):
             scene_index = _scene_index_from_stem(Path(scene.image_path).stem, i)
-            formatted = format_caption(excerpt_by_index.get(scene_index) or "")
+            formatted = format_caption(excerpt_by_index.get(scene_index) or "", max_lines=12, max_chars_per_line=42)
             scene.caption = formatted or f"Scene {i}"
 
     for scene in timeline.scenes:

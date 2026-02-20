@@ -17,6 +17,10 @@ def _timeline_state_key() -> str:
     return f"video_scene_captions::{_project_path() / 'timeline.json'}"
 
 
+def _captions_from_scenes(scenes: list[Scene]) -> list[str]:
+    return [str(scene.script_excerpt or "") for scene in scenes]
+
+
 def _sync_timeline_from_scenes() -> None:
     sync_timeline_for_project(
         project_path=_project_path(),
@@ -55,7 +59,7 @@ def _fmt_runtime(seconds: float) -> str:
 
 
 def _remap_scene_widget_state(index_map: dict[int, int]) -> None:
-    key_prefixes = ["title_", "txt_", "vi_", "prompt_", "scene_upload_", "regen_", "story_title_", "story_excerpt_", "story_visual_", "story_prompt_", "story_caption_"]
+    key_prefixes = ["title_", "txt_", "vi_", "prompt_", "scene_upload_", "regen_", "story_title_", "story_excerpt_", "story_visual_", "story_prompt_", "story_caption_", "story_duration_"]
     for prefix in key_prefixes:
         remapped: dict[str, object] = {}
         to_delete: list[str] = []
@@ -104,17 +108,7 @@ def _reindex_scenes_and_assets() -> None:
     _remap_scene_widget_state(index_map)
     _rename_scene_assets(index_map)
 
-    caption_state_key = _timeline_state_key()
-    captions = st.session_state.get(caption_state_key)
-    if isinstance(captions, list):
-        reordered: list[str] = [""] * len(scenes)
-        for old_index, new_index in index_map.items():
-            old_pos = old_index - 1
-            new_pos = new_index - 1
-            if 0 <= old_pos < len(captions):
-                reordered[new_pos] = captions[old_pos]
-        st.session_state[caption_state_key] = reordered
-
+    st.session_state[_timeline_state_key()] = _captions_from_scenes(scenes)
     _sync_timeline_from_scenes()
 
 
@@ -217,7 +211,18 @@ def tab_create_scenes() -> None:
             key=f"story_visual_{selected.index}",
         )
         est_sec = float(getattr(selected, "estimated_duration_sec", 0.0) or 0.0)
-        st.caption(f"Estimated duration: {_fmt_runtime(est_sec)}")
+        selected.estimated_duration_sec = float(
+            st.number_input(
+                "Scene duration (seconds)",
+                min_value=0.5,
+                max_value=60.0,
+                value=max(0.5, est_sec if est_sec > 0 else 3.0),
+                step=0.1,
+                key=f"story_duration_{selected.index}",
+                help="Initial values are auto-estimated from script pace; adjust per scene as needed.",
+            )
+        )
+        st.caption(f"Estimated duration: {_fmt_runtime(float(selected.estimated_duration_sec))}")
 
     with right:
         st.markdown("### Prompt + media")
@@ -237,20 +242,17 @@ def tab_create_scenes() -> None:
                 st.caption("No image selected yet.")
 
         caption_state_key = _timeline_state_key()
-        captions = st.session_state.get(caption_state_key, [])
-        if len(captions) != len(scenes):
-            captions = [str(scene.script_excerpt or "") for scene in scenes]
+        captions = _captions_from_scenes(scenes)
+        st.session_state[caption_state_key] = captions
         caption_value = captions[selected.index - 1] if selected.index - 1 < len(captions) else ""
-        edited_caption = st.text_area(
-            "Caption",
-            value=caption_value or str(selected.script_excerpt or ""),
+        st.text_area(
+            "Caption (matches excerpt)",
+            value=caption_value,
             height=120,
             key=f"story_caption_{selected.index}",
-            help="Used in timeline.json; defaults to script excerpt.",
+            help="Captions are synced from each scene excerpt to keep preview/video text aligned.",
+            disabled=True,
         )
-        if selected.index - 1 < len(captions):
-            captions[selected.index - 1] = edited_caption
-        st.session_state[caption_state_key] = captions
 
     if st.button("Apply storyboard changes", type="primary", width="stretch"):
         _recompute_estimated_runtime()
@@ -259,7 +261,7 @@ def tab_create_scenes() -> None:
             project_id=active_project_id(),
             title=st.session_state.project_title,
             session_scenes=scenes,
-            scene_captions=st.session_state.get(_timeline_state_key()),
+            scene_captions=_captions_from_scenes(scenes),
         )
         st.toast("Storyboard updates saved.")
         st.rerun()
@@ -284,6 +286,7 @@ def tab_create_scenes() -> None:
                 s.script_excerpt = edits.get("script_excerpt", s.script_excerpt)
                 s.visual_intent = edits.get("visual_intent", s.visual_intent)
             _recompute_estimated_runtime()
+            st.session_state[_timeline_state_key()] = _captions_from_scenes(scenes)
             _sync_timeline_from_scenes()
             st.toast("Bulk edits saved.")
             st.rerun()
