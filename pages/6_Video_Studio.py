@@ -15,6 +15,14 @@ from src.video.timeline_schema import CaptionStyle, Music, Timeline, Voiceover
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 
 
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
+
+
+def _is_video(path: Path) -> bool:
+    return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
         return ""
@@ -160,7 +168,7 @@ def _build_timeline_from_ui(
     return timeline
 
 
-def _default_scene_edits(images: list[Path], timeline_path: Path, default_duration: float) -> list[dict[str, str | float]]:
+def _default_scene_edits(media_files: list[Path], timeline_path: Path, default_duration: float) -> list[dict[str, str | float]]:
     timeline_scenes_by_path: dict[str, dict[str, str | float]] = {}
     if timeline_path.exists():
         try:
@@ -174,8 +182,8 @@ def _default_scene_edits(images: list[Path], timeline_path: Path, default_durati
             }
 
     edits: list[dict[str, str | float]] = []
-    for image in images:
-        from_timeline = timeline_scenes_by_path.get(str(image), {})
+    for media_path in media_files:
+        from_timeline = timeline_scenes_by_path.get(str(media_path), {})
         edits.append(
             {
                 "duration": float(from_timeline.get("duration", default_duration)),
@@ -185,18 +193,21 @@ def _default_scene_edits(images: list[Path], timeline_path: Path, default_durati
     return edits
 
 
-def _collect_scene_edits(images: list[Path], timeline_path: Path, default_duration: float) -> list[dict[str, str | float]]:
+def _collect_scene_edits(media_files: list[Path], timeline_path: Path, default_duration: float) -> list[dict[str, str | float]]:
     state_key = f"video_scene_edits::{timeline_path}"
-    if state_key not in st.session_state or len(st.session_state[state_key]) != len(images):
-        st.session_state[state_key] = _default_scene_edits(images, timeline_path, default_duration)
+    if state_key not in st.session_state or len(st.session_state[state_key]) != len(media_files):
+        st.session_state[state_key] = _default_scene_edits(media_files, timeline_path, default_duration)
 
     edits: list[dict[str, str | float]] = st.session_state[state_key]
-    for index, image in enumerate(images, start=1):
+    for index, media_path in enumerate(media_files, start=1):
         row = edits[index - 1]
-        with st.expander(f"Scene {index}: {image.name}"):
+        with st.expander(f"Scene {index}: {media_path.name}"):
             col_a, col_b = st.columns([1, 2])
             with col_a:
-                st.image(str(image), width=180)
+                if _is_video(media_path):
+                    st.video(str(media_path))
+                else:
+                    st.image(str(media_path), width=220)
             with col_b:
                 row["duration"] = st.number_input(
                     "Duration (seconds)",
@@ -204,13 +215,13 @@ def _collect_scene_edits(images: list[Path], timeline_path: Path, default_durati
                     max_value=30.0,
                     step=0.25,
                     value=float(row.get("duration", default_duration)),
-                    key=f"video_scene_duration_{index}_{image.name}",
+                    key=f"video_scene_duration_{index}_{media_path.name}",
                 )
                 row["caption"] = st.text_area(
                     "Subtitle line(s) for this scene",
                     value=str(row.get("caption", "")),
                     height=80,
-                    key=f"video_scene_caption_{index}_{image.name}",
+                    key=f"video_scene_caption_{index}_{media_path.name}",
                     placeholder="Optional subtitle text shown during this scene.",
                 )
     return edits
@@ -231,15 +242,20 @@ project_path = projects_root / project_name
 upsert_project(project_name, project_name.replace("_", " "))
 
 images_dir = project_path / "assets/images"
+videos_dir = project_path / "assets/videos"
 audio_dir = project_path / "assets/audio"
 music_dir = project_path / "assets/music"
 renders_dir = project_path / "renders"
 
-images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
+images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in IMAGE_EXTENSIONS])
+videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in VIDEO_EXTENSIONS])
+media_files = sorted(images + videos)
 audio_files = sorted([p for p in audio_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
 music_files = sorted([p for p in music_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
 if images:
     record_assets(project_name, "image", images)
+if videos:
+    record_assets(project_name, "video", videos)
 if audio_files:
     record_assets(project_name, "voiceover", audio_files)
 if music_files:
@@ -247,7 +263,7 @@ if music_files:
 
 st.markdown("### Assets")
 cols = st.columns(3)
-cols[0].metric("Images", len(images))
+cols[0].metric("Scene media", len(media_files))
 cols[1].metric("Voiceover files", len(audio_files))
 cols[2].metric("Music files", len(music_files))
 
@@ -260,6 +276,26 @@ if session_images:
         st.rerun()
 else:
     st.caption("No generated images found in the current session.")
+
+uploaded_scene_media = st.file_uploader(
+    "Upload scene media (.png, .jpg, .jpeg, .mp4, .mov, .webm, .mkv)",
+    type=["png", "jpg", "jpeg", "mp4", "mov", "webm", "mkv"],
+    key="video_scene_media_upload",
+)
+if uploaded_scene_media is not None:
+    suffix = Path(uploaded_scene_media.name).suffix.lower()
+    if suffix in VIDEO_EXTENSIONS:
+        destination_dir = videos_dir
+        asset_type = "video"
+    else:
+        destination_dir = images_dir
+        asset_type = "image"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / uploaded_scene_media.name
+    destination.write_bytes(uploaded_scene_media.getbuffer())
+    record_asset(project_name, asset_type, destination)
+    st.success(f"Saved {uploaded_scene_media.name} to {destination_dir.relative_to(project_path)}.")
+    st.rerun()
 
 if audio_files:
     st.caption(f"Using voiceover: {audio_files[0].name}")
@@ -369,12 +405,12 @@ scene_duration_default = meta_defaults.get("scene_duration", 3.0)
 if scene_duration_default is None:
     scene_duration_default = 3.0
 scene_duration = st.slider(
-    "Seconds per image",
+    "Default seconds per scene",
     min_value=1.0,
     max_value=12.0,
     value=float(scene_duration_default),
     step=0.5,
-    help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
+    help="Default used for new scene rows. You can override each scene duration in the Scene editor tab.",
     key="video_scene_duration",
 )
 
@@ -382,11 +418,11 @@ edit_tab, render_tab = st.tabs(["Scene editor", "Render settings"])
 
 with edit_tab:
     st.caption("Set per-scene timing and subtitles. These values are written into timeline.json.")
-    if images:
-        scene_edits = _collect_scene_edits(images, timeline_path, float(scene_duration))
+    if media_files:
+        scene_edits = _collect_scene_edits(media_files, timeline_path, float(scene_duration))
     else:
         scene_edits = []
-        st.info("No images found in assets/images/. Add images to edit scene timing and subtitles.")
+        st.info("No media found in assets/images or assets/videos. Add media to edit scene timing and subtitles.")
 
 with render_tab:
     st.caption("Global render settings and caption style controls.")
@@ -472,15 +508,15 @@ if burn_captions and not any(str(edit.get("caption", "")).strip() for edit in sc
 st.markdown("### Actions")
 
 if st.button("Generate timeline.json", width="stretch"):
-    if not images:
-        st.error("No images found in assets/images/. Add scene images to generate a timeline.")
+    if not media_files:
+        st.error("No scene media found in assets/images or assets/videos. Add media to generate a timeline.")
     elif include_voiceover and not audio_files:
         st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
     else:
         timeline = _build_timeline_from_ui(
             project_name=project_name,
             title=title,
-            images=images,
+            images=media_files,
             audio_files=audio_files,
             music_files=music_files,
             aspect_ratio=aspect_ratio,
@@ -497,8 +533,8 @@ if st.button("Generate timeline.json", width="stretch"):
         st.success("timeline.json generated.")
 
 if st.button("Render video (FFmpeg)", width="stretch"):
-    if not images:
-        st.error("No images found in assets/images/. Add scene images before rendering.")
+    if not media_files:
+        st.error("No scene media found in assets/images or assets/videos. Add media before rendering.")
         st.stop()
     if include_voiceover and not audio_files:
         st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
@@ -507,7 +543,7 @@ if st.button("Render video (FFmpeg)", width="stretch"):
     timeline = _build_timeline_from_ui(
         project_name=project_name,
         title=title,
-        images=images,
+        images=media_files,
         audio_files=audio_files,
         music_files=music_files,
         aspect_ratio=aspect_ratio,
@@ -532,7 +568,7 @@ if st.button("Render video (FFmpeg)", width="stretch"):
 
     missing_images = [scene.image_path for scene in timeline.scenes if not Path(scene.image_path).exists()]
     if missing_images:
-        st.error("Missing scene images referenced by timeline.json.")
+        st.error("Missing scene media referenced by timeline.json.")
         st.code("\n".join(missing_images))
         st.stop()
     if timeline.meta.include_voiceover:

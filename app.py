@@ -392,12 +392,29 @@ def tab_create_prompts() -> None:
         )
 
 
+def _save_scene_image_bytes(scene: Scene, image_bytes: bytes) -> None:
+    scene.image_bytes = image_bytes
+    scene.image_variations = [image_bytes]
+    scene.primary_image_index = 0
+    scene.image_error = ""
+
+    images_dir = Path("data/projects") / _project_folder_name() / "assets/images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    destination = images_dir / f"s{scene.index:02d}.png"
+    destination.write_bytes(image_bytes)
+    record_asset(_project_folder_name(), "image", destination)
+
+
 def tab_create_images() -> None:
     st.subheader("Create images")
 
     if not scenes_ready():
         st.warning("Create scenes first.")
         return
+
+    st.info(
+        "You can generate images with AI, upload your own image for each scene, or bulk upload scene images."
+    )
 
     aspect_ratio_options = ["16:9", "9:16", "1:1"]
     current_aspect_ratio = (
@@ -417,6 +434,21 @@ def tab_create_images() -> None:
         int(st.session_state.variations_per_scene),
     )
 
+    bulk_uploads = st.file_uploader(
+        "Bulk upload scene images (optional, ordered by scene number)",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="bulk_scene_image_upload",
+        help="When uploaded, files are assigned to scenes in order: first file -> Scene 1, second -> Scene 2, etc.",
+    )
+    if bulk_uploads:
+        applied = 0
+        for scene, upload in zip(st.session_state.scenes, bulk_uploads):
+            _save_scene_image_bytes(scene, upload.getvalue())
+            applied += 1
+        st.success(f"Applied {applied} uploaded image(s) to scenes and saved them to assets/images.")
+        st.rerun()
+
     if st.button("Generate images for all scenes", type="primary", width="stretch"):
         with st.spinner("Generating images..."):
             for s in st.session_state.scenes:
@@ -435,11 +467,7 @@ def tab_create_images() -> None:
                 s.primary_image_index = 0
                 s.image_bytes = s.image_variations[0] if s.image_variations else None
                 if s.image_bytes:
-                    images_dir = Path("data/projects") / _project_folder_name() / "assets/images"
-                    images_dir.mkdir(parents=True, exist_ok=True)
-                    destination = images_dir / f"s{s.index:02d}.png"
-                    destination.write_bytes(s.image_bytes)
-                    record_asset(_project_folder_name(), "image", destination)
+                    _save_scene_image_bytes(s, s.image_bytes)
 
         st.toast("Image generation complete. Images auto-saved to assets/images.")
         st.rerun()
@@ -452,6 +480,16 @@ def tab_create_images() -> None:
                 st.image(s.image_bytes, width="stretch")
             else:
                 st.info("No primary image yet.")
+
+            uploaded_scene_image = st.file_uploader(
+                f"Upload your own image for scene {s.index:02d}",
+                type=["png", "jpg", "jpeg"],
+                key=f"scene_upload_{s.index}",
+            )
+            if uploaded_scene_image is not None:
+                _save_scene_image_bytes(s, uploaded_scene_image.getvalue())
+                st.success(f"Uploaded image applied to scene {s.index:02d}.")
+                st.rerun()
 
             if len(s.image_variations) > 1:
                 st.caption("Variations")
@@ -477,11 +515,7 @@ def tab_create_images() -> None:
                         else:
                             s.image_variations = [updated.image_bytes]
                         if s.image_bytes:
-                            images_dir = Path("data/projects") / _project_folder_name() / "assets/images"
-                            images_dir.mkdir(parents=True, exist_ok=True)
-                            destination = images_dir / f"s{s.index:02d}.png"
-                            destination.write_bytes(s.image_bytes)
-                            record_asset(_project_folder_name(), "image", destination)
+                            _save_scene_image_bytes(s, s.image_bytes)
                     st.toast("Regenerated.")
                     st.rerun()
             with c2:

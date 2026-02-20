@@ -10,6 +10,9 @@ from .timeline_schema import Timeline
 from .utils import ensure_ffmpeg_exists, ensure_parent_dir, run_cmd
 
 
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
+
+
 def _parse_resolution(resolution: str) -> tuple[int, int]:
     if "x" not in resolution:
         raise ValueError("Resolution must be formatted like 1080x1920")
@@ -47,26 +50,55 @@ def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
 
 
 def _render_scene(scene, output_path: Path, fps: int, width: int, height: int, log_path: Path | None) -> None:
-    filter_chain = _zoompan_filter(scene, fps, width, height)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loop",
-        "1",
-        "-i",
-        scene.image_path,
-        "-t",
-        f"{scene.duration}",
-        "-vf",
-        filter_chain,
-        "-r",
-        str(fps),
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        str(output_path),
-    ]
+    source_path = Path(scene.image_path)
+    is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
+    if is_video:
+        filter_chain = (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            "format=yuv420p"
+        )
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            scene.image_path,
+            "-t",
+            f"{scene.duration}",
+            "-vf",
+            filter_chain,
+            "-r",
+            str(fps),
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ]
+    else:
+        filter_chain = _zoompan_filter(scene, fps, width, height)
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loop",
+            "1",
+            "-i",
+            scene.image_path,
+            "-t",
+            f"{scene.duration}",
+            "-vf",
+            filter_chain,
+            "-r",
+            str(fps),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ]
     run_cmd(cmd, log_path=log_path)
 
 
