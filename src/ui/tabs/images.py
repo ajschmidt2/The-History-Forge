@@ -5,6 +5,7 @@ import streamlit as st
 from utils import Scene, generate_image_for_scene
 from src.storage import record_asset
 from src.ui.state import active_project_id, scenes_ready
+from src.ui.timeline_sync import sync_timeline_for_project
 
 
 def _save_scene_image_bytes(scene: Scene, image_bytes: bytes) -> None:
@@ -19,6 +20,17 @@ def _save_scene_image_bytes(scene: Scene, image_bytes: bytes) -> None:
     destination.write_bytes(image_bytes)
     record_asset(active_project_id(), "image", destination)
 
+
+
+def _sync_project_timeline_from_session_scenes() -> None:
+    project_id = active_project_id()
+    project_path = Path("data/projects") / project_id
+    sync_timeline_for_project(
+        project_path=project_path,
+        project_id=project_id,
+        title=st.session_state.project_title,
+        session_scenes=st.session_state.get("scenes", []),
+    )
 
 def tab_create_images() -> None:
     st.subheader("Create images")
@@ -61,6 +73,7 @@ def tab_create_images() -> None:
         for scene, upload in zip(st.session_state.scenes, bulk_uploads):
             _save_scene_image_bytes(scene, upload.getvalue())
             applied += 1
+        _sync_project_timeline_from_session_scenes()
         st.success(f"Applied {applied} uploaded image(s) to scenes and saved them to assets/images.")
         st.rerun()
 
@@ -106,6 +119,8 @@ def tab_create_images() -> None:
 
         st.session_state.generated_image_cache = cache
 
+        _sync_project_timeline_from_session_scenes()
+
         if scene_failures:
             st.warning(
                 f"Generated images for {generated_count} scene(s). Failed: {', '.join(scene_failures)}."
@@ -130,6 +145,7 @@ def tab_create_images() -> None:
             )
             if uploaded_scene_image is not None:
                 _save_scene_image_bytes(s, uploaded_scene_image.getvalue())
+                _sync_project_timeline_from_session_scenes()
                 st.success(f"Uploaded image applied to scene {s.index:02d}.")
                 st.rerun()
 
@@ -158,6 +174,7 @@ def tab_create_images() -> None:
                             s.image_variations = [updated.image_bytes]
                         if s.image_bytes:
                             _save_scene_image_bytes(s, s.image_bytes)
+                    _sync_project_timeline_from_session_scenes()
                     st.toast("Regenerated.")
                     st.rerun()
             with c2:

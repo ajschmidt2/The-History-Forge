@@ -11,10 +11,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from src.storage import record_asset, record_assets, upsert_project
 from src.video.ffmpeg_render import render_video_from_timeline
-from src.video.timeline_builder import build_default_timeline, write_timeline_json
-from src.video.timeline_schema import CaptionStyle, Music, Timeline, Voiceover
+from src.video.timeline_schema import CaptionStyle, Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 from src.ui.state import active_project_id
+from src.ui.timeline_sync import sync_timeline_for_project
 
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
@@ -223,50 +223,6 @@ def _collect_scene_captions(media_files: list[Path], timeline_path: Path) -> lis
     return captions
 
 
-def _build_timeline_from_ui(
-    project_name: str,
-    title: str,
-    images: list[Path],
-    audio_files: list[Path],
-    music_files: list[Path],
-    aspect_ratio: str,
-    fps: int,
-    scene_duration: float | None,
-    burn_captions: bool,
-    caption_style: CaptionStyle,
-    music_volume_db: float,
-    include_voiceover: bool,
-    include_music: bool,
-    enable_motion: bool,
-    crossfade: bool,
-    crossfade_duration: float,
-    scene_captions: list[str] | None = None,
-) -> Timeline:
-    voiceover_path = audio_files[0] if include_voiceover and audio_files else None
-    timeline = build_default_timeline(
-        project_id=project_name,
-        title=title,
-        images=images,
-        voiceover_path=voiceover_path,
-        aspect_ratio=aspect_ratio,
-        fps=int(fps),
-        scene_duration=scene_duration,
-        burn_captions=burn_captions,
-        caption_style=caption_style,
-        music_path=music_files[0] if include_music and music_files else None,
-        music_volume_db=music_volume_db,
-        include_voiceover=include_voiceover,
-        include_music=include_music,
-        enable_motion=enable_motion,
-        crossfade=crossfade,
-        crossfade_duration=crossfade_duration,
-    )
-    if scene_captions:
-        for scene, caption in zip(timeline.scenes, scene_captions):
-            scene.caption = str(caption or "").strip() or None
-    return timeline
-
-
 def tab_video_compile() -> None:
     st.subheader("Video Studio")
     st.caption(
@@ -331,8 +287,7 @@ def tab_video_compile() -> None:
         st.caption(f"Using music bed: {music_files[0].name}")
 
     st.info(
-        "Tip: Generate timeline.json or click Render to auto-build it. Toggle voiceover/music to render "
-        "with or without audio tracks."
+        "Tip: timeline.json is kept in sync with the current media and settings. Use Generate timeline.json to force a manual refresh."
     )
 
     st.markdown("### Voiceover audio")
@@ -574,6 +529,31 @@ def tab_video_compile() -> None:
         key="video_music_volume",
     )
 
+    timeline_meta_overrides = {
+        "title": title,
+        "aspect_ratio": aspect_ratio,
+        "fps": int(fps),
+        "scene_duration": effective_scene_duration,
+        "burn_captions": burn_captions,
+        "caption_style": selected_caption_style.model_dump(),
+        "include_voiceover": include_voiceover,
+        "include_music": include_music,
+        "crossfade": crossfade,
+        "crossfade_duration": crossfade_duration,
+        "music": {"volume_db": music_volume_db},
+    }
+
+    if media_files:
+        sync_timeline_for_project(
+            project_path=project_path,
+            project_id=project_name,
+            title=title,
+            media_files=media_files,
+            session_scenes=st.session_state.get("scenes", []),
+            scene_captions=scene_captions,
+            meta_overrides=timeline_meta_overrides,
+        )
+
     st.markdown("### Actions")
     if st.button("Generate timeline.json", width="stretch", key="video_generate_timeline"):
         if not media_files:
@@ -581,26 +561,15 @@ def tab_video_compile() -> None:
         elif include_voiceover and not audio_files:
             st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
         else:
-            timeline = _build_timeline_from_ui(
-                project_name=project_name,
+            sync_timeline_for_project(
+                project_path=project_path,
+                project_id=project_name,
                 title=title,
-                images=media_files,
-                audio_files=audio_files,
-                music_files=music_files,
-                aspect_ratio=aspect_ratio,
-                fps=int(fps),
-                scene_duration=effective_scene_duration,
-                burn_captions=burn_captions,
-                caption_style=selected_caption_style,
-                music_volume_db=music_volume_db,
-                include_voiceover=include_voiceover,
-                include_music=include_music,
-                enable_motion=enable_motion,
-                crossfade=crossfade,
-                crossfade_duration=crossfade_duration,
+                media_files=media_files,
+                session_scenes=st.session_state.get("scenes", []),
                 scene_captions=scene_captions,
+                meta_overrides=timeline_meta_overrides,
             )
-            write_timeline_json(timeline, timeline_path)
             st.success("timeline.json generated.")
 
     if st.button("Render video (FFmpeg)", width="stretch", key="video_render"):
@@ -610,81 +579,21 @@ def tab_video_compile() -> None:
         if include_voiceover and not audio_files:
             st.error("Voiceover is enabled but no audio found in assets/audio/. Add a voiceover file first.")
             return
+        if not timeline_path.exists():
+            st.error("timeline.json is missing. Click Generate timeline.json first.")
+            return
 
-        if timeline_path.exists():
-            try:
-                timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
-            except ValueError as exc:
-                st.error(f"Unable to read timeline.json: {exc}")
-                return
-            image_paths = {str(image) for image in media_files}
-            timeline_images = [scene.image_path for scene in timeline.scenes]
-            if len(timeline_images) != len(media_files) or any(path not in image_paths for path in timeline_images):
-                timeline = _build_timeline_from_ui(
-                    project_name=project_name,
-                    title=title,
-                    images=media_files,
-                    audio_files=audio_files,
-                    music_files=music_files,
-                    aspect_ratio=aspect_ratio,
-                    fps=int(fps),
-                    scene_duration=effective_scene_duration,
-                    burn_captions=burn_captions,
-                    caption_style=selected_caption_style,
-                    music_volume_db=music_volume_db,
-                    include_voiceover=include_voiceover,
-                    include_music=include_music,
-                    enable_motion=enable_motion,
-                    crossfade=crossfade,
-                    crossfade_duration=crossfade_duration,
-                    scene_captions=scene_captions,
-                )
-                write_timeline_json(timeline, timeline_path)
-                st.info("Timeline rebuilt to match current media.")
-            else:
-                timeline.meta.include_voiceover = include_voiceover
-                timeline.meta.include_music = include_music
-                if include_voiceover and audio_files:
-                    timeline.meta.voiceover = timeline.meta.voiceover or Voiceover(path=str(audio_files[0]))
-                    timeline.meta.voiceover.path = str(audio_files[0])
-                else:
-                    timeline.meta.voiceover = None
-                if include_music and music_files:
-                    timeline.meta.music = timeline.meta.music or Music(
-                        path=str(music_files[0]),
-                        volume_db=music_volume_db,
-                    )
-                    timeline.meta.music.path = str(music_files[0])
-                    timeline.meta.music.volume_db = music_volume_db
-                else:
-                    timeline.meta.music = None
-                timeline.meta.burn_captions = burn_captions
-                timeline.meta.caption_style = selected_caption_style
-                timeline.meta.scene_duration = effective_scene_duration
-                for scene, caption in zip(timeline.scenes, scene_captions):
-                    scene.caption = str(caption or "").strip() or None
-                write_timeline_json(timeline, timeline_path)
-        else:
-            timeline = _build_timeline_from_ui(
-                project_name=project_name,
-                title=title,
-                images=media_files,
-                audio_files=audio_files,
-                music_files=music_files,
-                aspect_ratio=aspect_ratio,
-                fps=int(fps),
-                scene_duration=effective_scene_duration,
-                burn_captions=burn_captions,
-                caption_style=selected_caption_style,
-                music_volume_db=music_volume_db,
-                include_voiceover=include_voiceover,
-                include_music=include_music,
-                enable_motion=enable_motion,
-                crossfade=crossfade,
-                crossfade_duration=crossfade_duration,
-                scene_captions=scene_captions,
-            )
-            write_timeline_json(timeline, timeline_path)
+        try:
+            timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            st.error(f"Unable to read timeline.json: {exc}")
+            return
+
+        expected_paths = {str(path) for path in media_files}
+        timeline_paths = [scene.image_path for scene in timeline.scenes]
+        if len(timeline_paths) != len(media_files) or any(path not in expected_paths for path in timeline_paths):
+            st.error("timeline.json is out of sync with project media. Click Generate timeline.json to resync.")
+            return
 
         missing_images = [scene.image_path for scene in timeline.scenes if not Path(scene.image_path).exists()]
         if missing_images:
