@@ -62,6 +62,7 @@ class Scene:
     primary_image_index: int = 0
     status: str = "active"
     image_error: str = ""
+    estimated_duration_sec: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -674,82 +675,135 @@ def _fallback_chunk_scenes(script: str, target_n: int) -> List[Scene]:
 
 
 # ----------------------------
-# Scene splitting (LLM + ENFORCE exact N)
+# Scene splitting (beat-aware + deterministic duration estimates)
 # ----------------------------
-def split_script_into_scenes(script: str, max_scenes: int = 8) -> List[Scene]:
+_STOPWORDS = {
+    "the", "and", "that", "with", "from", "this", "into", "about", "after", "before", "their", "there",
+    "were", "have", "has", "had", "been", "being", "they", "them", "than", "then", "when", "where",
+    "while", "which", "whose", "what", "your", "you", "our", "for", "are", "was", "will", "would",
+    "could", "should", "over", "under", "between", "through", "across", "during", "because", "very",
+}
+
+
+def _estimate_duration_sec(text: str, wpm: int) -> float:
+    words = len((text or "").split())
+    rate = max(90, min(int(wpm or 160), 240))
+    seconds = (words / rate) * 60.0 if words else 0.0
+    return round(max(2.0, seconds), 1)
+
+
+def _extract_visual_keywords(text: str, min_items: int = 5, max_items: int = 10) -> str:
+    tokens = re.findall(r"[A-Za-z][A-Za-z\-']+", (text or "").lower())
+    ranked: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if len(token) < 4 or token in _STOPWORDS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        ranked.append(token)
+        if len(ranked) >= max_items:
+            break
+    if len(ranked) < min_items:
+        defaults = ["era", "location", "architecture", "wardrobe", "atmosphere", "props", "lighting"]
+        for item in defaults:
+            if item not in seen:
+                ranked.append(item)
+            if len(ranked) >= min_items:
+                break
+    return ", ".join(ranked[:max_items])
+
+
+def _split_by_headings_paragraphs(script: str, target_n: int) -> list[str]:
+    chunks = [c.strip() for c in re.split(r"\n\s*\n+", script) if c.strip()]
+    if not chunks:
+        chunks = [script.strip()]
+
+    grouped: list[str] = []
+    for chunk in chunks:
+        if len(chunk.split()) > 180:
+            sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", chunk) if s.strip()]
+            grouped.extend(sentences if sentences else [chunk])
+        else:
+            grouped.append(chunk)
+
+    if len(grouped) >= target_n:
+        return [" ".join(group).strip() for group in _split_into_groups(grouped, target_n)]
+
+    words = script.split()
+    if not words:
+        return []
+    return [" ".join(group).strip() for group in _split_into_groups(words, target_n)]
+
+
+def _outline_beats(outline: object) -> list[dict[str, Any]]:
+    if not isinstance(outline, dict):
+        return []
+    beats = outline.get("beats", [])
+    if not isinstance(beats, list):
+        return []
+    clean: list[dict[str, Any]] = []
+    for beat in beats:
+        if not isinstance(beat, dict):
+            continue
+        title = str(beat.get("title", "") or "").strip()
+        bullets_raw = beat.get("bullets", [])
+        bullets = [str(b).strip() for b in bullets_raw if str(b).strip()] if isinstance(bullets_raw, list) else []
+        if title:
+            clean.append({"title": title, "bullets": bullets[:4]})
+    return clean
+
+
+def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str, Any] | None = None, wpm: int = 160) -> List[Scene]:
     script = (script or "").strip()
     if not script:
         return []
 
-    max_scenes = min(max_scenes, 75)
+    target = max(1, min(int(max_scenes or 8), 75))
+    beats = _outline_beats(outline)
 
-    # 1) Start with deterministic fallback that ALWAYS produces exactly N
-    fallback = _fallback_chunk_scenes(script, max_scenes)
+    if beats:
+        target = min(target, len(beats))
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
+        base_units = sentences if len(sentences) >= target else [p.strip() for p in re.split(r"\n\s*\n+", script) if p.strip()]
+        if not base_units:
+            base_units = [script]
+        groups = _split_into_groups(base_units, target)
 
-    client = _openai_client()
-    if client is None:
-        return fallback
+        scenes: list[Scene] = []
+        for i in range(target):
+            beat = beats[i]
+            excerpt = " ".join(groups[i]).strip() if i < len(groups) else ""
+            excerpt = excerpt or script[:280].strip()
+            beat_text = " ".join(beat.get("bullets", []))
+            keyword_source = f"{beat.get('title', '')} {beat_text} {excerpt}"
+            scenes.append(
+                Scene(
+                    index=i + 1,
+                    title=str(beat.get("title", "") or f"Beat {i+1}"),
+                    script_excerpt=excerpt,
+                    visual_intent=_extract_visual_keywords(keyword_source),
+                    estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
+                )
+            )
+        return scenes
 
-    payload = {
-        "task": "Split narration into scenes for visuals.",
-        "max_scenes": max_scenes,
-        "return": {"format": "json", "field": "scenes"},
-        "scene_schema": {"title": "string", "text": "1–3 sentences", "visual_intent": "one sentence"},
-        "script": script,
-    }
-
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            temperature=0.3,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": "Return ONLY valid JSON."},
-                {"role": "user", "content": json.dumps(payload)},
-            ],
+    chunks = _split_by_headings_paragraphs(script, target)
+    scenes: list[Scene] = []
+    for i, txt in enumerate(chunks[:target], start=1):
+        excerpt = txt.strip() or script[:280].strip()
+        scenes.append(
+            Scene(
+                index=i,
+                title=f"Scene {i}",
+                script_excerpt=excerpt,
+                visual_intent=_extract_visual_keywords(excerpt),
+                estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
+            )
         )
 
-        data = json.loads(resp.choices[0].message.content)
-        raw = data.get("scenes", [])
-        if not isinstance(raw, list):
-            raw = []
-
-        # 2) Only overlay when the model returns a full set to preserve even coverage.
-        if len(raw) >= max_scenes:
-            for i in range(min(len(raw), max_scenes)):
-                sc = raw[i] if isinstance(raw[i], dict) else {}
-                title = str(sc.get("title", fallback[i].title)).strip() or fallback[i].title
-                text = str(sc.get("text", fallback[i].script_excerpt)).strip() or fallback[i].script_excerpt
-                vi = str(sc.get("visual_intent", fallback[i].visual_intent)).strip() or fallback[i].visual_intent
-
-                fallback[i] = Scene(
-                    index=i + 1,
-                    title=title,
-                    script_excerpt=text,
-                    visual_intent=vi,
-                    image_prompt=fallback[i].image_prompt,
-                    image_bytes=fallback[i].image_bytes,
-                )
-
-    except Exception:
-        # If OpenAI fails or returns weird JSON, we still return fallback
-        pass
-
-    # 3) Guarantee numbering + exact length
-    fallback = fallback[:max_scenes]
-    for i, s in enumerate(fallback, start=1):
-        s.index = i
-        if not s.title:
-            s.title = f"Scene {i}"
-        if not s.script_excerpt:
-            s.script_excerpt = script[:240].strip()
-        if not s.visual_intent:
-            s.visual_intent = (
-                "Create a strong historical visual. Identify the time period and location from the excerpt: "
-                f"{s.script_excerpt[:180]}..."
-            )
-
-    return fallback
+    return scenes
 
 # ----------------------------
 # Prompt generation (ENFORCE one prompt per scene)

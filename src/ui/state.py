@@ -97,6 +97,7 @@ def _scene_to_serializable(scene: Scene) -> dict[str, object]:
         "visual_intent": str(scene.visual_intent or ""),
         "image_prompt": str(scene.image_prompt or ""),
         "status": str(scene.status or "active"),
+        "estimated_duration_sec": float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0),
     }
 
 
@@ -117,6 +118,10 @@ def _scene_from_serializable(raw: object, project_id: str) -> Scene | None:
         image_prompt=str(raw.get("image_prompt", "") or ""),
     )
     scene.status = str(raw.get("status", "active") or "active")
+    try:
+        scene.estimated_duration_sec = float(raw.get("estimated_duration_sec", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        scene.estimated_duration_sec = 0.0
     saved_image_path = PROJECTS_ROOT / slugify_project_id(project_id) / "assets/images" / f"s{scene.index:02d}.png"
     if saved_image_path.exists():
         try:
@@ -178,6 +183,8 @@ def save_project_state(project_id: str) -> None:
         "aspect_ratio": str(st.session_state.get("aspect_ratio", "16:9") or "16:9"),
         "variations_per_scene": int(st.session_state.get("variations_per_scene", 1) or 1),
         "max_scenes": int(st.session_state.get("max_scenes", 12) or 12),
+        "scene_wpm": int(st.session_state.get("scene_wpm", 160) or 160),
+        "estimated_total_runtime_sec": float(st.session_state.get("estimated_total_runtime_sec", 0.0) or 0.0),
         "scenes": [_scene_to_serializable(scene) for scene in scenes if isinstance(scene, Scene)],
     }
     state_path = _project_state_path(normalized)
@@ -209,6 +216,8 @@ def load_project_state(project_id: str) -> None:
         st.session_state.run_clarity_pass = True
         st.session_state.run_retention_pass = True
         st.session_state.run_safety_pass = True
+        st.session_state.scene_wpm = 160
+        st.session_state.estimated_total_runtime_sec = 0.0
         st.session_state.scenes = []
         return
 
@@ -243,6 +252,8 @@ def load_project_state(project_id: str) -> None:
     st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "16:9") or "16:9")
     st.session_state.variations_per_scene = int(raw.get("variations_per_scene", 1) or 1)
     st.session_state.max_scenes = int(raw.get("max_scenes", 12) or 12)
+    st.session_state.scene_wpm = int(raw.get("scene_wpm", 160) or 160)
+    st.session_state.estimated_total_runtime_sec = float(raw.get("estimated_total_runtime_sec", 0.0) or 0.0)
 
     scenes: list[Scene] = []
     for scene_raw in raw.get("scenes", []):
@@ -291,6 +302,8 @@ def init_state() -> None:
     st.session_state.setdefault("variations_per_scene", 1)
 
     st.session_state.setdefault("max_scenes", 12)
+    st.session_state.setdefault("scene_wpm", 160)
+    st.session_state.setdefault("estimated_total_runtime_sec", 0.0)
     st.session_state.setdefault("scenes", [])
 
     st.session_state.setdefault("voice_id", _load_saved_voice_id())
@@ -409,6 +422,8 @@ def render_project_selector() -> None:
                 st.session_state.run_clarity_pass = True
                 st.session_state.run_retention_pass = True
                 st.session_state.run_safety_pass = True
+                st.session_state.scene_wpm = 160
+                st.session_state.estimated_total_runtime_sec = 0.0
                 st.session_state.scenes = []
                 ensure_project_exists(fallback)
             st.toast(f"Deleted project: {selected}")
