@@ -3,6 +3,7 @@ from typing import Any
 
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
 from src.video.timeline_schema import CaptionStyle, Timeline
+from src.ui.caption_format import format_caption
 
 
 def _scene_index_from_stem(stem: str, fallback: int) -> int:
@@ -104,7 +105,8 @@ def sync_timeline_for_project(
 
     if scene_captions:
         for scene, caption in zip(timeline.scenes, scene_captions):
-            scene.caption = str(caption or "").strip() or None
+            formatted = format_caption(str(caption or ""))
+            scene.caption = formatted or None
     elif session_scenes:
         excerpt_by_index: dict[int, str] = {}
         for scene in session_scenes:
@@ -114,7 +116,8 @@ def sync_timeline_for_project(
                 excerpt_by_index[idx] = excerpt
         for i, scene in enumerate(timeline.scenes, start=1):
             scene_index = _scene_index_from_stem(Path(scene.image_path).stem, i)
-            scene.caption = excerpt_by_index.get(scene_index) or None
+            formatted = format_caption(excerpt_by_index.get(scene_index) or "")
+            scene.caption = formatted or f"Scene {i}"
 
     write_timeline_json(timeline, timeline_path)
     return timeline_path

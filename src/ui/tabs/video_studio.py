@@ -15,6 +15,7 @@ from src.video.timeline_schema import CaptionStyle, Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
 from src.ui.state import active_project_id
 from src.ui.timeline_sync import sync_timeline_for_project
+from src.ui.caption_format import format_caption
 
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
@@ -190,14 +191,16 @@ def _default_scene_captions(media_files: list[Path], timeline_path: Path) -> lis
     for i, media_path in enumerate(media_files, start=1):
         from_timeline = caption_by_path.get(str(media_path), "").strip()
         if from_timeline:
-            captions.append(from_timeline)
+            captions.append(format_caption(from_timeline))
             continue
         scene_number = _scene_number_from_path(media_path) or i
         from_scene_excerpt = script_excerpt_by_index.get(scene_number, "").strip()
         if from_scene_excerpt:
-            captions.append(from_scene_excerpt)
+            captions.append(format_caption(from_scene_excerpt))
             continue
-        captions.append(script_chunks[i - 1] if i - 1 < len(script_chunks) else "")
+        fallback = script_chunks[i - 1] if i - 1 < len(script_chunks) else ""
+        formatted = format_caption(fallback)
+        captions.append(formatted or f"Scene {i}")
     return captions
 
 
@@ -214,12 +217,13 @@ def _collect_scene_captions(media_files: list[Path], timeline_path: Path) -> lis
                 st.caption(f"Subtitle preview: {captions[idx - 1] or '(No subtitle)'}")
             else:
                 st.image(_render_subtitle_preview(media_path, captions[idx - 1]), width="stretch")
-            captions[idx - 1] = st.text_area(
+            edited_caption = st.text_area(
                 "Subtitle for this scene",
                 value=captions[idx - 1],
                 height=90,
                 key=f"video_scene_caption_{idx}_{media_path.name}",
             )
+            captions[idx - 1] = format_caption(edited_caption) or f"Scene {idx}"
     return captions
 
 
