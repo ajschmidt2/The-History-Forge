@@ -1,7 +1,7 @@
 import streamlit as st
 
 from src.storage import upsert_project
-from src.ui.state import active_project_id, init_state, render_project_selector, require_passcode
+from src.ui.state import active_project_id, init_state, render_project_selector, require_passcode, save_project_state
 from src.ui.tabs.export import tab_export
 from src.ui.tabs.generate_script import tab_generate_script
 from src.ui.tabs.images import tab_create_images
@@ -55,6 +55,8 @@ def main() -> None:
         tab_video_compile()
     with tabs[8]:
         tab_thumbnail_title()
+
+    save_project_state(active_project_id())
 
 
 if __name__ == "__main__":
