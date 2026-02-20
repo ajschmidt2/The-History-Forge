@@ -84,6 +84,7 @@ def _save_voice_id(voice_id: str) -> None:
 
 def init_state() -> None:
     st.session_state.setdefault("project_title", "Untitled Project")
+    st.session_state.setdefault("project_id_override", "")
     st.session_state.setdefault("topic", "")
     st.session_state.setdefault("script_text", "")
     st.session_state.setdefault("script_text_input", "")
@@ -114,9 +115,13 @@ def init_state() -> None:
     st.session_state.setdefault("thumbnail_aspect_ratio", "16:9")
     st.session_state.setdefault("video_description_direction", "")
     st.session_state.setdefault("video_description_text", "")
+    st.session_state.setdefault("generated_image_cache", {})
 
 
 def _project_folder_name() -> str:
+    override = (st.session_state.get("project_id_override") or "").strip()
+    if override:
+        return override
     return (st.session_state.project_title or "Untitled Project").strip().replace(" ", "_")
 
 
@@ -333,11 +338,23 @@ def tab_create_scenes() -> None:
 
     st.divider()
     st.markdown("### Scene list (editable)")
+    pending_edits: dict[int, dict[str, str]] = {}
     for s in st.session_state.scenes:
         with st.expander(f"{s.index:02d} — {s.title}", expanded=False):
-            s.title = st.text_input("Title", value=s.title, key=f"title_{s.index}")
-            s.script_excerpt = st.text_area("Excerpt", value=s.script_excerpt, height=140, key=f"txt_{s.index}")
-            s.visual_intent = st.text_area("Visual intent", value=s.visual_intent, height=90, key=f"vi_{s.index}")
+            st.text_input("Title", value=s.title, key=f"title_{s.index}")
+            st.text_area("Excerpt", value=s.script_excerpt, height=140, key=f"txt_{s.index}")
+            st.text_area("Visual intent", value=s.visual_intent, height=90, key=f"vi_{s.index}")
+            pending_edits[s.index] = {
+                "title": st.session_state.get(f"title_{s.index}", s.title),
+                "script_excerpt": st.session_state.get(f"txt_{s.index}", s.script_excerpt),
+                "visual_intent": st.session_state.get(f"vi_{s.index}", s.visual_intent),
+            }
+
+    for s in st.session_state.scenes:
+        edits = pending_edits.get(s.index, {})
+        s.title = edits.get("title", s.title)
+        s.script_excerpt = edits.get("script_excerpt", s.script_excerpt)
+        s.visual_intent = edits.get("visual_intent", s.visual_intent)
 
     st.caption("Tip: prompts + images are generated in the next tabs.")
 
@@ -452,26 +469,53 @@ def tab_create_images() -> None:
         st.rerun()
 
     if st.button("Generate images for all scenes", type="primary", width="stretch"):
+        scene_failures: list[str] = []
+        generated_count = 0
+        cache: dict[str, bytes] = st.session_state.get("generated_image_cache", {})
         with st.spinner("Generating images..."):
             for s in st.session_state.scenes:
                 if not (s.image_prompt or "").strip():
                     s.image_prompt = f"Create a cinematic historical visual for: {s.title}."
 
                 s.image_variations = []
-                for _ in range(int(st.session_state.variations_per_scene)):
-                    updated = generate_image_for_scene(
-                        s,
-                        aspect_ratio=st.session_state.aspect_ratio,
-                        visual_style=st.session_state.visual_style,
+                s.image_error = ""
+                for variation_index in range(int(st.session_state.variations_per_scene)):
+                    cache_key = (
+                        f"{(s.image_prompt or '').strip()}|{st.session_state.aspect_ratio}|"
+                        f"{st.session_state.visual_style}|{variation_index}"
                     )
-                    s.image_variations.append(updated.image_bytes)
+                    cached_bytes = cache.get(cache_key)
+                    if cached_bytes:
+                        s.image_variations.append(cached_bytes)
+                        continue
+                    try:
+                        updated = generate_image_for_scene(
+                            s,
+                            aspect_ratio=st.session_state.aspect_ratio,
+                            visual_style=st.session_state.visual_style,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - keep per-scene error handling resilient
+                        s.image_error = f"Image generation failed: {exc}"
+                        scene_failures.append(f"Scene {s.index:02d}")
+                        break
+                    if updated.image_bytes:
+                        cache[cache_key] = updated.image_bytes
+                        s.image_variations.append(updated.image_bytes)
 
                 s.primary_image_index = 0
                 s.image_bytes = s.image_variations[0] if s.image_variations else None
                 if s.image_bytes:
                     _save_scene_image_bytes(s, s.image_bytes)
+                    generated_count += 1
 
-        st.toast("Image generation complete. Images auto-saved to assets/images.")
+        st.session_state.generated_image_cache = cache
+
+        if scene_failures:
+            st.warning(
+                f"Generated images for {generated_count} scene(s). Failed: {', '.join(scene_failures)}."
+            )
+        else:
+            st.toast("Image generation complete. Images auto-saved to assets/images.")
         st.rerun()
 
     st.divider()
@@ -804,17 +848,6 @@ def _tail_file(path: Path, lines: int = 200) -> str:
     with path.open("r", encoding="utf-8", errors="ignore") as handle:
         return "".join(deque(handle, maxlen=lines))
 
-def _tail_file(path: Path, lines: int = 200) -> str:
-    if not path.exists():
-        return ""
-    with path.open("r", encoding="utf-8", errors="ignore") as handle:
-        return "".join(deque(handle, maxlen=lines))
-
-def _tail_file(path: Path, lines: int = 200) -> str:
-    if not path.exists():
-        return ""
-    with path.open("r", encoding="utf-8", errors="ignore") as handle:
-        return "".join(deque(handle, maxlen=lines))
 
 def _load_timeline_meta(timeline_path: Path) -> dict:
     if not timeline_path.exists():
@@ -1074,7 +1107,9 @@ def tab_video_compile() -> None:
         return
 
     project_name = st.selectbox("Project folder", [p.name for p in project_dirs])
+    st.session_state.project_id_override = project_name
     project_path = projects_root / project_name
+    st.caption(f"Active project ID for new assets: {project_name}")
     upsert_project(project_name, project_name.replace("_", " "))
 
     images_dir = project_path / "assets/images"
@@ -1307,13 +1342,6 @@ def tab_video_compile() -> None:
     with captions_cols[1]:
         st.caption("Preview")
         _render_caption_preview(selected_caption_style)
-
-    include_voiceover_default = meta_defaults.get("include_voiceover")
-    if include_voiceover_default is None:
-        include_voiceover_default = bool(audio_files)
-    include_music_default = meta_defaults.get("include_music")
-    if include_music_default is None:
-        include_music_default = bool(music_files)
 
     include_voiceover_default = meta_defaults.get("include_voiceover")
     if include_voiceover_default is None:
