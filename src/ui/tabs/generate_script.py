@@ -78,16 +78,54 @@ def tab_generate_script() -> None:
         else 0,
     )
 
-    st.session_state.audience = st.text_input(
+    audience_options = [
+        "General audience",
+        "History enthusiasts",
+        "Students (middle/high school)",
+        "College learners",
+        "Educators",
+        "YouTube shorts viewers",
+        "Custom...",
+    ]
+    current_audience = st.session_state.audience if st.session_state.audience in audience_options[:-1] else "Custom..."
+    selected_audience = st.selectbox(
         "Audience",
-        value=st.session_state.audience,
-        placeholder="e.g., General audience interested in hidden history",
+        audience_options,
+        index=audience_options.index(current_audience),
     )
-    st.session_state.story_angle = st.text_input(
+    if selected_audience == "Custom...":
+        st.session_state.audience = st.text_input(
+            "Custom audience",
+            value=st.session_state.audience if current_audience == "Custom..." else "",
+            placeholder="e.g., General audience interested in hidden history",
+        ).strip() or "General audience"
+    else:
+        st.session_state.audience = selected_audience
+
+    angle_options = [
+        "Balanced overview",
+        "Rise and fall arc",
+        "Turning points",
+        "Unsung figures",
+        "Causes and consequences",
+        "Myth vs reality",
+        "Lessons for today",
+        "Custom...",
+    ]
+    current_angle = st.session_state.story_angle if st.session_state.story_angle in angle_options[:-1] else "Custom..."
+    selected_angle = st.selectbox(
         "Angle",
-        value=st.session_state.story_angle,
-        placeholder="e.g., Focus on causes and long-term consequences",
+        angle_options,
+        index=angle_options.index(current_angle),
     )
+    if selected_angle == "Custom...":
+        st.session_state.story_angle = st.text_input(
+            "Custom angle",
+            value=st.session_state.story_angle if current_angle == "Custom..." else "",
+            placeholder="e.g., Focus on causes and long-term consequences",
+        ).strip() or "Balanced overview"
+    else:
+        st.session_state.story_angle = selected_angle
     st.session_state.use_web_research = st.checkbox(
         "Use web research",
         value=bool(st.session_state.use_web_research),
