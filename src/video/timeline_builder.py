@@ -36,8 +36,8 @@ def _build_motion(index: int) -> Motion:
     if zoom_in:
         return Motion(
             type="kenburns",
-            zoom_start=1.02,
-            zoom_end=1.06,
+            zoom_start=1.01,
+            zoom_end=1.03,
             x_start=0.49,
             x_end=0.51,
             y_start=0.5,
@@ -45,8 +45,8 @@ def _build_motion(index: int) -> Motion:
         )
     return Motion(
         type="kenburns",
-        zoom_start=1.06,
-        zoom_end=1.02,
+        zoom_start=1.03,
+        zoom_end=1.01,
         x_start=0.51,
         x_end=0.49,
         y_start=0.5,
