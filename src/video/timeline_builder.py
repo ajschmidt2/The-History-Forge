@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -11,6 +12,23 @@ def _resolution_for_aspect_ratio(aspect_ratio: str) -> str:
     if aspect_ratio == "16:9":
         return "1920x1080"
     return "1080x1920"
+
+
+def _scene_number_from_path(path: Path) -> int | None:
+    match = re.search(r"s(\d+)", path.stem.lower())
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _image_sort_key(path: Path) -> tuple[int, int, str]:
+    scene_number = _scene_number_from_path(path)
+    if scene_number is not None:
+        return (0, scene_number, path.name.lower())
+    return (1, 10**9, path.name.lower())
 
 
 def _build_motion(index: int) -> Motion:
@@ -74,7 +92,7 @@ def build_default_timeline(
     narration_min_sec: float = 1.5,
     narration_max_sec: float = 12.0,
 ) -> Timeline:
-    image_list = list(images)
+    image_list = sorted(list(images), key=_image_sort_key)
     if not image_list:
         raise ValueError("No scene images available to build a timeline.")
 

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import json
+import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .audio_mix import build_audio_mix_cmd
@@ -49,7 +53,15 @@ def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     )
 
 
-def _render_scene(scene, output_path: Path, fps: int, width: int, height: int, log_path: Path | None) -> None:
+def _render_scene(
+    scene,
+    output_path: Path,
+    fps: int,
+    width: int,
+    height: int,
+    log_path: Path | None,
+    ffmpeg_commands: list[list[str]],
+) -> None:
     source_path = Path(scene.image_path)
     is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
     if is_video:
@@ -99,10 +111,16 @@ def _render_scene(scene, output_path: Path, fps: int, width: int, height: int, l
             "yuv420p",
             str(output_path),
         ]
+    ffmpeg_commands.append(cmd)
     run_cmd(cmd, log_path=log_path)
 
 
-def _concat_scenes(scene_paths: list[Path], stitched_path: Path, log_path: Path | None) -> None:
+def _concat_scenes(
+    scene_paths: list[Path],
+    stitched_path: Path,
+    log_path: Path | None,
+    ffmpeg_commands: list[list[str]],
+) -> None:
     concat_list = stitched_path.with_suffix(".txt")
     concat_lines = [f"file '{path.as_posix()}'" for path in scene_paths]
     concat_list.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
@@ -121,6 +139,7 @@ def _concat_scenes(scene_paths: list[Path], stitched_path: Path, log_path: Path 
         str(stitched_path),
     ]
     try:
+        ffmpeg_commands.append(concat_cmd)
         run_cmd(concat_cmd, log_path=log_path)
     except RuntimeError:
         fallback_cmd = [
@@ -138,6 +157,7 @@ def _concat_scenes(scene_paths: list[Path], stitched_path: Path, log_path: Path 
             "yuv420p",
             str(stitched_path),
         ]
+        ffmpeg_commands.append(fallback_cmd)
         run_cmd(fallback_cmd, log_path=log_path)
 
 
@@ -148,6 +168,7 @@ def _crossfade_scenes(
     fps: int,
     crossfade_duration: float,
     log_path: Path | None,
+    ffmpeg_commands: list[list[str]],
 ) -> None:
     input_args: list[str] = []
     for path in scene_paths:
@@ -182,6 +203,7 @@ def _crossfade_scenes(
         "yuv420p",
         str(stitched_path),
     ]
+    ffmpeg_commands.append(cmd)
     run_cmd(cmd, log_path=log_path)
 
 
@@ -191,90 +213,134 @@ def _subtitle_filter(subtitle_path: Path) -> str:
     return f"subtitles=filename='{escaped}':charenc=UTF-8"
 
 
-def render_video_from_timeline(timeline_path: str | Path, out_mp4_path: str | Path, log_path: str | Path | None = None) -> Path:
+def _ffmpeg_version() -> str:
+    result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+    version_line = (result.stdout or result.stderr).splitlines()
+    return version_line[0].strip() if version_line else "unknown"
+
+
+def _tail_log_lines(log_path: Path | None, lines: int = 50) -> list[str]:
+    if not log_path or not log_path.exists():
+        return []
+    with log_path.open("r", encoding="utf-8", errors="ignore") as handle:
+        content = handle.readlines()
+    return [line.rstrip("\n") for line in content[-lines:]]
+
+
+def render_video_from_timeline(
+    timeline_path: str | Path,
+    out_mp4_path: str | Path,
+    log_path: str | Path | None = None,
+    report_path: str | Path | None = None,
+) -> Path:
     ensure_ffmpeg_exists()
 
-    timeline = Timeline.model_validate_json(Path(timeline_path).read_text(encoding="utf-8"))
+    timeline_content = Path(timeline_path).read_text(encoding="utf-8")
+    timeline_hash = hashlib.sha256(timeline_content.encode("utf-8")).hexdigest()
+    timeline = Timeline.model_validate_json(timeline_content)
     if not timeline.scenes:
         raise ValueError("Timeline has no scenes to render.")
     output_path = ensure_parent_dir(out_mp4_path)
     log_file = Path(log_path) if log_path else None
+    report_file = Path(report_path) if report_path else output_path.with_name("render_report.json")
+    ffmpeg_commands: list[list[str]] = []
+    render_error: str | None = None
 
-    with tempfile.TemporaryDirectory(prefix="history_forge_video_") as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        scenes_dir = tmp_path / "scenes"
-        scenes_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="history_forge_video_") as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            scenes_dir = tmp_path / "scenes"
+            scenes_dir.mkdir(parents=True, exist_ok=True)
 
-        width, height = _parse_resolution(timeline.meta.resolution)
-        fps = timeline.meta.fps
+            width, height = _parse_resolution(timeline.meta.resolution)
+            fps = timeline.meta.fps
 
-        scene_paths: list[Path] = []
-        durations: list[float] = []
-        for scene in timeline.scenes:
-            if not Path(scene.image_path).exists():
-                raise FileNotFoundError(f"Scene image not found: {scene.image_path}")
-            scene_out = scenes_dir / f"{scene.id}.mp4"
-            _render_scene(scene, scene_out, fps, width, height, log_file)
-            scene_paths.append(scene_out)
-            durations.append(scene.duration)
+            scene_paths: list[Path] = []
+            durations: list[float] = []
+            for scene in timeline.scenes:
+                if not Path(scene.image_path).exists():
+                    raise FileNotFoundError(f"Scene image not found: {scene.image_path}")
+                scene_out = scenes_dir / f"{scene.id}.mp4"
+                _render_scene(scene, scene_out, fps, width, height, log_file, ffmpeg_commands)
+                scene_paths.append(scene_out)
+                durations.append(scene.duration)
 
-        stitched_path = tmp_path / "stitched.mp4"
-        if timeline.meta.crossfade and len(scene_paths) > 1:
-            if len(scene_paths) > 12:
-                if log_file:
-                    with log_file.open("a", encoding="utf-8") as handle:
-                        handle.write("Crossfade disabled: too many scenes for a single filter graph.\n")
-                _concat_scenes(scene_paths, stitched_path, log_file)
+            stitched_path = tmp_path / "stitched.mp4"
+            if timeline.meta.crossfade and len(scene_paths) > 1:
+                if len(scene_paths) > 12:
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write("Crossfade disabled: too many scenes for a single filter graph.\n")
+                    _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
+                else:
+                    try:
+                        _crossfade_scenes(
+                            scene_paths,
+                            stitched_path,
+                            durations,
+                            fps,
+                            timeline.meta.crossfade_duration,
+                            log_file,
+                            ffmpeg_commands,
+                        )
+                    except RuntimeError:
+                        _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
             else:
-                try:
-                    _crossfade_scenes(
-                        scene_paths,
-                        stitched_path,
-                        durations,
-                        fps,
-                        timeline.meta.crossfade_duration,
-                        log_file,
-                    )
-                except RuntimeError:
-                    _concat_scenes(scene_paths, stitched_path, log_file)
-        else:
-            _concat_scenes(scene_paths, stitched_path, log_file)
+                _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
 
-        srt_path = output_path.with_name("captions.srt")
-        ass_path = output_path.with_name("captions.ass")
-        write_srt_file(srt_path, timeline)
-        write_ass_file(ass_path, timeline)
+            srt_path = output_path.with_name("captions.srt")
+            ass_path = output_path.with_name("captions.ass")
+            write_srt_file(srt_path, timeline)
+            write_ass_file(ass_path, timeline)
 
-        if timeline.meta.include_voiceover:
-            if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
-                raise FileNotFoundError("Voiceover is enabled but no voiceover path was provided.")
-            if not Path(timeline.meta.voiceover.path).exists():
-                raise FileNotFoundError(f"Voiceover audio not found: {timeline.meta.voiceover.path}")
-        if (
-            timeline.meta.include_music
-            and timeline.meta.music
-            and timeline.meta.music.path
-            and not Path(timeline.meta.music.path).exists()
-        ):
-            raise FileNotFoundError(f"Music file not found: {timeline.meta.music.path}")
+            if timeline.meta.include_voiceover:
+                if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
+                    raise FileNotFoundError("Voiceover is enabled but no voiceover path was provided.")
+                if not Path(timeline.meta.voiceover.path).exists():
+                    raise FileNotFoundError(f"Voiceover audio not found: {timeline.meta.voiceover.path}")
+            if (
+                timeline.meta.include_music
+                and timeline.meta.music
+                and timeline.meta.music.path
+                and not Path(timeline.meta.music.path).exists()
+            ):
+                raise FileNotFoundError(f"Music file not found: {timeline.meta.music.path}")
 
-        include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
-        if include_audio:
-            audio_plan = build_audio_mix_cmd(timeline.meta, timeline.total_duration, start_index=1)
-            cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
-            cmd.extend(audio_plan.input_args)
-            if timeline.meta.burn_captions:
-                cmd.extend(["-vf", _subtitle_filter(ass_path)])
-            cmd.extend(["-filter_complex", audio_plan.filter_complex])
-            cmd.extend(["-map", "0:v:0"])
-            cmd.extend(audio_plan.map_args)
-            cmd.extend(["-c:v", "libx264", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(output_path)])
-            run_cmd(cmd, log_path=log_file)
-        else:
-            cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
-            if timeline.meta.burn_captions:
-                cmd.extend(["-vf", _subtitle_filter(ass_path)])
-            cmd.extend(["-c:v", "libx264", "-movflags", "+faststart", str(output_path)])
-            run_cmd(cmd, log_path=log_file)
+            include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
+            if include_audio:
+                audio_plan = build_audio_mix_cmd(timeline.meta, timeline.total_duration, start_index=1)
+                cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
+                cmd.extend(audio_plan.input_args)
+                if timeline.meta.burn_captions:
+                    cmd.extend(["-vf", _subtitle_filter(ass_path)])
+                cmd.extend(["-filter_complex", audio_plan.filter_complex])
+                cmd.extend(["-map", "0:v:0"])
+                cmd.extend(audio_plan.map_args)
+                cmd.extend(["-c:v", "libx264", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(output_path)])
+                ffmpeg_commands.append(cmd)
+                run_cmd(cmd, log_path=log_file)
+            else:
+                cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
+                if timeline.meta.burn_captions:
+                    cmd.extend(["-vf", _subtitle_filter(ass_path)])
+                cmd.extend(["-c:v", "libx264", "-movflags", "+faststart", str(output_path)])
+                ffmpeg_commands.append(cmd)
+                run_cmd(cmd, log_path=log_file)
+    except Exception as exc:
+        render_error = str(exc)
+        raise
+    finally:
+        report = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "ffmpeg_commands": [" ".join(cmd) for cmd in ffmpeg_commands],
+            "timeline_hash": timeline_hash,
+            "environment": {"ffmpeg_version": _ffmpeg_version()},
+            "status": "failure" if render_error else "success",
+            "success": render_error is None,
+            "error_excerpt": render_error,
+            "log_tail": _tail_log_lines(log_file, lines=50),
+        }
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     return output_path
