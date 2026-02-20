@@ -529,6 +529,32 @@ def tab_video_compile() -> None:
         key="video_music_volume",
     )
 
+    narration_wpm = st.slider(
+        "Narration pace (WPM)",
+        min_value=100,
+        max_value=220,
+        value=int(meta_defaults.get("narration_wpm", 160)),
+        step=5,
+        key="video_narration_wpm",
+        help="Used for voiceover-aware per-scene timing based on script excerpt word counts.",
+    )
+    narration_min_sec = st.slider(
+        "Min scene duration (seconds)",
+        min_value=0.5,
+        max_value=6.0,
+        value=float(meta_defaults.get("narration_min_sec", 1.5)),
+        step=0.1,
+        key="video_narration_min_sec",
+    )
+    narration_max_sec = st.slider(
+        "Max scene duration (seconds)",
+        min_value=3.0,
+        max_value=20.0,
+        value=float(meta_defaults.get("narration_max_sec", 12.0)),
+        step=0.5,
+        key="video_narration_max_sec",
+    )
+
     timeline_meta_overrides = {
         "title": title,
         "aspect_ratio": aspect_ratio,
@@ -541,6 +567,9 @@ def tab_video_compile() -> None:
         "crossfade": crossfade,
         "crossfade_duration": crossfade_duration,
         "music": {"volume_db": music_volume_db},
+        "narration_wpm": narration_wpm,
+        "narration_min_sec": narration_min_sec,
+        "narration_max_sec": narration_max_sec,
     }
 
     if media_files:

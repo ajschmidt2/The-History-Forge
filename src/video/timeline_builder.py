@@ -35,6 +35,22 @@ def _build_motion(index: int) -> Motion:
         y_end=0.5,
     )
 
+def compute_scene_durations(
+    scenes: list[str],
+    wpm: float = 160,
+    min_sec: float = 1.5,
+    max_sec: float = 12.0,
+) -> list[float]:
+    safe_wpm = max(1.0, float(wpm))
+    words_per_second = safe_wpm / 60.0
+    durations: list[float] = []
+    for excerpt in scenes:
+        word_count = len(str(excerpt or "").split())
+        estimate = (word_count / words_per_second) if word_count > 0 else min_sec
+        durations.append(max(float(min_sec), min(float(max_sec), float(estimate))))
+    return durations
+
+
 
 def build_default_timeline(
     project_id: str,
@@ -53,6 +69,10 @@ def build_default_timeline(
     crossfade: bool = False,
     crossfade_duration: float = 0.3,
     scene_duration: float | None = None,
+    scene_excerpts: list[str] | None = None,
+    narration_wpm: float = 160,
+    narration_min_sec: float = 1.5,
+    narration_max_sec: float = 12.0,
 ) -> Timeline:
     image_list = list(images)
     if not image_list:
@@ -67,25 +87,43 @@ def build_default_timeline(
         image_list = image_list[:18]
         scene_count = len(image_list)
 
-    if include_voiceover and voiceover_duration > 0:
-        scene_duration = voiceover_duration / scene_count
-    elif scene_duration is None:
-        scene_duration = 3.0
+    if include_voiceover:
+        excerpts = list(scene_excerpts or [])
+        if len(excerpts) < scene_count:
+            excerpts.extend([""] * (scene_count - len(excerpts)))
+        scene_durations = compute_scene_durations(
+            excerpts[:scene_count],
+            wpm=narration_wpm,
+            min_sec=narration_min_sec,
+            max_sec=narration_max_sec,
+        )
+        if voiceover_duration > 0 and sum(scene_durations) > 0:
+            scale = voiceover_duration / sum(scene_durations)
+            scene_durations = [max(float(narration_min_sec), d * scale) for d in scene_durations]
+            if sum(scene_durations) > 0 and voiceover_duration > 0:
+                correction = voiceover_duration / sum(scene_durations)
+                scene_durations = [d * correction for d in scene_durations]
+    else:
+        if scene_duration is None:
+            scene_duration = 3.0
+        scene_durations = [float(scene_duration)] * scene_count
+
     scenes: list[Scene] = []
     current_start = 0.0
 
     for idx, image_path in enumerate(image_list, start=1):
+        duration = scene_durations[idx - 1] if idx - 1 < len(scene_durations) else float(scene_duration or 3.0)
         scenes.append(
             Scene(
                 id=f"s{idx:02d}",
                 image_path=str(image_path),
                 start=round(current_start, 3),
-                duration=round(scene_duration, 3),
+                duration=round(duration, 3),
                 motion=_build_motion(idx) if enable_motion else None,
                 caption=None,
             )
         )
-        current_start += scene_duration
+        current_start += duration
 
     music = None
     if music_path:
@@ -98,12 +136,15 @@ def build_default_timeline(
             aspect_ratio=aspect_ratio,
             resolution=_resolution_for_aspect_ratio(aspect_ratio),
             fps=fps,
-            scene_duration=scene_duration,
+            scene_duration=(round(sum(scene_durations) / scene_count, 3) if scene_durations else scene_duration),
             burn_captions=burn_captions,
             include_voiceover=include_voiceover,
             include_music=include_music,
             crossfade=crossfade,
             crossfade_duration=crossfade_duration,
+            narration_wpm=narration_wpm,
+            narration_min_sec=narration_min_sec,
+            narration_max_sec=narration_max_sec,
             caption_style=caption_style or CaptionStyle(),
             music=music,
             voiceover=Voiceover(path=str(voiceover_path)) if voiceover_path else None,

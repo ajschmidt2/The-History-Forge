@@ -50,6 +50,9 @@ def sync_timeline_for_project(
     scene_duration = merged_meta.get("scene_duration")
     include_voiceover_requested = bool(merged_meta.get("include_voiceover", False))
     include_music_requested = bool(merged_meta.get("include_music", False))
+    narration_wpm = float(merged_meta.get("narration_wpm", 160))
+    narration_min_sec = float(merged_meta.get("narration_min_sec", 1.5))
+    narration_max_sec = float(merged_meta.get("narration_max_sec", 12.0))
 
     caption_style_payload = merged_meta.get("caption_style", {}) or {}
     try:
@@ -70,6 +73,12 @@ def sync_timeline_for_project(
         except (TypeError, ValueError):
             music_volume_db = -18.0
 
+
+    scene_excerpts: list[str] = []
+    if session_scenes:
+        for scene in session_scenes:
+            scene_excerpts.append(str(getattr(scene, "script_excerpt", "") or ""))
+
     timeline = build_default_timeline(
         project_id=project_id,
         title=title,
@@ -87,6 +96,10 @@ def sync_timeline_for_project(
         crossfade=crossfade,
         crossfade_duration=crossfade_duration,
         scene_duration=float(scene_duration) if scene_duration is not None else None,
+        scene_excerpts=scene_excerpts,
+        narration_wpm=narration_wpm,
+        narration_min_sec=narration_min_sec,
+        narration_max_sec=narration_max_sec,
     )
 
     if scene_captions:
