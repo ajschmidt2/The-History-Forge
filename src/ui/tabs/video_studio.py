@@ -201,7 +201,7 @@ def _normalize_caption_list(captions: list[str], expected_count: int) -> list[st
 
 def _caption_wrap_settings(aspect_ratio: str) -> tuple[int, int]:
     if str(aspect_ratio or "9:16") == "9:16":
-        return (14, 28)
+        return (14, 24)
     return (12, 42)
 
 
@@ -660,7 +660,7 @@ def tab_video_compile() -> None:
     with options_cols[2]:
         enable_motion = st.checkbox(
             "Ken Burns motion",
-            value=True,
+            value=bool(meta_defaults.get("enable_motion", True)),
             key="video_enable_motion",
         )
     with options_cols[3]:
@@ -726,6 +726,7 @@ def tab_video_compile() -> None:
         "caption_style": selected_caption_style.model_dump(),
         "include_voiceover": include_voiceover,
         "include_music": include_music,
+        "enable_motion": enable_motion,
         "crossfade": crossfade,
         "crossfade_duration": crossfade_duration,
         "music": {"volume_db": music_volume_db},

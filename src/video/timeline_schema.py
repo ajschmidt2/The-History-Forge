@@ -76,6 +76,7 @@ class Meta(BaseModel):
     burn_captions: bool = True
     include_voiceover: bool = True
     include_music: bool = True
+    enable_motion: bool = True
     crossfade: bool = False
     crossfade_duration: float = 0.3
     narration_wpm: float = 160

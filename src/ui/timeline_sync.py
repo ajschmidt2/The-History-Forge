@@ -41,7 +41,7 @@ def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: 
 
 def _caption_wrap_settings(aspect_ratio: str) -> tuple[int, int]:
     if str(aspect_ratio or "9:16") == "9:16":
-        return (14, 28)
+        return (14, 24)
     return (12, 42)
 
 
@@ -132,6 +132,7 @@ def sync_timeline_for_project(
     scene_duration = merged_meta.get("scene_duration")
     include_voiceover_requested = bool(merged_meta.get("include_voiceover", True))
     include_music_requested = bool(merged_meta.get("include_music", False))
+    enable_motion = bool(merged_meta.get("enable_motion", True))
     narration_wpm = float(merged_meta.get("narration_wpm", 160))
     narration_min_sec = float(merged_meta.get("narration_min_sec", 1.5))
     narration_max_sec = float(merged_meta.get("narration_max_sec", 12.0))
@@ -174,7 +175,7 @@ def sync_timeline_for_project(
         music_volume_db=music_volume_db,
         include_voiceover=include_voiceover,
         include_music=include_music,
-        enable_motion=True,
+        enable_motion=enable_motion,
         crossfade=crossfade,
         crossfade_duration=crossfade_duration,
         scene_duration=float(scene_duration) if scene_duration is not None else None,
@@ -201,7 +202,7 @@ def sync_timeline_for_project(
             music_volume_db=music_volume_db,
             include_voiceover=include_voiceover,
             include_music=include_music,
-            enable_motion=True,
+            enable_motion=enable_motion,
             crossfade=crossfade,
             crossfade_duration=crossfade_duration,
             scene_duration=float(scene_duration) if scene_duration is not None else None,
