@@ -1,15 +1,18 @@
 import json
 import re
+import shutil
 from pathlib import Path
 
 import streamlit as st
 import utils as forge_utils
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
 
+from src.storage import delete_project_records
 from utils import Scene
 
 PREFERENCES_PATH = Path("data/user_preferences.json")
 PROJECTS_ROOT = Path("data/projects")
+PROJECT_STATE_FILENAME = "project_state.json"
 
 
 def require_passcode() -> None:
@@ -70,6 +73,144 @@ def ensure_project_exists(project_id: str) -> Path:
     return project_dir
 
 
+def _project_state_path(project_id: str) -> Path:
+    return PROJECTS_ROOT / slugify_project_id(project_id) / PROJECT_STATE_FILENAME
+
+
+def _scene_to_serializable(scene: Scene) -> dict[str, object]:
+    return {
+        "index": int(scene.index),
+        "title": str(scene.title or ""),
+        "script_excerpt": str(scene.script_excerpt or ""),
+        "visual_intent": str(scene.visual_intent or ""),
+        "image_prompt": str(scene.image_prompt or ""),
+        "status": str(scene.status or "active"),
+    }
+
+
+def _scene_from_serializable(raw: object, project_id: str) -> Scene | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        scene_index = int(raw.get("index", 0))
+    except (TypeError, ValueError):
+        return None
+    if scene_index <= 0:
+        return None
+    scene = Scene(
+        index=scene_index,
+        title=str(raw.get("title", "") or ""),
+        script_excerpt=str(raw.get("script_excerpt", "") or ""),
+        visual_intent=str(raw.get("visual_intent", "") or ""),
+        image_prompt=str(raw.get("image_prompt", "") or ""),
+    )
+    scene.status = str(raw.get("status", "active") or "active")
+    saved_image_path = PROJECTS_ROOT / slugify_project_id(project_id) / "assets/images" / f"s{scene.index:02d}.png"
+    if saved_image_path.exists():
+        try:
+            scene.image_bytes = saved_image_path.read_bytes()
+            scene.image_variations = [scene.image_bytes]
+        except OSError:
+            pass
+    return scene
+
+
+def _clear_scene_widget_state() -> None:
+    prefixes = (
+        "prompt_",
+        "title_",
+        "txt_",
+        "vi_",
+        "scene_upload_",
+        "regen_",
+        "story_title_",
+        "story_excerpt_",
+        "story_visual_",
+        "story_prompt_",
+        "story_caption_",
+        "bulk_title_",
+        "bulk_txt_",
+        "bulk_vi_",
+    )
+    for key in list(st.session_state.keys()):
+        if key.startswith(prefixes):
+            del st.session_state[key]
+
+
+def save_project_state(project_id: str) -> None:
+    normalized = slugify_project_id(project_id)
+    if not normalized:
+        return
+    ensure_project_exists(normalized)
+    scenes = st.session_state.get("scenes", [])
+    payload = {
+        "project_id": normalized,
+        "project_title": str(st.session_state.get("project_title", "") or ""),
+        "topic": str(st.session_state.get("topic", "") or ""),
+        "script_text": str(st.session_state.get("script_text", "") or ""),
+        "tone": str(st.session_state.get("tone", "Documentary") or "Documentary"),
+        "length": str(st.session_state.get("length", "8–10 minutes") or "8–10 minutes"),
+        "visual_style": str(st.session_state.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic"),
+        "aspect_ratio": str(st.session_state.get("aspect_ratio", "16:9") or "16:9"),
+        "variations_per_scene": int(st.session_state.get("variations_per_scene", 1) or 1),
+        "max_scenes": int(st.session_state.get("max_scenes", 12) or 12),
+        "scenes": [_scene_to_serializable(scene) for scene in scenes if isinstance(scene, Scene)],
+    }
+    state_path = _project_state_path(normalized)
+    state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def load_project_state(project_id: str) -> None:
+    normalized = slugify_project_id(project_id)
+    ensure_project_exists(normalized)
+
+    state_path = _project_state_path(normalized)
+    _clear_scene_widget_state()
+    st.session_state.storyboard_selected_pos = 0
+    if not state_path.exists():
+        st.session_state.project_title = normalized.replace("-", " ").title()
+        st.session_state.topic = ""
+        st.session_state.script_text = ""
+        st.session_state.script_text_input = ""
+        st.session_state.pending_script_text_input = ""
+        st.session_state.scenes = []
+        return
+
+    try:
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(raw, dict):
+        return
+
+    st.session_state.project_title = str(raw.get("project_title", normalized.replace("-", " ").title()) or "")
+    st.session_state.topic = str(raw.get("topic", "") or "")
+    st.session_state.script_text = str(raw.get("script_text", "") or "")
+    st.session_state.script_text_input = st.session_state.script_text
+    st.session_state.pending_script_text_input = ""
+    st.session_state.tone = str(raw.get("tone", "Documentary") or "Documentary")
+    st.session_state.length = str(raw.get("length", "8–10 minutes") or "8–10 minutes")
+    st.session_state.visual_style = str(raw.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic")
+    st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "16:9") or "16:9")
+    st.session_state.variations_per_scene = int(raw.get("variations_per_scene", 1) or 1)
+    st.session_state.max_scenes = int(raw.get("max_scenes", 12) or 12)
+
+    scenes: list[Scene] = []
+    for scene_raw in raw.get("scenes", []):
+        scene = _scene_from_serializable(scene_raw, normalized)
+        if scene:
+            scenes.append(scene)
+    st.session_state.scenes = scenes
+
+
+def delete_project(project_id: str) -> None:
+    normalized = slugify_project_id(project_id)
+    project_dir = PROJECTS_ROOT / normalized
+    if project_dir.exists():
+        shutil.rmtree(project_dir)
+    delete_project_records(normalized)
+
+
 def init_state() -> None:
     st.session_state.setdefault("project_title", "Untitled Project")
     st.session_state.setdefault("project_id", "")
@@ -111,6 +252,7 @@ def init_state() -> None:
         existing = _existing_project_ids()
         if existing:
             st.session_state.project_id = existing[0]
+            load_project_state(existing[0])
         else:
             st.session_state.project_id = slugify_project_id(st.session_state.project_title)
             ensure_project_exists(st.session_state.project_id)
@@ -154,6 +296,7 @@ def render_project_selector() -> None:
             project_id = slugify_project_id(new_title)
             ensure_project_exists(project_id)
             st.session_state.project_id = project_id
+            load_project_state(project_id)
             st.session_state.project_title = new_title
             st.toast(f"Using project: {project_id}")
             st.rerun()
@@ -161,7 +304,36 @@ def render_project_selector() -> None:
         selected = slugify_project_id(selected_option)
         if selected != current:
             st.session_state.project_id = selected
+            load_project_state(selected)
             st.toast(f"Switched to project: {selected}")
+            st.rerun()
+
+        st.divider()
+        st.caption("Danger zone")
+        confirm_key = f"confirm_delete_{selected}"
+        confirm_delete = st.checkbox(
+            f"I understand deleting '{selected}' removes all saved files and project data.",
+            key=confirm_key,
+        )
+        if st.button("Delete this project", type="secondary", width="stretch", key=f"delete_project_{selected}"):
+            if not confirm_delete:
+                st.warning("Check the confirmation box before deleting.")
+                return
+            delete_project(selected)
+            remaining = _existing_project_ids()
+            if remaining:
+                st.session_state.project_id = remaining[0]
+                load_project_state(remaining[0])
+            else:
+                fallback = slugify_project_id("Untitled Project")
+                st.session_state.project_id = fallback
+                st.session_state.project_title = "Untitled Project"
+                st.session_state.topic = ""
+                st.session_state.script_text = ""
+                st.session_state.script_text_input = ""
+                st.session_state.scenes = []
+                ensure_project_exists(fallback)
+            st.toast(f"Deleted project: {selected}")
             st.rerun()
 
 
