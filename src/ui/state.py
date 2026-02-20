@@ -320,7 +320,6 @@ def render_project_selector() -> None:
                 st.warning("Check the confirmation box before deleting.")
                 return
             delete_project(selected)
-            st.session_state[confirm_key] = False
             remaining = _existing_project_ids()
             if remaining:
                 st.session_state.project_id = remaining[0]
