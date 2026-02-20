@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import streamlit as st
 
@@ -23,6 +24,34 @@ def _sync_timeline_from_scenes() -> None:
         title=st.session_state.project_title,
         session_scenes=st.session_state.get("scenes", []),
     )
+
+
+def _outline_payload() -> dict[str, object] | None:
+    raw = str(st.session_state.get("outline_json_text", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _recompute_estimated_runtime() -> None:
+    total = 0.0
+    for scene in st.session_state.get("scenes", []):
+        try:
+            total += float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+    st.session_state.estimated_total_runtime_sec = round(total, 1)
+
+
+def _fmt_runtime(seconds: float) -> str:
+    total = int(max(0, round(seconds)))
+    mins = total // 60
+    secs = total % 60
+    return f"{mins}m {secs:02d}s"
 
 
 def _remap_scene_widget_state(index_map: dict[int, int]) -> None:
@@ -114,15 +143,26 @@ def tab_create_scenes() -> None:
         value=int(st.session_state.max_scenes),
         step=1,
     )
+    st.session_state.scene_wpm = st.number_input(
+        "Narration speed (WPM)",
+        min_value=90,
+        max_value=240,
+        value=int(st.session_state.scene_wpm),
+        step=5,
+        help="Used to estimate each scene's duration and total runtime.",
+    )
 
     if st.button("Split script into scenes", type="primary", width="stretch"):
         with st.spinner("Splitting script..."):
             st.session_state.scenes = split_script_into_scenes(
                 st.session_state.script_text,
                 max_scenes=int(st.session_state.max_scenes),
+                outline=_outline_payload(),
+                wpm=int(st.session_state.scene_wpm),
             )
         clear_downstream("scenes")
         st.session_state.storyboard_selected_pos = 0
+        _recompute_estimated_runtime()
         _sync_timeline_from_scenes()
         st.toast(f"Created {len(st.session_state.scenes)} scenes.")
         st.rerun()
@@ -132,6 +172,8 @@ def tab_create_scenes() -> None:
         return
 
     scenes: list[Scene] = st.session_state.scenes
+    _recompute_estimated_runtime()
+    st.caption(f"Estimated runtime: {_fmt_runtime(float(st.session_state.get('estimated_total_runtime_sec', 0.0)))}")
     st.session_state.setdefault("storyboard_selected_pos", 0)
     st.session_state.storyboard_selected_pos = max(
         0,
@@ -174,6 +216,8 @@ def tab_create_scenes() -> None:
             height=140,
             key=f"story_visual_{selected.index}",
         )
+        est_sec = float(getattr(selected, "estimated_duration_sec", 0.0) or 0.0)
+        st.caption(f"Estimated duration: {_fmt_runtime(est_sec)}")
 
     with right:
         st.markdown("### Prompt + media")
@@ -209,6 +253,7 @@ def tab_create_scenes() -> None:
         st.session_state[caption_state_key] = captions
 
     if st.button("Apply storyboard changes", type="primary", width="stretch"):
+        _recompute_estimated_runtime()
         sync_timeline_for_project(
             project_path=_project_path(),
             project_id=active_project_id(),
@@ -238,6 +283,7 @@ def tab_create_scenes() -> None:
                 s.title = edits.get("title", s.title)
                 s.script_excerpt = edits.get("script_excerpt", s.script_excerpt)
                 s.visual_intent = edits.get("visual_intent", s.visual_intent)
+            _recompute_estimated_runtime()
             _sync_timeline_from_scenes()
             st.toast("Bulk edits saved.")
             st.rerun()
