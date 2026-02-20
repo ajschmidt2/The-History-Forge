@@ -74,7 +74,96 @@ class Scene:
 # ----------------------------
 # Script generation
 # ----------------------------
-def generate_script(topic: str, length: str, tone: str) -> str:
+def generate_research_brief(topic: str, tone: str, length: str, audience: str, angle: str) -> str:
+    topic = (topic or "").strip()
+    if not topic:
+        return "Please enter a topic."
+
+    tone_clean = (tone or "Documentary").strip() or "Documentary"
+    length_clean = (length or "8–10 minutes").strip() or "8–10 minutes"
+    audience_clean = (audience or "General audience").strip() or "General audience"
+    angle_clean = (angle or "Balanced overview").strip() or "Balanced overview"
+
+    client = _openai_client()
+    if client is None:
+        return (
+            f"# Research Brief: {topic}\n\n"
+            "## Key Facts\n"
+            "- [Missing openai_api_key] Add `openai_api_key` to generate AI research briefs.\n"
+            "- Placeholder fact set is shown to preserve output format.\n"
+            f"- Topic focus: {topic}.\n"
+            f"- Tone target: {tone_clean}.\n"
+            f"- Audience target: {audience_clean}.\n"
+            f"- Story angle: {angle_clean}.\n"
+            "- Verify names, dates, and primary-source claims before publishing.\n"
+            "- Confirm modern historian consensus where interpretations differ.\n"
+            "- Mark disputed casualty numbers and uncertain statistics.\n"
+            "- Avoid unsourced quotes in final script.\n\n"
+            "## Timeline\n"
+            "- c. [date] — Early context event relevant to the topic.\n"
+            "- c. [date] — Key turning point.\n"
+            "- c. [date] — Consequence or expansion phase.\n"
+            "- c. [date] — Major conflict or transition.\n"
+            "- c. [date] — Legacy milestone.\n\n"
+            "## Key People and Places\n"
+            "- People: [Person 1], [Person 2], [Person 3].\n"
+            "- Places: [Place 1], [Place 2], [Place 3].\n\n"
+            "## Suggested Angles\n"
+            "1. The hidden turning point and why it mattered.\n"
+            "2. The human story behind policy and power.\n"
+            "3. What modern audiences misunderstand about this topic.\n\n"
+            "## Risky Claims / Uncertain Areas\n"
+            "- Claims with missing primary-source citations.\n"
+            "- Conflicting date ranges across references.\n"
+            "- National narratives that may introduce bias.\n"
+            "- Attribution of motives stated as fact without documentation."
+        )
+
+    system = (
+        "You are a meticulous history research assistant for documentary scripting. "
+        "Return concise, factual notes and flag uncertainty clearly."
+    )
+    user = (
+        "Create a research brief with deterministic markdown headings and structure.\n"
+        f"Topic: {topic}\n"
+        f"Tone: {tone_clean}\n"
+        f"Video length target: {length_clean}\n"
+        f"Audience: {audience_clean}\n"
+        f"Preferred angle: {angle_clean}\n\n"
+        "Output format requirements (must follow exactly):\n"
+        "# Research Brief: <topic>\n"
+        "## Key Facts\n"
+        "- 10 to 15 bullet points\n"
+        "## Timeline\n"
+        "- 5 to 10 dated events when applicable (use c. for approximate dates)\n"
+        "## Key People and Places\n"
+        "- Bulleted list of notable people and places\n"
+        "## Suggested Angles\n"
+        "1. Option one\n2. Option two\n3. Option three\n"
+        "## Risky Claims / Uncertain Areas\n"
+        "- Bulleted list of claims requiring verification\n"
+        "Do not add any other headings or sections."
+    )
+
+    resp = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    return resp.choices[0].message.content.strip()
+
+
+def generate_script(
+    topic: str,
+    length: str,
+    tone: str,
+    audience: str = "",
+    angle: str = "",
+    research_brief: str = "",
+) -> str:
     topic = (topic or "").strip()
     if not topic:
         return "Please enter a topic."
@@ -98,15 +187,23 @@ def generate_script(topic: str, length: str, tone: str) -> str:
         "End with a quick call-to-action to subscribe."
     )
 
+    brief_text = (research_brief or "").strip()
+    brief_block = f"\n\nResearch brief (use this as source context):\n{brief_text}" if brief_text else ""
+    audience_block = f"Audience: {(audience or 'General audience').strip()}\n"
+    angle_block = f"Story angle: {(angle or 'Balanced overview').strip()}\n"
+
     user = (
         f"Topic: {topic}\n"
         f"Tone: {tone}\n"
-        f"Target length: ~{target_words} words\n\n"
-        "Write a single continuous narration script with:\n"
+        f"Target length: ~{target_words} words\n"
+        f"{audience_block}"
+        f"{angle_block}"
+        "\nWrite a single continuous narration script with:\n"
         "1) Hook (1–3 sentences)\n"
         "2) Main story (well-structured paragraphs)\n"
         "3) Ending CTA (1–2 sentences)\n"
         "No headings. No bullet lists."
+        f"{brief_block}"
     )
 
     resp = client.chat.completions.create(
