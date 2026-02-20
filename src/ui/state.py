@@ -64,6 +64,18 @@ def _existing_project_ids() -> list[str]:
     return sorted([p.name for p in PROJECTS_ROOT.iterdir() if p.is_dir()])
 
 
+def _matching_project_dirs(project_id_or_name: str) -> list[Path]:
+    normalized = slugify_project_id(project_id_or_name)
+    matches: list[Path] = []
+    PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    for project_dir in PROJECTS_ROOT.iterdir():
+        if not project_dir.is_dir():
+            continue
+        if project_dir.name == project_id_or_name or slugify_project_id(project_dir.name) == normalized:
+            matches.append(project_dir)
+    return matches
+
+
 def ensure_project_exists(project_id: str) -> Path:
     normalized = slugify_project_id(project_id)
     project_dir = PROJECTS_ROOT / normalized
@@ -203,11 +215,10 @@ def load_project_state(project_id: str) -> None:
     st.session_state.scenes = scenes
 
 
-def delete_project(project_id: str) -> None:
-    normalized = slugify_project_id(project_id)
-    project_dir = PROJECTS_ROOT / normalized
-    if project_dir.exists():
-        shutil.rmtree(project_dir)
+def delete_project(project_id_or_name: str) -> None:
+    normalized = slugify_project_id(project_id_or_name)
+    for project_dir in _matching_project_dirs(project_id_or_name):
+        shutil.rmtree(project_dir, ignore_errors=True)
     delete_project_records(normalized)
 
 
@@ -325,7 +336,7 @@ def render_project_selector() -> None:
             if not confirm_delete:
                 st.warning("Check the confirmation box before deleting.")
                 return
-            delete_project(selected)
+            delete_project(selected_option)
             remaining = _existing_project_ids()
             if remaining:
                 st.session_state.project_id = remaining[0]
