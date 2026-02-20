@@ -44,16 +44,22 @@ def _clean_generated_script(script: str) -> str:
     text = re.sub(r"\s*```$", "", text)
     text = text.strip()
 
-    lines = text.splitlines()
-    cutoff = len(lines)
-    for idx, raw in enumerate(lines):
-        normalized = raw.strip().lower().lstrip("#").strip()
-        if normalized in {"notes to verify", "verification notes", "fact-check notes", "sources"}:
-            cutoff = idx
-            break
-    trimmed = "\n".join(lines[:cutoff]).strip()
+    # If the model wrapped narration with commentary, prefer the explicit revised-script block.
+    revised_block = re.search(
+        r"(?is)(?:revised\s+script(?:\s+with\s+softened\s+claims)?|clean\s+script)\s*:\s*(.+)",
+        text,
+    )
+    if revised_block:
+        text = revised_block.group(1).strip()
 
-    trimmed = re.sub(r"(?im)^\s*(script|narration)\s*:\s*", "", trimmed).strip()
+    # Remove any trailing verification/source sections, including inline "Notes to Verify:" formats.
+    text = re.split(
+        r"(?is)\n\s*(?:#{1,6}\s*)?(?:notes?\s+to\s+verify|verification\s+notes|fact-?check\s+notes|sources?)\s*:?",
+        text,
+        maxsplit=1,
+    )[0].strip()
+
+    trimmed = re.sub(r"(?im)^\s*(script|narration)\s*:\s*", "", text).strip()
     trimmed = re.sub(r"(?m)^\s*[-*]\s+", "", trimmed)
     trimmed = re.sub(r"\n{3,}", "\n\n", trimmed)
     return trimmed.strip()
