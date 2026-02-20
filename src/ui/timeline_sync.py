@@ -194,7 +194,7 @@ def sync_timeline_for_project(
 
     if normalized_captions:
         for scene, caption in zip(timeline.scenes, normalized_captions):
-            formatted = format_caption(caption)
+            formatted = format_caption(caption, max_lines=12, max_chars_per_line=42)
             scene.caption = formatted or None
     elif session_scenes:
         excerpt_by_index: dict[int, str] = {}
@@ -205,7 +205,7 @@ def sync_timeline_for_project(
                 excerpt_by_index[idx] = excerpt
         for i, scene in enumerate(timeline.scenes, start=1):
             scene_index = _scene_index_from_stem(Path(scene.image_path).stem, i)
-            formatted = format_caption(excerpt_by_index.get(scene_index) or "")
+            formatted = format_caption(excerpt_by_index.get(scene_index) or "", max_lines=12, max_chars_per_line=42)
             scene.caption = formatted or f"Scene {i}"
 
     for scene in timeline.scenes:

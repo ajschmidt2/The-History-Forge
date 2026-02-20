@@ -312,15 +312,15 @@ def _default_scene_captions(media_files: list[Path], timeline_path: Path) -> lis
     for i, media_path in enumerate(media_files, start=1):
         from_timeline = caption_by_path.get(str(media_path), "").strip()
         if from_timeline:
-            captions.append(format_caption(from_timeline))
+            captions.append(format_caption(from_timeline, max_lines=12, max_chars_per_line=42))
             continue
         scene_number = _scene_number_from_path(media_path) or i
         from_scene_excerpt = script_excerpt_by_index.get(scene_number, "").strip()
         if from_scene_excerpt:
-            captions.append(format_caption(from_scene_excerpt))
+            captions.append(format_caption(from_scene_excerpt, max_lines=12, max_chars_per_line=42))
             continue
         fallback = script_chunks[i - 1] if i - 1 < len(script_chunks) else ""
-        formatted = format_caption(fallback)
+        formatted = format_caption(fallback, max_lines=12, max_chars_per_line=42)
         captions.append(formatted or f"Scene {i}")
     return captions
 
@@ -359,7 +359,7 @@ def _collect_scene_captions(
                 height=90,
                 key=f"video_scene_caption_{idx}_{media_path.name}",
             )
-            captions[idx - 1] = format_caption(edited_caption) or f"Scene {idx}"
+            captions[idx - 1] = format_caption(edited_caption, max_lines=12, max_chars_per_line=42) or f"Scene {idx}"
 
     captions = _normalize_caption_list(captions, len(media_files))
     st.session_state[state_key] = captions
