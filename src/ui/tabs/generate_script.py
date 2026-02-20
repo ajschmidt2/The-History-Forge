@@ -1,8 +1,20 @@
+import json
+from pathlib import Path
+
 import streamlit as st
 
+from src.research.web_research import Source, search_topic, summarize_sources
+from src.ui.state import active_project_id, clear_downstream, openai_error_message, script_ready
 from utils import generate_lucky_topic, generate_research_brief, generate_script
 
-from src.ui.state import clear_downstream, openai_error_message, script_ready
+
+def _save_research_artifacts(brief_markdown: str, sources: list[Source]) -> None:
+    research_dir = Path("data/projects") / active_project_id() / "research"
+    research_dir.mkdir(parents=True, exist_ok=True)
+
+    (research_dir / "research_brief.md").write_text(brief_markdown, encoding="utf-8")
+    payload = [{"title": s.title, "url": s.url, "snippet": s.snippet} for s in sources]
+    (research_dir / "sources.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def tab_generate_script() -> None:
@@ -51,24 +63,48 @@ def tab_generate_script() -> None:
         value=st.session_state.story_angle,
         placeholder="e.g., Focus on causes and long-term consequences",
     )
+    st.session_state.use_web_research = st.checkbox(
+        "Use web research",
+        value=bool(st.session_state.use_web_research),
+        help="When enabled, gathers 3-8 web sources and adds citations [1], [2], ... to the brief.",
+    )
 
     if st.button("Generate Research Brief", width="stretch"):
         if not st.session_state.topic.strip():
             st.warning("Enter a topic before generating a brief.")
             return
-        with st.spinner("Generating research brief..."):
+
+        web_sources: list[Source] = []
+        if st.session_state.use_web_research:
             try:
-                st.session_state.research_brief_text = generate_research_brief(
-                    topic=st.session_state.topic,
-                    tone=st.session_state.tone,
-                    length=st.session_state.length,
-                    audience=st.session_state.audience,
-                    angle=st.session_state.story_angle,
-                )
-            except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
-                st.error(openai_error_message(exc))
-                return
-        st.toast("Research brief generated.")
+                web_sources = search_topic(st.session_state.topic, max_results=6)
+            except Exception:
+                web_sources = []
+
+        if st.session_state.use_web_research and web_sources:
+            st.session_state.research_brief_text = summarize_sources(st.session_state.topic, web_sources)
+            st.toast(f"Research brief generated with {len(web_sources)} web source(s).")
+        else:
+            if st.session_state.use_web_research:
+                st.info("Web research unavailable right now, using LLM-only brief fallback.")
+            with st.spinner("Generating research brief..."):
+                try:
+                    st.session_state.research_brief_text = generate_research_brief(
+                        topic=st.session_state.topic,
+                        tone=st.session_state.tone,
+                        length=st.session_state.length,
+                        audience=st.session_state.audience,
+                        angle=st.session_state.story_angle,
+                    )
+                except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
+                    st.error(openai_error_message(exc))
+                    return
+            st.toast("Research brief generated.")
+
+        st.session_state.research_sources = [
+            {"title": source.title, "url": source.url, "snippet": source.snippet} for source in web_sources
+        ]
+        _save_research_artifacts(st.session_state.research_brief_text, web_sources)
 
     if st.session_state.research_brief_text.strip():
         with st.expander("Research brief", expanded=False):
