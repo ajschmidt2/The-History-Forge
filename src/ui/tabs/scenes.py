@@ -55,7 +55,7 @@ def _fmt_runtime(seconds: float) -> str:
 
 
 def _remap_scene_widget_state(index_map: dict[int, int]) -> None:
-    key_prefixes = ["title_", "txt_", "vi_", "prompt_", "scene_upload_", "regen_", "story_title_", "story_excerpt_", "story_visual_", "story_prompt_", "story_caption_"]
+    key_prefixes = ["title_", "txt_", "vi_", "prompt_", "scene_upload_", "regen_", "story_title_", "story_excerpt_", "story_visual_", "story_prompt_", "story_caption_", "story_duration_"]
     for prefix in key_prefixes:
         remapped: dict[str, object] = {}
         to_delete: list[str] = []
@@ -217,7 +217,18 @@ def tab_create_scenes() -> None:
             key=f"story_visual_{selected.index}",
         )
         est_sec = float(getattr(selected, "estimated_duration_sec", 0.0) or 0.0)
-        st.caption(f"Estimated duration: {_fmt_runtime(est_sec)}")
+        selected.estimated_duration_sec = float(
+            st.number_input(
+                "Scene duration (seconds)",
+                min_value=0.5,
+                max_value=60.0,
+                value=max(0.5, est_sec if est_sec > 0 else 3.0),
+                step=0.1,
+                key=f"story_duration_{selected.index}",
+                help="Initial values are auto-estimated from script pace; adjust per scene as needed.",
+            )
+        )
+        st.caption(f"Estimated duration: {_fmt_runtime(float(selected.estimated_duration_sec))}")
 
     with right:
         st.markdown("### Prompt + media")
