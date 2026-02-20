@@ -199,10 +199,15 @@ def _normalize_caption_list(captions: list[str], expected_count: int) -> list[st
     return normalized
 
 
-def _caption_wrap_settings(aspect_ratio: str) -> tuple[int, int]:
+def _caption_wrap_settings(aspect_ratio: str, font_size: int) -> tuple[int, int]:
+    safe_font = max(18, int(font_size or 48))
     if str(aspect_ratio or "9:16") == "9:16":
-        return (14, 24)
-    return (12, 42)
+        usable_width_px = 1080 - 160
+        chars = max(12, min(28, int(usable_width_px / max(8.0, safe_font * 0.58))))
+        return (14, chars)
+    usable_width_px = 1920 - 200
+    chars = max(22, min(52, int(usable_width_px / max(8.0, safe_font * 0.55))))
+    return (12, chars)
 
 
 def _script_chunks_for_scene_count(script_text: str, scene_count: int) -> list[str]:
@@ -295,7 +300,7 @@ def _render_subtitle_preview(
     return buffer.getvalue()
 
 
-def _default_scene_captions(media_files: list[Path], timeline_path: Path, *, aspect_ratio: str) -> list[str]:
+def _default_scene_captions(media_files: list[Path], timeline_path: Path, *, aspect_ratio: str, font_size: int) -> list[str]:
     caption_by_path: dict[str, str] = {}
     if timeline_path.exists():
         try:
@@ -314,7 +319,7 @@ def _default_scene_captions(media_files: list[Path], timeline_path: Path, *, asp
 
     script_chunks = _script_chunks_for_scene_count(st.session_state.get("script_text", ""), len(media_files))
 
-    caption_max_lines, caption_max_chars = _caption_wrap_settings(aspect_ratio)
+    caption_max_lines, caption_max_chars = _caption_wrap_settings(aspect_ratio, font_size)
 
     captions: list[str] = []
     for i, media_path in enumerate(media_files, start=1):
@@ -343,9 +348,9 @@ def _collect_scene_captions(
 ) -> list[str]:
     state_key = f"video_scene_captions::{timeline_path}"
     if state_key not in st.session_state or len(st.session_state[state_key]) != len(media_files):
-        st.session_state[state_key] = _normalize_caption_list(_default_scene_captions(media_files, timeline_path, aspect_ratio=aspect_ratio), len(media_files))
+        st.session_state[state_key] = _normalize_caption_list(_default_scene_captions(media_files, timeline_path, aspect_ratio=aspect_ratio, font_size=caption_style.font_size), len(media_files))
 
-    caption_max_lines, caption_max_chars = _caption_wrap_settings(aspect_ratio)
+    caption_max_lines, caption_max_chars = _caption_wrap_settings(aspect_ratio, caption_style.font_size)
     captions: list[str] = _normalize_caption_list(st.session_state[state_key], len(media_files))
     st.session_state[state_key] = captions
     for idx, media_path in enumerate(media_files, start=1):
@@ -575,7 +580,7 @@ def tab_video_compile() -> None:
             aspect_ratio=str(st.session_state.get("video_aspect_ratio", meta_defaults.get("aspect_ratio", "9:16"))),
         )
         if st.button("Auto-fill subtitles from scene script excerpts", width="stretch", key="video_auto_captions"):
-            scene_captions = _normalize_caption_list(_default_scene_captions(media_files, timeline_path, aspect_ratio=aspect_ratio), len(media_files))
+            scene_captions = _normalize_caption_list(_default_scene_captions(media_files, timeline_path, aspect_ratio=aspect_ratio, font_size=caption_style.font_size), len(media_files))
             st.session_state[f"video_scene_captions::{timeline_path}"] = scene_captions
             st.success("Subtitles auto-filled from script and scene excerpts.")
             st.rerun()

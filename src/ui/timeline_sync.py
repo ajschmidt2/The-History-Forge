@@ -39,10 +39,15 @@ def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: 
     return captions
 
 
-def _caption_wrap_settings(aspect_ratio: str) -> tuple[int, int]:
+def _caption_wrap_settings(aspect_ratio: str, font_size: int) -> tuple[int, int]:
+    safe_font = max(18, int(font_size or 48))
     if str(aspect_ratio or "9:16") == "9:16":
-        return (14, 24)
-    return (12, 42)
+        usable_width_px = 1080 - 160
+        chars = max(12, min(28, int(usable_width_px / max(8.0, safe_font * 0.58))))
+        return (14, chars)
+    usable_width_px = 1920 - 200
+    chars = max(22, min(52, int(usable_width_px / max(8.0, safe_font * 0.55))))
+    return (12, chars)
 
 
 def _apply_manual_scene_durations(
@@ -218,7 +223,7 @@ def sync_timeline_for_project(
             "Regenerate timeline and verify scene media ordering."
         )
 
-    caption_max_lines, caption_max_chars = _caption_wrap_settings(aspect_ratio)
+    caption_max_lines, caption_max_chars = _caption_wrap_settings(aspect_ratio, caption_style.font_size)
 
     if normalized_captions:
         for scene, caption in zip(timeline.scenes, normalized_captions):

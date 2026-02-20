@@ -237,6 +237,9 @@ def render_video_from_timeline(
     timeline_content = Path(timeline_path).read_text(encoding="utf-8")
     timeline_hash = hashlib.sha256(timeline_content.encode("utf-8")).hexdigest()
     timeline = Timeline.model_validate_json(timeline_content)
+    if not getattr(timeline.meta, "enable_motion", True):
+        for scene in timeline.scenes:
+            scene.motion = None
     if not timeline.scenes:
         raise ValueError("Timeline has no scenes to render.")
     output_path = ensure_parent_dir(out_mp4_path)
