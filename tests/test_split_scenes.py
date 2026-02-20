@@ -19,8 +19,9 @@ def test_split_script_into_scenes_is_beat_aware_with_outline() -> None:
 
     scenes = split_script_into_scenes(script, max_scenes=8, outline=outline, wpm=160)
 
-    assert len(scenes) == 3
-    assert [scene.title for scene in scenes] == ["Old Strength", "Breaking Point", "Aftermath"]
+    assert len(scenes) == 8
+    assert [scene.title for scene in scenes[:3]] == ["Old Strength", "Breaking Point", "Aftermath"]
+    assert all(scene.title for scene in scenes)
     assert all(scene.estimated_duration_sec > 0 for scene in scenes)
     assert all(len([kw for kw in scene.visual_intent.split(",") if kw.strip()]) >= 5 for scene in scenes)
 

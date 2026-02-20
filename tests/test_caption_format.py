@@ -42,3 +42,13 @@ def test_format_caption_truncates_to_two_lines() -> None:
     very_long = "word " * 200
     caption = format_caption(very_long)
     _assert_limits(caption)
+
+
+def test_format_caption_with_larger_line_budget_preserves_tail_text() -> None:
+    text = "One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen"
+    caption = format_caption(text, max_lines=12, max_chars_per_line=16)
+
+    assert "sixteen" in caption
+    lines = caption.split("\n")
+    assert len(lines) <= 12
+    assert all(len(line) <= 16 for line in lines)
