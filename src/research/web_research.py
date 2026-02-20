@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from html import unescape
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
@@ -42,17 +42,28 @@ def _allowed_url(url: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def _decode_duckduckgo_redirect(url: str) -> str:
+    """Convert DuckDuckGo redirect links to direct URLs when possible."""
+    parsed = urlparse(url)
+    if parsed.netloc not in {"duckduckgo.com", "www.duckduckgo.com"}:
+        return url
+    query = parse_qs(parsed.query)
+    uddg = query.get("uddg", [""])[0]
+    return unquote(uddg).strip() or url
+
+
 def _extract_search_results(html: str, max_results: int) -> list[Source]:
-    # DuckDuckGo HTML result blocks
+    # Support multiple DuckDuckGo result layouts.
     pattern = re.compile(
-        r'<a[^>]*class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
-        r'<a[^>]*class="result__snippet"[^>]*>(?P<snippet>.*?)</a>',
+        r'<a[^>]*class="(?:result__a|result-link)"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>.*?'
+        r'(?:<a[^>]*class="result__snippet"[^>]*>|<td[^>]*class="result-snippet"[^>]*>)(?P<snippet>.*?)'
+        r'(?:</a>|</td>)',
         flags=re.DOTALL,
     )
 
     results: list[Source] = []
     for match in pattern.finditer(html):
-        href = unescape(match.group("href") or "").strip()
+        href = _decode_duckduckgo_redirect(unescape(match.group("href") or "").strip())
         if not _allowed_url(href):
             continue
         title = _clean_text(match.group("title") or "")
@@ -105,17 +116,24 @@ def search_topic(topic: str, max_results: int = 6) -> list[Source]:
     if cached:
         return cached[:max_results]
 
-    response = requests.get(
+    endpoints = (
         "https://duckduckgo.com/html/",
-        params={"q": normalized_topic},
-        timeout=20,
-        headers={"User-Agent": USER_AGENT},
+        "https://lite.duckduckgo.com/lite/",
     )
-    response.raise_for_status()
-    sources = _extract_search_results(response.text, max_results=max_results)
-    if sources:
-        _save_cache(normalized_topic, sources)
-    return sources
+    for endpoint in endpoints:
+        response = requests.get(
+            endpoint,
+            params={"q": normalized_topic},
+            timeout=20,
+            headers={"User-Agent": USER_AGENT},
+        )
+        response.raise_for_status()
+        sources = _extract_search_results(response.text, max_results=max_results)
+        if sources:
+            _save_cache(normalized_topic, sources)
+            return sources
+
+    return []
 
 
 def summarize_sources(topic: str, sources: list[Source], *, max_facts: int = 12) -> str:
