@@ -162,6 +162,10 @@ def save_project_state(project_id: str) -> None:
         "script_text": str(st.session_state.get("script_text", "") or ""),
         "tone": str(st.session_state.get("tone", "Documentary") or "Documentary"),
         "length": str(st.session_state.get("length", "8–10 minutes") or "8–10 minutes"),
+        "audience": str(st.session_state.get("audience", "General audience") or "General audience"),
+        "story_angle": str(st.session_state.get("story_angle", "Balanced overview") or "Balanced overview"),
+        "research_brief_text": str(st.session_state.get("research_brief_text", "") or ""),
+        "use_research_brief_for_script": bool(st.session_state.get("use_research_brief_for_script", False)),
         "visual_style": str(st.session_state.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic"),
         "aspect_ratio": str(st.session_state.get("aspect_ratio", "16:9") or "16:9"),
         "variations_per_scene": int(st.session_state.get("variations_per_scene", 1) or 1),
@@ -185,6 +189,10 @@ def load_project_state(project_id: str) -> None:
         st.session_state.script_text = ""
         st.session_state.script_text_input = ""
         st.session_state.pending_script_text_input = ""
+        st.session_state.audience = "General audience"
+        st.session_state.story_angle = "Balanced overview"
+        st.session_state.research_brief_text = ""
+        st.session_state.use_research_brief_for_script = False
         st.session_state.scenes = []
         return
 
@@ -202,6 +210,10 @@ def load_project_state(project_id: str) -> None:
     st.session_state.pending_script_text_input = ""
     st.session_state.tone = str(raw.get("tone", "Documentary") or "Documentary")
     st.session_state.length = str(raw.get("length", "8–10 minutes") or "8–10 minutes")
+    st.session_state.audience = str(raw.get("audience", "General audience") or "General audience")
+    st.session_state.story_angle = str(raw.get("story_angle", "Balanced overview") or "Balanced overview")
+    st.session_state.research_brief_text = str(raw.get("research_brief_text", "") or "")
+    st.session_state.use_research_brief_for_script = bool(raw.get("use_research_brief_for_script", False))
     st.session_state.visual_style = str(raw.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic")
     st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "16:9") or "16:9")
     st.session_state.variations_per_scene = int(raw.get("variations_per_scene", 1) or 1)
@@ -236,6 +248,10 @@ def init_state() -> None:
 
     st.session_state.setdefault("tone", "Documentary")
     st.session_state.setdefault("length", "8–10 minutes")
+    st.session_state.setdefault("audience", "General audience")
+    st.session_state.setdefault("story_angle", "Balanced overview")
+    st.session_state.setdefault("research_brief_text", "")
+    st.session_state.setdefault("use_research_brief_for_script", False)
 
     st.session_state.setdefault("visual_style", "Photorealistic cinematic")
     st.session_state.setdefault("aspect_ratio", "16:9")
@@ -348,6 +364,10 @@ def render_project_selector() -> None:
                 st.session_state.topic = ""
                 st.session_state.script_text = ""
                 st.session_state.script_text_input = ""
+                st.session_state.audience = "General audience"
+                st.session_state.story_angle = "Balanced overview"
+                st.session_state.research_brief_text = ""
+                st.session_state.use_research_brief_for_script = False
                 st.session_state.scenes = []
                 ensure_project_exists(fallback)
             st.toast(f"Deleted project: {selected}")
