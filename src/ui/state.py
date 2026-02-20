@@ -265,17 +265,23 @@ def active_project_id() -> str:
 def render_project_selector() -> None:
     existing = _existing_project_ids()
     new_label = "➕ New project"
-    options = existing + [new_label]
 
     current = active_project_id()
-    if current and current not in existing:
-        options = [current] + options
-    default_value = current if current in options else (options[0] if options else new_label)
+    if existing and current not in existing:
+        st.session_state.project_id = existing[0]
+        load_project_state(existing[0])
+        current = existing[0]
+
+    options = existing + [new_label]
+    default_value = current if current in existing else new_label
+
+    if st.session_state.get("project_selector") not in options:
+        st.session_state.project_selector = default_value
 
     selected_option = st.selectbox(
         "Create / Select Project",
         options,
-        index=options.index(default_value),
+        index=options.index(st.session_state.get("project_selector", default_value)),
         key="project_selector",
         help="All generated assets are saved under data/projects/<project_id>/...",
     )
