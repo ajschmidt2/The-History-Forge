@@ -39,3 +39,16 @@ def test_apply_manual_scene_durations_ignores_invalid_values() -> None:
 
     assert [round(scene.duration, 2) for scene in timeline.scenes] == [3.0, 3.0]
     assert [round(scene.start, 2) for scene in timeline.scenes] == [0.0, 3.0]
+
+
+def test_apply_manual_scene_durations_can_lock_total_duration() -> None:
+    timeline = _timeline()
+    session_scenes = [
+        SimpleNamespace(index=1, estimated_duration_sec=10.0),
+        SimpleNamespace(index=2, estimated_duration_sec=2.0),
+    ]
+
+    _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=True)
+
+    assert round(sum(scene.duration for scene in timeline.scenes), 2) == 6.0
+    assert [round(scene.start, 2) for scene in timeline.scenes] == [0.0, 5.0]
