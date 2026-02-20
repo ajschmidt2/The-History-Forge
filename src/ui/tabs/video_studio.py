@@ -123,6 +123,31 @@ def _render_caption_preview(style: CaptionStyle) -> None:
     st.markdown(preview_html, unsafe_allow_html=True)
 
 
+def _preview_caption_style(meta_defaults: dict) -> tuple[bool, CaptionStyle]:
+    burn_default = bool(meta_defaults.get("burn_captions", True))
+    burn_captions = bool(st.session_state.get("video_burn_captions", burn_default))
+
+    caption_style_defaults = meta_defaults.get("caption_style", {}) or {}
+    try:
+        style = CaptionStyle(**caption_style_defaults)
+    except (TypeError, ValueError):
+        style = CaptionStyle()
+
+    presets = _caption_style_presets()
+    selected_preset_name = st.session_state.get("video_caption_style")
+    if isinstance(selected_preset_name, str) and selected_preset_name in presets:
+        style = presets[selected_preset_name].model_copy(deep=True)
+
+    style.font_size = int(st.session_state.get("video_caption_font_size", style.font_size))
+
+    position_options = _caption_position_options()
+    selected_label = st.session_state.get("video_caption_position")
+    if isinstance(selected_label, str) and selected_label in position_options:
+        style.position = position_options[selected_label]
+
+    return burn_captions, style
+
+
 def _session_scene_images() -> list[tuple[int, bytes]]:
     scenes = st.session_state.get("scenes")
     if not scenes:
@@ -192,22 +217,72 @@ def _script_chunks_for_scene_count(script_text: str, scene_count: int) -> list[s
     return chunks
 
 
-def _render_subtitle_preview(image_path: Path, subtitle: str) -> bytes:
+def _render_subtitle_preview(
+    image_path: Path,
+    subtitle: str,
+    *,
+    caption_style: CaptionStyle,
+    burn_captions: bool,
+) -> bytes:
     with Image.open(image_path) as image:
         canvas = image.convert("RGB")
 
-    width, height = canvas.size
-    overlay_height = max(80, int(height * 0.2))
-    draw = ImageDraw.Draw(canvas, "RGBA")
-    draw.rectangle([(0, height - overlay_height), (width, height)], fill=(0, 0, 0, 150))
+    if not burn_captions:
+        buffer = BytesIO()
+        canvas.save(buffer, format="PNG")
+        return buffer.getvalue()
 
+    width, height = canvas.size
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    font_size = max(18, int(caption_style.font_size * (height / 1920)))
+    line_spacing = max(4, int(caption_style.line_spacing * (height / 1920)))
     try:
-        font = ImageFont.truetype("DejaVuSans.ttf", max(18, int(height * 0.04)))
+        font = ImageFont.truetype("DejaVuSans.ttf", font_size)
     except OSError:
         font = ImageFont.load_default()
 
-    text = (subtitle or "").strip() or "(No subtitle)"
-    draw.text((24, height - overlay_height + 18), text, fill=(255, 255, 255, 255), font=font)
+    text = format_caption((subtitle or "").strip() or "(No subtitle)")
+    lines = text.split("\n") if text else ["(No subtitle)"]
+
+    line_heights: list[int] = []
+    line_widths: list[int] = []
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        line_widths.append(max(1, bbox[2] - bbox[0]))
+        line_heights.append(max(1, bbox[3] - bbox[1]))
+
+    block_height = sum(line_heights) + line_spacing * max(0, len(lines) - 1)
+    max_line_width = max(line_widths) if line_widths else width // 2
+
+    margin = max(20, int(caption_style.bottom_margin * (height / 1920)))
+    if caption_style.position == "top":
+        y_start = margin
+    elif caption_style.position == "center":
+        y_start = max(0, (height - block_height) // 2)
+    else:
+        y_start = max(0, height - margin - block_height)
+
+    box_padding_x = max(16, width // 40)
+    box_padding_y = max(10, height // 90)
+    box_left = max(0, (width - max_line_width) // 2 - box_padding_x)
+    box_right = min(width, (width + max_line_width) // 2 + box_padding_x)
+    box_top = max(0, y_start - box_padding_y)
+    box_bottom = min(height, y_start + block_height + box_padding_y)
+    draw.rounded_rectangle(
+        [(box_left, box_top), (box_right, box_bottom)],
+        radius=max(8, width // 90),
+        fill=(0, 0, 0, 135),
+    )
+
+    y = y_start
+    for i, line in enumerate(lines):
+        line_w = line_widths[i]
+        x = max(0, (width - line_w) // 2)
+        for dx, dy in [(-2, -2), (-2, 2), (2, -2), (2, 2)]:
+            draw.text((x + dx, y + dy), line, fill=(0, 0, 0, 220), font=font)
+        draw.text((x, y), line, fill=(255, 255, 255, 255), font=font)
+        y += line_heights[i] + line_spacing
 
     buffer = BytesIO()
     canvas.save(buffer, format="PNG")
@@ -250,7 +325,13 @@ def _default_scene_captions(media_files: list[Path], timeline_path: Path) -> lis
     return captions
 
 
-def _collect_scene_captions(media_files: list[Path], timeline_path: Path) -> list[str]:
+def _collect_scene_captions(
+    media_files: list[Path],
+    timeline_path: Path,
+    *,
+    caption_style: CaptionStyle,
+    burn_captions: bool,
+) -> list[str]:
     state_key = f"video_scene_captions::{timeline_path}"
     if state_key not in st.session_state or len(st.session_state[state_key]) != len(media_files):
         st.session_state[state_key] = _normalize_caption_list(_default_scene_captions(media_files, timeline_path), len(media_files))
@@ -263,7 +344,15 @@ def _collect_scene_captions(media_files: list[Path], timeline_path: Path) -> lis
                 st.video(str(media_path))
                 st.caption(f"Subtitle preview: {captions[idx - 1] or '(No subtitle)'}")
             else:
-                st.image(_render_subtitle_preview(media_path, captions[idx - 1]), width="stretch")
+                st.image(
+                    _render_subtitle_preview(
+                        media_path,
+                        captions[idx - 1],
+                        caption_style=caption_style,
+                        burn_captions=burn_captions,
+                    ),
+                    width="stretch",
+                )
             edited_caption = st.text_area(
                 "Subtitle for this scene",
                 value=captions[idx - 1],
@@ -464,9 +553,16 @@ def tab_video_compile() -> None:
         key="video_scene_duration",
     )
 
+    preview_burn_captions, preview_caption_style = _preview_caption_style(meta_defaults)
+
     st.markdown("### Scene subtitle review")
     if media_files:
-        scene_captions = _collect_scene_captions(media_files, timeline_path)
+        scene_captions = _collect_scene_captions(
+            media_files,
+            timeline_path,
+            caption_style=preview_caption_style,
+            burn_captions=preview_burn_captions,
+        )
         if st.button("Auto-fill subtitles from scene script excerpts", width="stretch", key="video_auto_captions"):
             scene_captions = _normalize_caption_list(_default_scene_captions(media_files, timeline_path), len(media_files))
             st.session_state[f"video_scene_captions::{timeline_path}"] = scene_captions
