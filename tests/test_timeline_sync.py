@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from src.ui.timeline_sync import _apply_manual_scene_durations
+from src.ui.timeline_sync import _apply_manual_scene_durations, _has_custom_transition
 from src.video.timeline_schema import Meta, Scene, Timeline
 
 
@@ -52,3 +52,9 @@ def test_apply_manual_scene_durations_can_lock_total_duration() -> None:
 
     assert round(sum(scene.duration for scene in timeline.scenes), 2) == 6.0
     assert [round(scene.start, 2) for scene in timeline.scenes] == [0.0, 5.0]
+
+
+def test_has_custom_transition_detects_non_fade_values() -> None:
+    assert _has_custom_transition(["fade", "wipeleft"]) is True
+    assert _has_custom_transition(["fade", "fade"]) is False
+    assert _has_custom_transition([]) is False

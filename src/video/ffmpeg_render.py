@@ -279,25 +279,22 @@ def render_video_from_timeline(
 
             stitched_path = tmp_path / "stitched.mp4"
             if timeline.meta.crossfade and len(scene_paths) > 1:
-                if len(scene_paths) > 12:
+                try:
+                    _crossfade_scenes(
+                        scene_paths,
+                        stitched_path,
+                        durations,
+                        fps,
+                        timeline.meta.crossfade_duration,
+                        log_file,
+                        ffmpeg_commands,
+                        transition_types=getattr(timeline.meta, "transition_types", []),
+                    )
+                except RuntimeError:
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
-                            handle.write("Crossfade disabled: too many scenes for a single filter graph.\n")
+                            handle.write("Crossfade graph failed; falling back to concat.\n")
                     _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
-                else:
-                    try:
-                        _crossfade_scenes(
-                            scene_paths,
-                            stitched_path,
-                            durations,
-                            fps,
-                            timeline.meta.crossfade_duration,
-                            log_file,
-                            ffmpeg_commands,
-                            transition_types=getattr(timeline.meta, "transition_types", []),
-                        )
-                    except RuntimeError:
-                        _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
             else:
                 _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
 

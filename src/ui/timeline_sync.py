@@ -39,6 +39,10 @@ def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: 
     return captions
 
 
+def _has_custom_transition(transition_types: list[str]) -> bool:
+    return any(str(item or "").strip().lower() not in {"", "fade"} for item in transition_types)
+
+
 def _caption_wrap_settings(aspect_ratio: str, font_size: int) -> tuple[int, int]:
     safe_font = max(18, int(font_size or 48))
     if str(aspect_ratio or "9:16") == "9:16":
@@ -136,6 +140,7 @@ def sync_timeline_for_project(
     crossfade_duration = float(merged_meta.get("crossfade_duration", 0.3))
     raw_transition_types = merged_meta.get("transition_types", [])
     transition_types = raw_transition_types if isinstance(raw_transition_types, list) else []
+    effective_crossfade = crossfade or _has_custom_transition(transition_types)
     scene_duration = merged_meta.get("scene_duration")
     include_voiceover_requested = bool(merged_meta.get("include_voiceover", True))
     include_music_requested = bool(merged_meta.get("include_music", False))
@@ -183,7 +188,7 @@ def sync_timeline_for_project(
         include_voiceover=include_voiceover,
         include_music=include_music,
         enable_motion=enable_motion,
-        crossfade=crossfade,
+        crossfade=effective_crossfade,
         crossfade_duration=crossfade_duration,
         transition_types=transition_types,
         scene_duration=float(scene_duration) if scene_duration is not None else None,
@@ -211,7 +216,7 @@ def sync_timeline_for_project(
             include_voiceover=include_voiceover,
             include_music=include_music,
             enable_motion=enable_motion,
-            crossfade=crossfade,
+            crossfade=effective_crossfade,
             crossfade_duration=crossfade_duration,
         transition_types=transition_types,
             scene_duration=float(scene_duration) if scene_duration is not None else None,
