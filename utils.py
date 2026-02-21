@@ -764,7 +764,6 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
     beats = _outline_beats(outline)
 
     if beats:
-        target = min(target, len(beats))
         sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
         base_units = sentences if len(sentences) >= target else [p.strip() for p in re.split(r"\n\s*\n+", script) if p.strip()]
         if not base_units:
@@ -773,7 +772,7 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
 
         scenes: list[Scene] = []
         for i in range(target):
-            beat = beats[i]
+            beat = beats[i] if i < len(beats) else {}
             excerpt = " ".join(groups[i]).strip() if i < len(groups) else ""
             excerpt = excerpt or script[:280].strip()
             beat_text = " ".join(beat.get("bullets", []))
@@ -781,7 +780,7 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
             scenes.append(
                 Scene(
                     index=i + 1,
-                    title=str(beat.get("title", "") or f"Beat {i+1}"),
+                    title=str(beat.get("title", "") or f"Scene {i+1}"),
                     script_excerpt=excerpt,
                     visual_intent=_extract_visual_keywords(keyword_source),
                     estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),

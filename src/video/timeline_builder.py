@@ -36,8 +36,8 @@ def _build_motion(index: int) -> Motion:
     if zoom_in:
         return Motion(
             type="kenburns",
-            zoom_start=1.02,
-            zoom_end=1.06,
+            zoom_start=1.01,
+            zoom_end=1.03,
             x_start=0.49,
             x_end=0.51,
             y_start=0.5,
@@ -45,8 +45,8 @@ def _build_motion(index: int) -> Motion:
         )
     return Motion(
         type="kenburns",
-        zoom_start=1.06,
-        zoom_end=1.02,
+        zoom_start=1.03,
+        zoom_end=1.01,
         x_start=0.51,
         x_end=0.49,
         y_start=0.5,
@@ -86,6 +86,7 @@ def build_default_timeline(
     enable_motion: bool = True,
     crossfade: bool = False,
     crossfade_duration: float = 0.3,
+    transition_types: list[str] | None = None,
     scene_duration: float | None = None,
     scene_excerpts: list[str] | None = None,
     narration_wpm: float = 160,
@@ -160,6 +161,7 @@ def build_default_timeline(
             include_music=include_music,
             crossfade=crossfade,
             crossfade_duration=crossfade_duration,
+            transition_types=list(transition_types or []),
             narration_wpm=narration_wpm,
             narration_min_sec=narration_min_sec,
             narration_max_sec=narration_max_sec,
