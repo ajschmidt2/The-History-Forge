@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import streamlit as st
@@ -32,6 +33,54 @@ def _apply_refinement_passes(script: str) -> str:
     if st.session_state.run_safety_pass:
         revised = flag_uncertain_claims(revised, st.session_state.research_brief_text)
     return revised
+
+
+def _clean_generated_script(script: str) -> str:
+    text = str(script or "").strip()
+    if not text:
+        return ""
+
+    text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+
+    # If the model wrapped narration with commentary, prefer explicit script blocks.
+    revised_block = re.search(
+        r"(?is)(?:revised\s+script(?:\s+with\s+softened\s+claims)?|clean\s+script|final\s+script|script\s+only)\s*:\s*(.+)",
+        text,
+    )
+    if revised_block:
+        text = revised_block.group(1).strip()
+
+    # Drop any leading analysis text before clear script labels.
+    leading_labels = re.search(r"(?im)^\s*(?:script|narration)\s*:\s*", text)
+    if leading_labels:
+        text = text[leading_labels.start():].strip()
+
+    # Remove trailing verification/source/meta sections with or without markdown headers.
+    trailing_section_pattern = (
+        r"(?im)^\s*(?:#{1,6}\s*|\*{0,2})"
+        r"(?:notes?\s+to\s+verify|verification(?:\s+notes?)?|fact-?check(?:ing)?(?:\s+notes?)?|"
+        r"sources?(?:\s+used)?|citations?|references?|editor(?:'s)?\s+notes?)"
+        r"(?:\*{0,2})\s*:?\s*$"
+    )
+    split_lines = re.split(trailing_section_pattern, text, maxsplit=1)
+    text = split_lines[0].strip() if split_lines else text
+
+    # Also handle inline suffixes like "Notes to Verify: ..." on the same line.
+    text = re.split(
+        r"(?is)\n?\s*\*{0,2}(?:notes?\s+to\s+verify|verification(?:\s+notes?)?|"
+        r"fact-?check(?:ing)?(?:\s+notes?)?|sources?(?:\s+used)?|citations?|references?)"
+        r"\*{0,2}\s*:",
+        text,
+        maxsplit=1,
+    )[0].strip()
+
+    text = re.sub(r"(?im)^\s*(script|narration)\s*:\s*", "", text).strip()
+    text = re.sub(r"(?m)^\s*[-*]\s+", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
 
 def _save_research_artifacts(brief_markdown: str, sources: list[Source]) -> None:
     research_dir = Path("data/projects") / active_project_id() / "research"
@@ -256,7 +305,7 @@ def tab_generate_script() -> None:
                     reading_level=st.session_state.reading_level,
                     pacing=st.session_state.pacing,
                 )
-                generated_script = _apply_refinement_passes(generated_script)
+                generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001
                 st.error(openai_error_message(exc))
                 return
@@ -282,7 +331,7 @@ def tab_generate_script() -> None:
                     angle=st.session_state.story_angle,
                     research_brief=brief_for_script,
                 )
-                generated_script = _apply_refinement_passes(generated_script)
+                generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
                 st.error(openai_error_message(exc))
                 return
@@ -294,5 +343,16 @@ def tab_generate_script() -> None:
         st.rerun()
 
     if script_ready():
-        with st.expander("Preview script", expanded=False):
-            st.write(st.session_state.script_text)
+        with st.expander("Script (editable)", expanded=True):
+            st.text_area(
+                "Script",
+                key="script_text",
+                height=320,
+                help="Edit the generated script directly. Only narration/script text should be kept here.",
+            )
+            if st.button("Save edited script", width="stretch"):
+                st.session_state.script_text = _clean_generated_script(st.session_state.script_text)
+                st.session_state.pending_script_text_input = st.session_state.script_text
+                clear_downstream("script")
+                st.toast("Script updated.")
+                st.rerun()

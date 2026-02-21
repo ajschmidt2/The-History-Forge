@@ -1,7 +1,5 @@
 import streamlit as st
 
-from utils import generate_prompts_for_scenes
-
 from src.ui.state import clear_downstream, scenes_ready
 
 
@@ -35,6 +33,8 @@ def tab_create_prompts() -> None:
     )
 
     if st.button("Generate prompts for all scenes", type="primary", width="stretch"):
+        from utils import generate_prompts_for_scenes
+
         with st.spinner("Generating prompts..."):
             st.session_state.scenes = generate_prompts_for_scenes(
                 st.session_state.scenes,

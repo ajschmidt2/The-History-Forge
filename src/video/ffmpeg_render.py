@@ -15,6 +15,12 @@ from .utils import ensure_ffmpeg_exists, ensure_parent_dir, run_cmd
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
+_ALLOWED_XFADE_TRANSITIONS = {"fade", "fadeblack", "fadewhite", "wipeleft", "wiperight", "slideleft", "slideright", "smoothleft", "smoothright", "circleopen", "circleclose", "distance"}
+
+
+def _normalize_xfade_transition(name: str | None) -> str:
+    transition = str(name or "fade").strip().lower()
+    return transition if transition in _ALLOWED_XFADE_TRANSITIONS else "fade"
 
 
 def _parse_resolution(resolution: str) -> tuple[int, int]:
@@ -27,19 +33,18 @@ def _parse_resolution(resolution: str) -> tuple[int, int]:
 def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     motion = scene.motion
     if motion is None:
-        zoom_start = 1.0
-        zoom_end = 1.0
-        x_start = 0.5
-        x_end = 0.5
-        y_start = 0.5
-        y_end = 0.5
-    else:
-        zoom_start = motion.zoom_start if motion.type != "pan" else 1.0
-        zoom_end = motion.zoom_end if motion.type != "pan" else 1.0
-        x_start = motion.x_start
-        x_end = motion.x_end
-        y_start = motion.y if motion.type == "pan" and motion.y is not None else motion.y_start
-        y_end = motion.y if motion.type == "pan" and motion.y is not None else motion.y_end
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            "format=yuv420p"
+        )
+
+    zoom_start = motion.zoom_start if motion.type != "pan" else 1.0
+    zoom_end = motion.zoom_end if motion.type != "pan" else 1.0
+    x_start = motion.x_start
+    x_end = motion.x_end
+    y_start = motion.y if motion.type == "pan" and motion.y is not None else motion.y_start
+    y_end = motion.y if motion.type == "pan" and motion.y is not None else motion.y_end
 
     frames = max(1, int(math.ceil(scene.duration * fps)))
     zoom_expr = f"{zoom_start} + ({zoom_end} - {zoom_start})*on/{frames}"
@@ -47,7 +52,7 @@ def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     y_expr = f"({y_start} + ({y_end} - {y_start})*on/{frames})*(ih - ih/zoom)"
 
     return (
-        f"scale={width * 1.08}:{height * 1.08}:force_original_aspect_ratio=increase,"
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d={frames}:s={width}x{height}:fps={fps},"
         "format=yuv420p"
     )
@@ -169,6 +174,7 @@ def _crossfade_scenes(
     crossfade_duration: float,
     log_path: Path | None,
     ffmpeg_commands: list[list[str]],
+    transition_types: list[str] | None = None,
 ) -> None:
     input_args: list[str] = []
     for path in scene_paths:
@@ -180,8 +186,11 @@ def _crossfade_scenes(
     for idx in range(1, len(scene_paths)):
         next_label = f"[{idx}:v]"
         output_label = f"[v{idx}]"
+        transition_name = _normalize_xfade_transition(
+            transition_types[idx - 1] if transition_types and idx - 1 < len(transition_types) else "fade"
+        )
         filters.append(
-            f"{current_label}{next_label}xfade=transition=fade:duration={crossfade_duration}:offset={offset}{output_label}"
+            f"{current_label}{next_label}xfade=transition={transition_name}:duration={crossfade_duration}:offset={offset}{output_label}"
         )
         current_label = output_label
         offset += max(0.0, durations[idx] - crossfade_duration)
@@ -238,6 +247,9 @@ def render_video_from_timeline(
     timeline_content = Path(timeline_path).read_text(encoding="utf-8")
     timeline_hash = hashlib.sha256(timeline_content.encode("utf-8")).hexdigest()
     timeline = Timeline.model_validate_json(timeline_content)
+    if not getattr(timeline.meta, "enable_motion", True):
+        for scene in timeline.scenes:
+            scene.motion = None
     if not timeline.scenes:
         raise ValueError("Timeline has no scenes to render.")
     output_path = ensure_parent_dir(out_mp4_path)
@@ -267,24 +279,22 @@ def render_video_from_timeline(
 
             stitched_path = tmp_path / "stitched.mp4"
             if timeline.meta.crossfade and len(scene_paths) > 1:
-                if len(scene_paths) > 12:
+                try:
+                    _crossfade_scenes(
+                        scene_paths,
+                        stitched_path,
+                        durations,
+                        fps,
+                        timeline.meta.crossfade_duration,
+                        log_file,
+                        ffmpeg_commands,
+                        transition_types=getattr(timeline.meta, "transition_types", []),
+                    )
+                except RuntimeError:
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
-                            handle.write("Crossfade disabled: too many scenes for a single filter graph.\n")
+                            handle.write("Crossfade graph failed; falling back to concat.\n")
                     _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
-                else:
-                    try:
-                        _crossfade_scenes(
-                            scene_paths,
-                            stitched_path,
-                            durations,
-                            fps,
-                            timeline.meta.crossfade_duration,
-                            log_file,
-                            ffmpeg_commands,
-                        )
-                    except RuntimeError:
-                        _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
             else:
                 _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
 
