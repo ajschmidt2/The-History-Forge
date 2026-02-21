@@ -18,6 +18,8 @@ def _openai_client():
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY not found in environment variables")
 
+    assert "os" in globals()
+    _ = os.getenv
     from openai import OpenAI
 
     return OpenAI(api_key=OPENAI_API_KEY)

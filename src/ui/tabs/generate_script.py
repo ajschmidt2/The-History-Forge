@@ -1,4 +1,5 @@
 import json
+import traceback
 import re
 from pathlib import Path
 
@@ -138,8 +139,9 @@ def tab_generate_script() -> None:
             try:
                 st.session_state.topic = generate_lucky_topic()
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
-                st.error(openai_error_message(exc))
-                return
+                tb = traceback.format_exc()
+                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                raise
             st.session_state.project_title = st.session_state.topic
             st.toast(st.session_state.topic)
             clear_downstream("script")
@@ -241,8 +243,9 @@ def tab_generate_script() -> None:
                         angle=st.session_state.story_angle,
                     )
                 except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
-                    st.error(openai_error_message(exc))
-                    return
+                    tb = traceback.format_exc()
+                    st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                    raise
             st.toast("Research brief generated.")
 
         st.session_state.research_sources = [
@@ -305,8 +308,9 @@ def tab_generate_script() -> None:
                     angle=st.session_state.story_angle,
                 )
             except Exception as exc:  # noqa: BLE001
-                st.error(openai_error_message(exc))
-                return
+                tb = traceback.format_exc()
+                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                raise
         st.session_state.outline_json_text = json.dumps(outline_payload, indent=2)
         _save_outline_json(st.session_state.outline_json_text)
         st.toast("Outline generated.")
@@ -339,8 +343,9 @@ def tab_generate_script() -> None:
                 )
                 generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001
-                st.error(openai_error_message(exc))
-                return
+                tb = traceback.format_exc()
+                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                raise
         st.session_state.script_text = generated_script
         st.session_state.generated_script_text_input = generated_script
         st.session_state.pending_script_text_input = generated_script
@@ -366,8 +371,9 @@ def tab_generate_script() -> None:
                 )
                 generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
-                st.error(openai_error_message(exc))
-                return
+                tb = traceback.format_exc()
+                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                raise
         st.session_state.script_text = generated_script
         st.session_state.generated_script_text_input = generated_script
         st.session_state.pending_script_text_input = generated_script
