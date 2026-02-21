@@ -732,6 +732,16 @@ def tab_video_compile() -> None:
         key="video_narration_max_sec",
     )
 
+    render_timeout_sec = st.number_input(
+        "FFmpeg command timeout (seconds)",
+        min_value=60,
+        max_value=7200,
+        value=int(meta_defaults.get("render_timeout_sec", 1200)),
+        step=30,
+        key="video_render_timeout_sec",
+        help="Stops any single FFmpeg command that hangs too long; cached scene clips make retries faster.",
+    )
+
     timeline_meta_overrides = {
         "title": title,
         "aspect_ratio": aspect_ratio,
@@ -749,6 +759,7 @@ def tab_video_compile() -> None:
         "narration_wpm": narration_wpm,
         "narration_min_sec": narration_min_sec,
         "narration_max_sec": narration_max_sec,
+        "render_timeout_sec": int(render_timeout_sec),
     }
 
     if media_files:
@@ -874,12 +885,17 @@ def tab_video_compile() -> None:
                         renders_dir / "final.mp4",
                         log_path=log_path,
                         report_path=report_path,
+                        command_timeout_sec=float(render_timeout_sec),
                     )
                 except (RuntimeError, FileNotFoundError, ValueError) as exc:
                     st.error(
                         "Render failed. Verify media paths/codecs and inspect the FFmpeg diagnostics below for the"
                         f" exact command error.\n\nDetails: {exc}"
                     )
+                    if "timed out" in str(exc).lower():
+                        st.warning(
+                            "A render command hit the timeout. Increase 'FFmpeg command timeout', or retry now that scene clips are cached."
+                        )
                     failure_log = _tail_file(log_path, lines=50)
                     if failure_log:
                         st.markdown("#### Last 50 log lines")
