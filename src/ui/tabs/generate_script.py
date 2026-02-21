@@ -343,16 +343,21 @@ def tab_generate_script() -> None:
         st.rerun()
 
     if script_ready():
+        if st.session_state.pending_script_text_input:
+            st.session_state.generated_script_text_input = st.session_state.pending_script_text_input
+            st.session_state.pending_script_text_input = ""
+
         with st.expander("Script (editable)", expanded=True):
             st.text_area(
                 "Script",
-                key="script_text",
+                key="generated_script_text_input",
                 height=320,
                 help="Edit the generated script directly. Only narration/script text should be kept here.",
             )
             if st.button("Save edited script", width="stretch"):
-                st.session_state.script_text = _clean_generated_script(st.session_state.script_text)
-                st.session_state.pending_script_text_input = st.session_state.script_text
+                cleaned_script = _clean_generated_script(st.session_state.generated_script_text_input)
+                st.session_state.script_text = cleaned_script
+                st.session_state.pending_script_text_input = cleaned_script
                 clear_downstream("script")
                 st.toast("Script updated.")
                 st.rerun()
