@@ -95,17 +95,12 @@ def build_ass_from_timeline(timeline: Timeline) -> str:
         caption = (scene.caption or "").strip()
         if not caption:
             continue
-        words = caption.split()
-        if not words:
+
+        lines = [line.strip() for line in caption.split("\n") if line.strip()]
+        if not lines:
             continue
-        total_cs = max(1, int(round(scene.duration * 100)))
-        base_cs = max(1, total_cs // len(words))
-        remainder = total_cs - (base_cs * len(words))
-        pieces = []
-        for idx, word in enumerate(words):
-            duration_cs = base_cs + (1 if idx < remainder else 0)
-            pieces.append(f"{{\\k{duration_cs}}}{word}")
-        text = " ".join(pieces)
+
+        text = r"\N".join(lines)
         start = _format_ass_time(scene.start)
         end = _format_ass_time(scene.end)
         events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")

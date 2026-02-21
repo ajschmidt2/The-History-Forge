@@ -31,26 +31,32 @@ def format_caption(text: str, max_lines: int = 2, max_chars_per_line: int = 32) 
     if not normalized:
         return ""
 
+    if max_chars_per_line <= 0:
+        return normalized
+
+    # Keep historical default behavior at two lines while supporting larger line counts
+    # for script-synced scene captions that should avoid early truncation.
+    line_budget = max(1, int(max_lines or 1))
+
     words = normalized.split(" ")
-    if len(normalized) <= max_chars_per_line or max_lines <= 1:
-        return normalized[:max_chars_per_line].strip()
+    lines: list[str] = []
 
-    first_count = _best_break(words, max_chars_per_line)
-    first_line = " ".join(words[:first_count]).strip()
-    remainder = words[first_count:]
-    if not remainder:
-        return first_line
+    while words and len(lines) < line_budget:
+        count = _best_break(words, max_chars_per_line)
+        line = " ".join(words[:count]).strip()
+        if len(line) > max_chars_per_line:
+            line = line[:max_chars_per_line].rstrip()
+        lines.append(line)
+        words = words[count:]
 
-    second_count = _best_break(remainder, max_chars_per_line)
-    second_line = " ".join(remainder[:second_count]).strip()
+    if words and lines:
+        # Preserve as much remaining text as possible in the final allowed line.
+        remainder = " ".join(words).strip()
+        final_line = lines[-1]
+        joiner = " " if final_line else ""
+        combined = f"{final_line}{joiner}{remainder}".strip()
+        if len(combined) > max_chars_per_line:
+            combined = combined[: max_chars_per_line - 1].rstrip(" ,;:") + "…"
+        lines[-1] = combined
 
-    if second_count < len(remainder):
-        trimmed = second_line[: max(1, max_chars_per_line - 1)].rstrip(" ,;:")
-        second_line = f"{trimmed}…"
-
-    if len(first_line) > max_chars_per_line:
-        first_line = first_line[:max_chars_per_line].rstrip()
-    if len(second_line) > max_chars_per_line:
-        second_line = second_line[: max_chars_per_line - 1].rstrip() + "…"
-
-    return f"{first_line}\n{second_line}".strip()
+    return "\n".join(lines).strip()

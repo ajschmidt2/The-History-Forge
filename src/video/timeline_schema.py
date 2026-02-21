@@ -76,8 +76,10 @@ class Meta(BaseModel):
     burn_captions: bool = True
     include_voiceover: bool = True
     include_music: bool = True
+    enable_motion: bool = True
     crossfade: bool = False
     crossfade_duration: float = 0.3
+    transition_types: List[str] = Field(default_factory=list)
     narration_wpm: float = 160
     narration_min_sec: float = 1.5
     narration_max_sec: float = 12.0
