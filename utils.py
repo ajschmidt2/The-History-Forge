@@ -25,6 +25,16 @@ def _normalize_secret(value: str) -> str:
     return cleaned
 
 
+
+
+def _secret_from_mapping(mapping: Any, path: tuple[str, ...]) -> str:
+    current = mapping
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return ""
+        current = current[key]
+    return _normalize_secret(str(current))
+
 def _get_secret(name: str, default: str = "") -> str:
     candidates = [
         name,
@@ -49,6 +59,21 @@ def _get_secret(name: str, default: str = "") -> str:
                         if key.upper().startswith("OPENAI") or "openai" in key.lower() or key.lower() == "api_key":
                             os.environ.setdefault("OPENAI_API_KEY", value)
                             os.environ.setdefault("openai_api_key", value)
+                        return value
+
+            if "openai" in name.lower():
+                nested_paths = [
+                    ("openai", "api_key"),
+                    ("openai", "OPENAI_API_KEY"),
+                    ("OPENAI", "api_key"),
+                    ("OPENAI", "API_KEY"),
+                    ("providers", "openai", "api_key"),
+                ]
+                for path in nested_paths:
+                    value = _secret_from_mapping(st.secrets, path)
+                    if value:
+                        os.environ.setdefault("OPENAI_API_KEY", value)
+                        os.environ.setdefault("openai_api_key", value)
                         return value
     except Exception:
         pass
