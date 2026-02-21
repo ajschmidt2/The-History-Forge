@@ -3,9 +3,11 @@ import re
 import json
 import time
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Optional, Tuple
 from io import BytesIO
+from pathlib import Path
 
 import requests
 from PIL import Image
@@ -15,17 +17,75 @@ from image_gen import generate_imagen_images
 # ----------------------------
 # Secrets
 # ----------------------------
+def _normalize_secret(value: str) -> str:
+    cleaned = str(value or "").strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"\"", "'"}:
+        cleaned = cleaned[1:-1].strip()
+    lowered = cleaned.lower()
+    if lowered in {"paste_key_here", "your_api_key_here", "replace_me", "none", "null"}:
+        return ""
+    return cleaned
+
+
+
+
+def _secret_from_mapping(mapping: Any, path: tuple[str, ...]) -> str:
+    current = mapping
+    for key in path:
+        if not isinstance(current, Mapping) or key not in current:
+            return ""
+        current = current[key]
+    return _normalize_secret(str(current))
+
 def _get_secret(name: str, default: str = "") -> str:
+    candidates = [
+        name,
+        name.lower(),
+        name.upper(),
+        "OPENAI_API_KEY" if "openai" in name.lower() else "",
+        "openai_api_key" if "openai" in name.lower() else "",
+        "OPENAI_KEY" if "openai" in name.lower() else "",
+        "openai_key" if "openai" in name.lower() else "",
+        "api_key" if "openai" in name.lower() else "",
+    ]
+    candidates = [c for c in candidates if c]
+
     try:
         import streamlit as st  # type: ignore
+
         if hasattr(st, "secrets"):
-            candidates = {name, name.lower(), name.upper()}
             for key in candidates:
                 if key in st.secrets:
-                    return str(st.secrets[key])
+                    value = _normalize_secret(str(st.secrets[key]))
+                    if value:
+                        if key.upper().startswith("OPENAI") or "openai" in key.lower() or key.lower() == "api_key":
+                            os.environ.setdefault("OPENAI_API_KEY", value)
+                            os.environ.setdefault("openai_api_key", value)
+                        return value
+
+            if "openai" in name.lower():
+                nested_paths = [
+                    ("openai", "api_key"),
+                    ("openai", "OPENAI_API_KEY"),
+                    ("OPENAI", "api_key"),
+                    ("OPENAI", "API_KEY"),
+                    ("providers", "openai", "api_key"),
+                ]
+                for path in nested_paths:
+                    value = _secret_from_mapping(st.secrets, path)
+                    if value:
+                        os.environ.setdefault("OPENAI_API_KEY", value)
+                        os.environ.setdefault("openai_api_key", value)
+                        return value
     except Exception:
         pass
-    return os.getenv(name, os.getenv(name.upper(), default))
+
+    for key in candidates:
+        value = _normalize_secret(os.getenv(key, ""))
+        if value:
+            return value
+
+    return _normalize_secret(default)
 
 
 def get_secret(name: str, default: str = "") -> str:
@@ -36,11 +96,20 @@ def get_secret(name: str, default: str = "") -> str:
 # Clients
 # ----------------------------
 def _openai_client():
+    # Load from secrets first, then enforce explicit env presence for downstream consistency.
     key = _get_secret("openai_api_key", "").strip()
-    if not key:
-        return None
+    if key:
+        os.environ.setdefault("OPENAI_API_KEY", key)
+        os.environ.setdefault("openai_api_key", key)
+
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY not found in environment variables")
+
+    assert "os" in globals()
+    _ = os.getenv
     from openai import OpenAI  # openai>=1.x
-    return OpenAI(api_key=key)
+    return OpenAI(api_key=OPENAI_API_KEY)
 
 
 def _elevenlabs_api_key() -> str:

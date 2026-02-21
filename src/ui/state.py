@@ -205,6 +205,7 @@ def load_project_state(project_id: str) -> None:
         st.session_state.topic = ""
         st.session_state.script_text = ""
         st.session_state.script_text_input = ""
+        st.session_state.generated_script_text_input = ""
         st.session_state.pending_script_text_input = ""
         st.session_state.audience = "General audience"
         st.session_state.story_angle = "Balanced overview"
@@ -235,6 +236,7 @@ def load_project_state(project_id: str) -> None:
     st.session_state.topic = str(raw.get("topic", "") or "")
     st.session_state.script_text = str(raw.get("script_text", "") or "")
     st.session_state.script_text_input = st.session_state.script_text
+    st.session_state.generated_script_text_input = st.session_state.script_text
     st.session_state.pending_script_text_input = ""
     st.session_state.tone = str(raw.get("tone", "Documentary") or "Documentary")
     st.session_state.length = str(raw.get("length", "8–10 minutes") or "8–10 minutes")
@@ -283,9 +285,12 @@ def init_state() -> None:
     st.session_state.setdefault("topic", "")
     st.session_state.setdefault("script_text", "")
     st.session_state.setdefault("script_text_input", "")
+    st.session_state.setdefault("generated_script_text_input", "")
     st.session_state.setdefault("pending_script_text_input", "")
     if st.session_state.script_text and not st.session_state.script_text_input:
         st.session_state.script_text_input = st.session_state.script_text
+    if st.session_state.script_text and not st.session_state.generated_script_text_input:
+        st.session_state.generated_script_text_input = st.session_state.script_text
 
     st.session_state.setdefault("tone", "Documentary")
     st.session_state.setdefault("length", "8–10 minutes")
@@ -416,6 +421,7 @@ def render_project_selector() -> None:
                 st.session_state.topic = ""
                 st.session_state.script_text = ""
                 st.session_state.script_text_input = ""
+                st.session_state.generated_script_text_input = ""
                 st.session_state.audience = "General audience"
                 st.session_state.story_angle = "Balanced overview"
                 st.session_state.research_brief_text = ""
