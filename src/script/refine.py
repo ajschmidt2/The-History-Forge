@@ -7,6 +7,8 @@ from utils import get_secret
 
 
 def _openai_client():
+    import os  # defensive local import to prevent future refactor/import-order regressions
+
     key = get_secret("openai_api_key", "").strip()
     if not key:
         key = os.getenv("OPENAI_API_KEY", os.getenv("openai_api_key", "")).strip()
