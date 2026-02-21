@@ -9,18 +9,7 @@ from utils import get_secret
 def _openai_client():
     key = get_secret("openai_api_key", "").strip()
     if not key:
-        try:
-            import streamlit as st
-
-            for candidate in ("openai_api_key", "OPENAI_API_KEY", "openai_key", "OPENAI_KEY", "api_key"):
-                if candidate in st.secrets:
-                    key = str(st.secrets[candidate]).strip().strip("\"'")
-                    if key:
-                        break
-        except Exception:
-            key = ""
-    if key.lower() in {"paste_key_here", "your_api_key_here", "replace_me", "none", "null"}:
-        key = ""
+        key = os.getenv("OPENAI_API_KEY", os.getenv("openai_api_key", "")).strip()
     if not key:
         return None
     os.environ.setdefault("OPENAI_API_KEY", key)
