@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import hashlib
 import json
+import shutil
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -66,6 +67,7 @@ def _render_scene(
     height: int,
     log_path: Path | None,
     ffmpeg_commands: list[list[str]],
+    command_timeout_sec: float | None,
 ) -> None:
     source_path = Path(scene.image_path)
     is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
@@ -117,7 +119,7 @@ def _render_scene(
             str(output_path),
         ]
     ffmpeg_commands.append(cmd)
-    run_cmd(cmd, log_path=log_path)
+    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec)
 
 
 def _concat_scenes(
@@ -125,6 +127,7 @@ def _concat_scenes(
     stitched_path: Path,
     log_path: Path | None,
     ffmpeg_commands: list[list[str]],
+    command_timeout_sec: float | None,
 ) -> None:
     concat_list = stitched_path.with_suffix(".txt")
     concat_lines = [f"file '{path.as_posix()}'" for path in scene_paths]
@@ -145,7 +148,7 @@ def _concat_scenes(
     ]
     try:
         ffmpeg_commands.append(concat_cmd)
-        run_cmd(concat_cmd, log_path=log_path)
+        run_cmd(concat_cmd, log_path=log_path, timeout_sec=command_timeout_sec)
     except RuntimeError:
         fallback_cmd = [
             "ffmpeg",
@@ -163,7 +166,7 @@ def _concat_scenes(
             str(stitched_path),
         ]
         ffmpeg_commands.append(fallback_cmd)
-        run_cmd(fallback_cmd, log_path=log_path)
+        run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec)
 
 
 def _crossfade_scenes(
@@ -175,6 +178,7 @@ def _crossfade_scenes(
     log_path: Path | None,
     ffmpeg_commands: list[list[str]],
     transition_types: list[str] | None = None,
+    command_timeout_sec: float | None = None,
 ) -> None:
     input_args: list[str] = []
     for path in scene_paths:
@@ -213,7 +217,7 @@ def _crossfade_scenes(
         str(stitched_path),
     ]
     ffmpeg_commands.append(cmd)
-    run_cmd(cmd, log_path=log_path)
+    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec)
 
 
 def _subtitle_filter(subtitle_path: Path) -> str:
@@ -236,11 +240,54 @@ def _tail_log_lines(log_path: Path | None, lines: int = 50) -> list[str]:
     return [line.rstrip("\n") for line in content[-lines:]]
 
 
+
+def _scene_cache_key(scene, fps: int, width: int, height: int) -> str:
+    source_path = Path(scene.image_path)
+    source_stat = source_path.stat()
+    payload = {
+        "image_path": str(source_path.resolve()),
+        "size": source_stat.st_size,
+        "mtime_ns": source_stat.st_mtime_ns,
+        "duration": scene.duration,
+        "fps": fps,
+        "width": width,
+        "height": height,
+        "motion": scene.motion.model_dump() if scene.motion else None,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _resolve_scene_clip(
+    scene,
+    scene_out: Path,
+    fps: int,
+    width: int,
+    height: int,
+    cache_dir: Path,
+    log_path: Path | None,
+    ffmpeg_commands: list[list[str]],
+    command_timeout_sec: float | None,
+) -> bool:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached_scene = cache_dir / f"{_scene_cache_key(scene, fps, width, height)}.mp4"
+    if cached_scene.exists():
+        shutil.copy2(cached_scene, scene_out)
+        if log_path:
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"Using cached scene clip for {scene.id}: {cached_scene}\n")
+        return True
+
+    _render_scene(scene, scene_out, fps, width, height, log_path, ffmpeg_commands, command_timeout_sec)
+    shutil.copy2(scene_out, cached_scene)
+    return False
+
+
 def render_video_from_timeline(
     timeline_path: str | Path,
     out_mp4_path: str | Path,
     log_path: str | Path | None = None,
     report_path: str | Path | None = None,
+    command_timeout_sec: float | None = None,
 ) -> Path:
     ensure_ffmpeg_exists()
 
@@ -255,8 +302,10 @@ def render_video_from_timeline(
     output_path = ensure_parent_dir(out_mp4_path)
     log_file = Path(log_path) if log_path else None
     report_file = Path(report_path) if report_path else output_path.with_name("render_report.json")
+    cache_dir = output_path.with_name("scene_cache")
     ffmpeg_commands: list[list[str]] = []
     render_error: str | None = None
+    cache_hits = 0
 
     try:
         with tempfile.TemporaryDirectory(prefix="history_forge_video_") as tmp_dir:
@@ -273,7 +322,8 @@ def render_video_from_timeline(
                 if not Path(scene.image_path).exists():
                     raise FileNotFoundError(f"Scene image not found: {scene.image_path}")
                 scene_out = scenes_dir / f"{scene.id}.mp4"
-                _render_scene(scene, scene_out, fps, width, height, log_file, ffmpeg_commands)
+                if _resolve_scene_clip(scene, scene_out, fps, width, height, cache_dir, log_file, ffmpeg_commands, command_timeout_sec):
+                    cache_hits += 1
                 scene_paths.append(scene_out)
                 durations.append(scene.duration)
 
@@ -289,14 +339,15 @@ def render_video_from_timeline(
                         log_file,
                         ffmpeg_commands,
                         transition_types=getattr(timeline.meta, "transition_types", []),
+                        command_timeout_sec=command_timeout_sec,
                     )
                 except RuntimeError:
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
                             handle.write("Crossfade graph failed; falling back to concat.\n")
-                    _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
+                    _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec)
             else:
-                _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands)
+                _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec)
 
             srt_path = output_path.with_name("captions.srt")
             ass_path = output_path.with_name("captions.ass")
@@ -328,14 +379,14 @@ def render_video_from_timeline(
                 cmd.extend(audio_plan.map_args)
                 cmd.extend(["-c:v", "libx264", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(output_path)])
                 ffmpeg_commands.append(cmd)
-                run_cmd(cmd, log_path=log_file)
+                run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec)
             else:
                 cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
                 if timeline.meta.burn_captions:
                     cmd.extend(["-vf", _subtitle_filter(ass_path)])
                 cmd.extend(["-c:v", "libx264", "-movflags", "+faststart", str(output_path)])
                 ffmpeg_commands.append(cmd)
-                run_cmd(cmd, log_path=log_file)
+                run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec)
     except Exception as exc:
         render_error = str(exc)
         raise
@@ -345,9 +396,11 @@ def render_video_from_timeline(
             "ffmpeg_commands": [" ".join(cmd) for cmd in ffmpeg_commands],
             "timeline_hash": timeline_hash,
             "environment": {"ffmpeg_version": _ffmpeg_version()},
+            "command_timeout_sec": command_timeout_sec,
             "status": "failure" if render_error else "success",
             "success": render_error is None,
             "error_excerpt": render_error,
+            "scene_cache": {"directory": str(cache_dir), "hits": cache_hits, "total_scenes": len(timeline.scenes)},
             "log_tail": _tail_log_lines(log_file, lines=50),
         }
         report_file.parent.mkdir(parents=True, exist_ok=True)
