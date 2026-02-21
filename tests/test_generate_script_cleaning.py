@@ -30,3 +30,33 @@ Notes to Verify: birthplace details and timeline specifics."""
         "In 1920s Harlem, Stephanie St. Clair rose to prominence.\n"
         "She challenged corrupt systems and built community influence."
     )
+
+
+def test_clean_generated_script_removes_sources_section_with_markdown_emphasis() -> None:
+    raw = """Final Script:
+The Nile shaped economies and political power for centuries.
+
+**Sources Used:**
+- Chronicle A
+- Chronicle B
+"""
+
+    cleaned = _clean_generated_script(raw)
+
+    assert cleaned == "The Nile shaped economies and political power for centuries."
+
+
+def test_clean_generated_script_strips_leading_analysis_before_script_label() -> None:
+    raw = """Analysis: tighten certainty and remove unsupported claims.
+
+Narration: Carthage expanded maritime trade networks across the western Mediterranean.
+It leveraged ports, treaties, and naval logistics to project influence.
+"""
+
+    cleaned = _clean_generated_script(raw)
+
+    assert cleaned == (
+        "Carthage expanded maritime trade networks across the western Mediterranean.\n"
+        "It leveraged ports, treaties, and naval logistics to project influence."
+    )
+
