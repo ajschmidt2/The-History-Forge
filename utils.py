@@ -3,9 +3,11 @@ import re
 import json
 import time
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Optional, Tuple
 from io import BytesIO
+from pathlib import Path
 
 import requests
 from PIL import Image
@@ -30,7 +32,7 @@ def _normalize_secret(value: str) -> str:
 def _secret_from_mapping(mapping: Any, path: tuple[str, ...]) -> str:
     current = mapping
     for key in path:
-        if not isinstance(current, dict) or key not in current:
+        if not isinstance(current, Mapping) or key not in current:
             return ""
         current = current[key]
     return _normalize_secret(str(current))
@@ -94,11 +96,18 @@ def get_secret(name: str, default: str = "") -> str:
 # Clients
 # ----------------------------
 def _openai_client():
+    # Load from secrets first, then enforce explicit env presence for downstream consistency.
     key = _get_secret("openai_api_key", "").strip()
-    if not key:
-        return None
+    if key:
+        os.environ.setdefault("OPENAI_API_KEY", key)
+        os.environ.setdefault("openai_api_key", key)
+
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY not found in environment variables")
+
     from openai import OpenAI  # openai>=1.x
-    return OpenAI(api_key=key)
+    return OpenAI(api_key=OPENAI_API_KEY)
 
 
 def _elevenlabs_api_key() -> str:
