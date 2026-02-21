@@ -15,17 +15,75 @@ from image_gen import generate_imagen_images
 # ----------------------------
 # Secrets
 # ----------------------------
+def _normalize_secret(value: str) -> str:
+    cleaned = str(value or "").strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"\"", "'"}:
+        cleaned = cleaned[1:-1].strip()
+    lowered = cleaned.lower()
+    if lowered in {"paste_key_here", "your_api_key_here", "replace_me", "none", "null"}:
+        return ""
+    return cleaned
+
+
+
+
+def _secret_from_mapping(mapping: Any, path: tuple[str, ...]) -> str:
+    current = mapping
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return ""
+        current = current[key]
+    return _normalize_secret(str(current))
+
 def _get_secret(name: str, default: str = "") -> str:
+    candidates = [
+        name,
+        name.lower(),
+        name.upper(),
+        "OPENAI_API_KEY" if "openai" in name.lower() else "",
+        "openai_api_key" if "openai" in name.lower() else "",
+        "OPENAI_KEY" if "openai" in name.lower() else "",
+        "openai_key" if "openai" in name.lower() else "",
+        "api_key" if "openai" in name.lower() else "",
+    ]
+    candidates = [c for c in candidates if c]
+
     try:
         import streamlit as st  # type: ignore
+
         if hasattr(st, "secrets"):
-            candidates = {name, name.lower(), name.upper()}
             for key in candidates:
                 if key in st.secrets:
-                    return str(st.secrets[key])
+                    value = _normalize_secret(str(st.secrets[key]))
+                    if value:
+                        if key.upper().startswith("OPENAI") or "openai" in key.lower() or key.lower() == "api_key":
+                            os.environ.setdefault("OPENAI_API_KEY", value)
+                            os.environ.setdefault("openai_api_key", value)
+                        return value
+
+            if "openai" in name.lower():
+                nested_paths = [
+                    ("openai", "api_key"),
+                    ("openai", "OPENAI_API_KEY"),
+                    ("OPENAI", "api_key"),
+                    ("OPENAI", "API_KEY"),
+                    ("providers", "openai", "api_key"),
+                ]
+                for path in nested_paths:
+                    value = _secret_from_mapping(st.secrets, path)
+                    if value:
+                        os.environ.setdefault("OPENAI_API_KEY", value)
+                        os.environ.setdefault("openai_api_key", value)
+                        return value
     except Exception:
         pass
-    return os.getenv(name, os.getenv(name.upper(), default))
+
+    for key in candidates:
+        value = _normalize_secret(os.getenv(key, ""))
+        if value:
+            return value
+
+    return _normalize_secret(default)
 
 
 def get_secret(name: str, default: str = "") -> str:
