@@ -4,14 +4,24 @@ import os
 import re
 from typing import List
 
+from utils import get_secret
+
 
 def _openai_client():
-    key = os.getenv("openai_api_key", os.getenv("OPENAI_API_KEY", "")).strip()
+    key = get_secret("openai_api_key", "").strip()
     if not key:
-        return None
+        key = os.getenv("OPENAI_API_KEY", os.getenv("openai_api_key", "")).strip()
+    if key:
+        os.environ.setdefault("OPENAI_API_KEY", key)
+        os.environ.setdefault("openai_api_key", key)
+
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY not found in environment variables")
+
     from openai import OpenAI
 
-    return OpenAI(api_key=key)
+    return OpenAI(api_key=OPENAI_API_KEY)
 
 
 def _fallback_tighten(script: str) -> str:
@@ -53,7 +63,8 @@ def refine_for_clarity(script: str) -> str:
             ],
         )
         return resp.choices[0].message.content.strip()
-    except Exception:
+    except Exception as exc:
+        print("OpenAI request failed:", str(exc))
         return _fallback_tighten(base)
 
 
@@ -82,7 +93,8 @@ def refine_for_retention(script: str) -> str:
             ],
         )
         return resp.choices[0].message.content.strip()
-    except Exception:
+    except Exception as exc:
+        print("OpenAI request failed:", str(exc))
         return _fallback_tighten(base)
 
 
@@ -122,7 +134,8 @@ def flag_uncertain_claims(script: str, research_brief: str) -> str:
                 ],
             )
             return resp.choices[0].message.content.strip()
-        except Exception:
+        except Exception as exc:
+            print("OpenAI request failed:", str(exc))
             pass
 
     notes = _heuristic_uncertain_notes(base)
