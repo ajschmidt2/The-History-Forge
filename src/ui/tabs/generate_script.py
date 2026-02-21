@@ -397,7 +397,6 @@ def tab_generate_script() -> None:
             if st.button("Save edited script", width="stretch"):
                 cleaned_script = _clean_generated_script(st.session_state.generated_script_text_input)
                 st.session_state.script_text = cleaned_script
-                st.session_state.generated_script_text_input = cleaned_script
                 st.session_state.pending_script_text_input = cleaned_script
                 clear_downstream("script")
                 st.toast("Script updated.")
