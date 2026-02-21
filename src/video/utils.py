@@ -21,8 +21,29 @@ def ensure_ffmpeg_exists() -> None:
         ) from exc
 
 
-def run_cmd(cmd: list[str], log_path: str | Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def run_cmd(
+    cmd: list[str],
+    log_path: str | Path | None = None,
+    check: bool = True,
+    timeout_sec: float | None = None,
+) -> subprocess.CompletedProcess:
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+    except subprocess.TimeoutExpired as exc:
+        timed_out = RuntimeError(
+            f"Command timed out after {timeout_sec}s: {' '.join(cmd)}"
+        )
+        if log_path:
+            log_file = Path(log_path)
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            with log_file.open("a", encoding="utf-8") as handle:
+                handle.write("$ " + " ".join(cmd) + "\n")
+                if exc.stdout:
+                    handle.write(str(exc.stdout) + "\n")
+                if exc.stderr:
+                    handle.write(str(exc.stderr) + "\n")
+                handle.write(str(timed_out) + "\n")
+        raise timed_out from exc
     if log_path:
         log_file = Path(log_path)
         log_file.parent.mkdir(parents=True, exist_ok=True)
