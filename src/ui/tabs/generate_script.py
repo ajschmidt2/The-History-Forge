@@ -342,7 +342,6 @@ def tab_generate_script() -> None:
                 st.error(openai_error_message(exc))
                 return
         st.session_state.script_text = generated_script
-        st.session_state.script_text_input = generated_script
         st.session_state.generated_script_text_input = generated_script
         st.session_state.pending_script_text_input = generated_script
         st.session_state.project_title = st.session_state.topic or st.session_state.project_title
@@ -370,7 +369,6 @@ def tab_generate_script() -> None:
                 st.error(openai_error_message(exc))
                 return
         st.session_state.script_text = generated_script
-        st.session_state.script_text_input = generated_script
         st.session_state.generated_script_text_input = generated_script
         st.session_state.pending_script_text_input = generated_script
         st.session_state.project_title = st.session_state.topic or st.session_state.project_title
@@ -393,7 +391,6 @@ def tab_generate_script() -> None:
             if st.button("Save edited script", width="stretch"):
                 cleaned_script = _clean_generated_script(st.session_state.generated_script_text_input)
                 st.session_state.script_text = cleaned_script
-                st.session_state.script_text_input = cleaned_script
                 st.session_state.generated_script_text_input = cleaned_script
                 st.session_state.pending_script_text_input = cleaned_script
                 clear_downstream("script")
