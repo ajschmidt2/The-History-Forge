@@ -256,10 +256,25 @@ def tab_create_scenes() -> None:
         min(int(st.session_state.storyboard_selected_pos), len(scenes) - 1),
     )
 
-    with st.expander("Transitions between scenes", expanded=False):
-        transitions = _normalize_scene_transitions(len(scenes))
-        if not transitions:
-            st.caption("At least 2 scenes are required for transitions.")
+    st.markdown("### Transitions between scenes")
+    transitions = _normalize_scene_transitions(len(scenes))
+    if not transitions:
+        st.caption("At least 2 scenes are required for transitions.")
+    else:
+        preset_cols = st.columns([2, 1])
+        with preset_cols[0]:
+            transition_preset = st.selectbox(
+                "Apply one transition style to all boundaries",
+                _TRANSITION_OPTIONS,
+                index=0,
+                key="scene_transition_preset",
+            )
+        with preset_cols[1]:
+            if st.button("Apply to all", width="stretch", key="scene_transition_apply_all"):
+                transitions = [transition_preset] * len(transitions)
+                st.session_state.scene_transition_types = transitions
+                st.rerun()
+
         for i in range(len(transitions)):
             left_title = scenes[i].title or f"Scene {i+1}"
             right_title = scenes[i + 1].title or f"Scene {i+2}"
