@@ -4,9 +4,13 @@ import os
 import re
 from typing import List
 
+from utils import get_secret
+
 
 def _openai_client():
-    key = os.getenv("openai_api_key", os.getenv("OPENAI_API_KEY", "")).strip()
+    key = get_secret("openai_api_key", "").strip()
+    if not key:
+        key = os.getenv("OPENAI_API_KEY", os.getenv("openai_api_key", "")).strip()
     if not key:
         return None
     from openai import OpenAI
