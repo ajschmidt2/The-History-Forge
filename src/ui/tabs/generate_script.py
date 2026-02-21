@@ -53,7 +53,7 @@ def _clean_generated_script(script: str) -> str:
         text = revised_block.group(1).strip()
 
     # Drop any leading analysis text before clear script labels.
-    leading_labels = re.search(r"(?im)^\s*(?:script|narration)\s*:\s*", text)
+    leading_labels = re.search(r"(?im)^\s*(?:script|narration|voiceover\s+script)\s*:\s*", text)
     if leading_labels:
         text = text[leading_labels.start():].strip()
 
@@ -61,7 +61,8 @@ def _clean_generated_script(script: str) -> str:
     trailing_section_pattern = (
         r"(?im)^\s*(?:#{1,6}\s*|\*{0,2})"
         r"(?:notes?\s+to\s+verify|verification(?:\s+notes?)?|fact-?check(?:ing)?(?:\s+notes?)?|"
-        r"sources?(?:\s+used)?|citations?|references?|editor(?:'s)?\s+notes?)"
+        r"sources?(?:\s+used)?|citations?|references?|editor(?:'s)?\s+notes?|"
+        r"production\s+notes?|visual\s+notes?)"
         r"(?:\*{0,2})\s*:?\s*$"
     )
     split_lines = re.split(trailing_section_pattern, text, maxsplit=1)
@@ -76,7 +77,38 @@ def _clean_generated_script(script: str) -> str:
         maxsplit=1,
     )[0].strip()
 
-    text = re.sub(r"(?im)^\s*(script|narration)\s*:\s*", "", text).strip()
+    raw_lines = [line.rstrip() for line in text.splitlines()]
+    cleaned_lines: list[str] = []
+    for raw_line in raw_lines:
+        line = raw_line.strip()
+        if not line:
+            if cleaned_lines and cleaned_lines[-1] != "":
+                cleaned_lines.append("")
+            continue
+
+        line = re.sub(r"^\s*(?:[-*]|\d+[.)])\s+", "", line)
+        line = re.sub(r"(?im)^\s*(?:script|narration|voiceover\s+script)\s*:\s*", "", line)
+        line = re.sub(r"(?im)^\s*(?:narrator|voiceover|host)\s*:\s*", "", line)
+
+        if re.match(r"(?i)^\s*(?:here(?:'|’)s|below\s+is|let\s+me\s+know|i\s+can\s+also)\b", line):
+            continue
+        if re.match(r"(?i)^\s*(?:scene|shot)\s*\d+\s*[:\-]", line):
+            continue
+        if re.match(r"(?i)^\s*(?:visual|b-?roll|on-?screen(?:\s+text)?|sfx|music|camera|transition|cta)\s*:", line):
+            continue
+        if re.match(r"(?i)^\s*(?:estimated\s+runtime|word\s+count|title\s+ideas?)\s*:", line):
+            continue
+        if re.match(r"^\s*\[[^\]]+\]\s*$", line):
+            continue
+
+        cleaned_lines.append(line)
+
+    candidate = "\n".join(cleaned_lines)
+    candidate = re.sub(r"\n{3,}", "\n\n", candidate).strip()
+    if candidate:
+        return candidate
+
+    # Fallback if filtering was too aggressive.
     text = re.sub(r"(?m)^\s*[-*]\s+", "", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
