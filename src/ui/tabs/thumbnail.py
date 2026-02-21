@@ -1,3 +1,4 @@
+import traceback
 from pathlib import Path
 
 import streamlit as st
@@ -31,7 +32,9 @@ def tab_thumbnail_title() -> None:
                 exc,
                 (AuthenticationError, RateLimitError, APIConnectionError, APIError),
             ):
-                st.error(openai_error_message(exc))
+                tb = traceback.format_exc()
+                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                raise
             else:
                 message = str(exc)
                 if "invalid_api_key" in message or "Incorrect API key" in message:
@@ -77,7 +80,9 @@ def tab_thumbnail_title() -> None:
                 exc,
                 (AuthenticationError, RateLimitError, APIConnectionError, APIError),
             ):
-                st.error(openai_error_message(exc))
+                tb = traceback.format_exc()
+                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                raise
             else:
                 st.error(f"Description generation failed: {exc}")
         else:
@@ -118,7 +123,9 @@ def tab_thumbnail_title() -> None:
                 exc,
                 (AuthenticationError, RateLimitError, APIConnectionError, APIError),
             ):
-                st.error(openai_error_message(exc))
+                tb = traceback.format_exc()
+                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                raise
             else:
                 message = str(exc)
                 if "invalid_api_key" in message or "Incorrect API key" in message:

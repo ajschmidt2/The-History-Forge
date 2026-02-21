@@ -476,12 +476,17 @@ def tab_video_compile() -> None:
         key="video_voiceover_upload",
     )
     if voiceover_upload is not None:
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        destination = audio_dir / voiceover_upload.name
-        destination.write_bytes(voiceover_upload.getbuffer())
-        record_asset(project_name, "voiceover", destination)
-        st.success(f"Saved {voiceover_upload.name} to assets/audio.")
-        st.rerun()
+        voiceover_signature = (voiceover_upload.name, int(voiceover_upload.size or 0))
+        if st.session_state.get("video_voiceover_upload_signature") != voiceover_signature:
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            destination = audio_dir / voiceover_upload.name
+            destination.write_bytes(voiceover_upload.getbuffer())
+            record_asset(project_name, "voiceover", destination)
+            st.session_state.video_voiceover_upload_signature = voiceover_signature
+            st.success(f"Saved {voiceover_upload.name} to assets/audio.")
+            st.rerun()
+    else:
+        st.session_state.pop("video_voiceover_upload_signature", None)
 
     st.markdown("### Background music")
     if music_files:
@@ -501,12 +506,17 @@ def tab_video_compile() -> None:
             key="video_music_upload",
         )
         if uploaded_music is not None:
-            music_dir.mkdir(parents=True, exist_ok=True)
-            destination = music_dir / uploaded_music.name
-            destination.write_bytes(uploaded_music.getbuffer())
-            record_asset(project_name, "music", destination)
-            st.success(f"Saved {uploaded_music.name} to assets/music.")
-            st.rerun()
+            music_signature = (uploaded_music.name, int(uploaded_music.size or 0))
+            if st.session_state.get("video_music_upload_signature") != music_signature:
+                music_dir.mkdir(parents=True, exist_ok=True)
+                destination = music_dir / uploaded_music.name
+                destination.write_bytes(uploaded_music.getbuffer())
+                record_asset(project_name, "music", destination)
+                st.session_state.video_music_upload_signature = music_signature
+                st.success(f"Saved {uploaded_music.name} to assets/music.")
+                st.rerun()
+        else:
+            st.session_state.pop("video_music_upload_signature", None)
     with upload_cols[1]:
         music_url = st.text_input("Music URL", placeholder="https://example.com/track.mp3", key="video_music_url")
         if st.button("Add from URL", width="stretch", key="video_music_url_add"):
@@ -722,6 +732,16 @@ def tab_video_compile() -> None:
         key="video_narration_max_sec",
     )
 
+    render_timeout_sec = st.number_input(
+        "FFmpeg command timeout (seconds)",
+        min_value=60,
+        max_value=7200,
+        value=int(meta_defaults.get("render_timeout_sec", 1200)),
+        step=30,
+        key="video_render_timeout_sec",
+        help="Stops any single FFmpeg command that hangs too long; cached scene clips make retries faster.",
+    )
+
     timeline_meta_overrides = {
         "title": title,
         "aspect_ratio": aspect_ratio,
@@ -739,6 +759,7 @@ def tab_video_compile() -> None:
         "narration_wpm": narration_wpm,
         "narration_min_sec": narration_min_sec,
         "narration_max_sec": narration_max_sec,
+        "render_timeout_sec": int(render_timeout_sec),
     }
 
     if media_files:
@@ -864,12 +885,17 @@ def tab_video_compile() -> None:
                         renders_dir / "final.mp4",
                         log_path=log_path,
                         report_path=report_path,
+                        command_timeout_sec=float(render_timeout_sec),
                     )
                 except (RuntimeError, FileNotFoundError, ValueError) as exc:
                     st.error(
                         "Render failed. Verify media paths/codecs and inspect the FFmpeg diagnostics below for the"
                         f" exact command error.\n\nDetails: {exc}"
                     )
+                    if "timed out" in str(exc).lower():
+                        st.warning(
+                            "A render command hit the timeout. Increase 'FFmpeg command timeout', or retry now that scene clips are cached."
+                        )
                     failure_log = _tail_file(log_path, lines=50)
                     if failure_log:
                         st.markdown("#### Last 50 log lines")
