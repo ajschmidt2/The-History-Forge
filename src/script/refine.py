@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 from typing import List
 
@@ -13,6 +12,8 @@ def _openai_client():
         key = os.getenv("OPENAI_API_KEY", os.getenv("openai_api_key", "")).strip()
     if not key:
         return None
+    os.environ.setdefault("OPENAI_API_KEY", key)
+    os.environ.setdefault("openai_api_key", key)
     from openai import OpenAI
 
     return OpenAI(api_key=key)
