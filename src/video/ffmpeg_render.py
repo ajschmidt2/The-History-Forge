@@ -249,8 +249,8 @@ def _crossfade_scenes(
 
 def _subtitle_filter(subtitle_path: Path) -> str:
     path_str = subtitle_path.as_posix()
-    escaped = path_str.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    return f"subtitles=filename='{escaped}':charenc=UTF-8"
+    escaped = path_str.replace("\\", "\\\\").replace(":", "\\:")
+    return f"subtitles={escaped}:charenc=UTF-8"
 
 
 def _ffmpeg_version() -> str:
@@ -401,17 +401,45 @@ def render_video_from_timeline(
 
             include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
             if include_audio:
-                audio_plan = build_audio_mix_cmd(timeline.meta, timeline.total_duration, start_index=1)
-                cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
-                cmd.extend(audio_plan.input_args)
-                if timeline.meta.burn_captions:
-                    cmd.extend(["-vf", _subtitle_filter(ass_path)])
-                cmd.extend(["-filter_complex", audio_plan.filter_complex])
-                cmd.extend(["-map", "0:v:0"])
-                cmd.extend(audio_plan.map_args)
-                cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(tmp_output_path)])
+                def _build_mux_cmd(force_simple_vo: bool = False) -> list[str]:
+                    audio_plan = build_audio_mix_cmd(
+                        timeline.meta,
+                        timeline.total_duration,
+                        start_index=1,
+                        force_simple_vo=force_simple_vo,
+                    )
+                    cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
+                    cmd.extend(audio_plan.input_args)
+                    if timeline.meta.burn_captions:
+                        cmd.extend(["-vf", _subtitle_filter(ass_path)])
+                    cmd.extend(["-filter_complex", audio_plan.filter_complex])
+                    cmd.extend(["-map", "0:v:0"])
+                    cmd.extend(audio_plan.map_args)
+                    cmd.extend(
+                        [
+                            "-c:v",
+                            "libx264",
+                            "-preset",
+                            "veryfast",
+                            "-crf",
+                            "24",
+                            "-c:a",
+                            "aac",
+                            "-shortest",
+                            "-movflags",
+                            "+faststart",
+                            str(tmp_output_path),
+                        ]
+                    )
+                    return cmd
+
+                cmd = _build_mux_cmd(force_simple_vo=False)
                 ffmpeg_commands.append(cmd)
-                run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec)
+                result = run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec, check=False)
+                if not result["ok"]:
+                    retry_cmd = _build_mux_cmd(force_simple_vo=True)
+                    ffmpeg_commands.append(retry_cmd)
+                    run_cmd(retry_cmd, log_path=log_file, timeout_sec=command_timeout_sec)
             else:
                 cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
                 if timeline.meta.burn_captions:
