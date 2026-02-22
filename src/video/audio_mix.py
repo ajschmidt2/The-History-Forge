@@ -17,6 +17,7 @@ def build_audio_mix_cmd(
     total_duration: float,
     start_index: int = 0,
     force_simple_vo: bool = False,
+    simplify_mix: bool = False,
 ) -> AudioMixPlan:
     input_args: list[str] = []
     filters: list[str] = []
@@ -50,7 +51,14 @@ def build_audio_mix_cmd(
         )
         music_label = "[music]"
 
-    if music_label and vo_label and meta.music and meta.music.ducking and meta.music.ducking.enabled:
+    if (
+        not simplify_mix
+        and music_label
+        and vo_label
+        and meta.music
+        and meta.music.ducking
+        and meta.music.ducking.enabled
+    ):
         ducking = meta.music.ducking
         filters.append(
             f"{music_label}{vo_label}sidechaincompress=threshold={ducking.threshold_db}dB:ratio={ducking.ratio}:"
