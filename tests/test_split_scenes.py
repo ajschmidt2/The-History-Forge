@@ -1,4 +1,4 @@
-from utils import split_script_into_scenes
+from utils import split_script_into_scene_strings, split_script_into_scenes
 
 
 def test_split_script_into_scenes_is_beat_aware_with_outline() -> None:
@@ -40,3 +40,17 @@ def test_split_script_into_scenes_without_outline_has_estimates_and_keywords() -
     assert all(scene.script_excerpt for scene in scenes)
     assert all(scene.estimated_duration_sec > 0 for scene in scenes)
     assert all(len([kw for kw in scene.visual_intent.split(",") if kw.strip()]) >= 5 for scene in scenes)
+
+
+def test_split_scene_strings_is_deterministic() -> None:
+    script = """
+    First beat starts the story with context and setup.
+
+    Second beat introduces conflict in the city center.
+
+    Third beat explains consequences and recovery over time.
+    """
+    first = split_script_into_scene_strings(script, 5)
+    second = split_script_into_scene_strings(script, 5)
+    assert first == second
+    assert len(first) == 5
