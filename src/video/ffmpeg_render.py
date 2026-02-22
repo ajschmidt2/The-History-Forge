@@ -12,7 +12,7 @@ from pathlib import Path
 from .audio_mix import build_audio_mix_cmd
 from .captions import write_ass_file, write_srt_file
 from .timeline_schema import Timeline
-from .utils import ensure_ffmpeg_exists, ensure_parent_dir, run_cmd
+from .utils import ensure_ffmpeg_exists, ensure_parent_dir, get_media_duration, run_cmd
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
@@ -409,6 +409,11 @@ def render_video_from_timeline(
             ):
                 raise FileNotFoundError(f"Music file not found: {timeline.meta.music.path}")
 
+            voiceover_duration: float | None = None
+            if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
+                voiceover_duration = get_media_duration(timeline.meta.voiceover.path)
+            audio_target_duration = voiceover_duration if voiceover_duration is not None else timeline.total_duration
+
             include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
             if include_audio:
                 mixed_audio_path = tmp_path / "mixed.m4a"
@@ -416,7 +421,7 @@ def render_video_from_timeline(
                 def _build_mix_audio_cmd(simplify_mix: bool = False) -> list[str]:
                     audio_plan = build_audio_mix_cmd(
                         timeline.meta,
-                        timeline.total_duration,
+                        audio_target_duration,
                         start_index=0,
                         force_simple_vo=simplify_mix,
                         simplify_mix=simplify_mix,
@@ -438,8 +443,15 @@ def render_video_from_timeline(
                     run_cmd(retry_mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec)
 
                 mux_cmd = ["ffmpeg", "-y", "-i", str(stitched_path), "-i", str(mixed_audio_path)]
+                stitched_duration = get_media_duration(stitched_path)
+                vf_filters: list[str] = []
+                if voiceover_duration is not None and voiceover_duration > stitched_duration:
+                    pad_seconds = max(0.0, voiceover_duration - stitched_duration)
+                    vf_filters.append(f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}")
                 if timeline.meta.burn_captions:
-                    mux_cmd.extend(["-vf", _subtitle_filter(ass_path)])
+                    vf_filters.append(_subtitle_filter(ass_path))
+                if vf_filters:
+                    mux_cmd.extend(["-vf", ",".join(vf_filters)])
                 mux_cmd.extend(
                     [
                         "-map",
@@ -454,12 +466,15 @@ def render_video_from_timeline(
                         "24",
                         "-c:a",
                         "aac",
-                        "-shortest",
                         "-movflags",
                         "+faststart",
-                        str(tmp_output_path),
                     ]
                 )
+                if voiceover_duration is not None:
+                    mux_cmd.extend(["-t", f"{voiceover_duration:.3f}"])
+                else:
+                    mux_cmd.extend(["-shortest"])
+                mux_cmd.append(str(tmp_output_path))
                 ffmpeg_commands.append(mux_cmd)
                 run_cmd(mux_cmd, log_path=log_file, timeout_sec=command_timeout_sec)
             else:
@@ -472,6 +487,14 @@ def render_video_from_timeline(
 
         if tmp_output_path.exists():
             tmp_output_path.replace(output_path)
+            if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
+                expected_voiceover_duration = get_media_duration(timeline.meta.voiceover.path)
+                rendered_duration = get_media_duration(output_path)
+                if rendered_duration + 0.05 < expected_voiceover_duration:
+                    raise RuntimeError(
+                        "Rendered video is shorter than the voiceover "
+                        f"({rendered_duration:.3f}s < {expected_voiceover_duration:.3f}s)."
+                    )
         else:
             raise RuntimeError(f"Expected render output was not created: {tmp_output_path}")
     except Exception as exc:
