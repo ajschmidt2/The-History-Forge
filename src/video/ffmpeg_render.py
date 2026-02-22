@@ -249,9 +249,19 @@ def _crossfade_scenes(
 
 def _subtitle_filter(subtitle_path: Path) -> str:
     path_str = subtitle_path.as_posix()
-    escaped = path_str.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    return f"subtitles=filename='{escaped}':charenc=UTF-8"
+    escaped = path_str.replace("\\", "\\\\").replace(":", "\\:")
+    return f"subtitles={escaped}:charenc=UTF-8"
 
+
+
+def _assert_filter_complex_arg(cmd: list[str]) -> None:
+    if "-filter_complex" not in cmd:
+        return
+    idx = cmd.index("-filter_complex")
+    assert idx + 1 < len(cmd), "-filter_complex must be followed by a filtergraph argument"
+    filter_graph = cmd[idx + 1]
+    assert isinstance(filter_graph, str), "filtergraph argument must be a string"
+    assert filter_graph.strip(), "filtergraph argument must not be empty"
 
 def _ffmpeg_version() -> str:
     result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
@@ -401,17 +411,57 @@ def render_video_from_timeline(
 
             include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
             if include_audio:
-                audio_plan = build_audio_mix_cmd(timeline.meta, timeline.total_duration, start_index=1)
-                cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
-                cmd.extend(audio_plan.input_args)
+                mixed_audio_path = tmp_path / "mixed.m4a"
+
+                def _build_mix_audio_cmd(simplify_mix: bool = False) -> list[str]:
+                    audio_plan = build_audio_mix_cmd(
+                        timeline.meta,
+                        timeline.total_duration,
+                        start_index=0,
+                        force_simple_vo=simplify_mix,
+                        simplify_mix=simplify_mix,
+                    )
+                    cmd = ["ffmpeg", "-y"]
+                    cmd.extend(audio_plan.input_args)
+                    cmd.extend(["-filter_complex", audio_plan.filter_complex])
+                    cmd.extend(audio_plan.map_args)
+                    cmd.extend(["-c:a", "aac", "-b:a", "192k", "-shortest", str(mixed_audio_path)])
+                    _assert_filter_complex_arg(cmd)
+                    return cmd
+
+                mix_cmd = _build_mix_audio_cmd(simplify_mix=False)
+                ffmpeg_commands.append(mix_cmd)
+                mix_result = run_cmd(mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec, check=False)
+                if not mix_result["ok"]:
+                    retry_mix_cmd = _build_mix_audio_cmd(simplify_mix=True)
+                    ffmpeg_commands.append(retry_mix_cmd)
+                    run_cmd(retry_mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec)
+
+                mux_cmd = ["ffmpeg", "-y", "-i", str(stitched_path), "-i", str(mixed_audio_path)]
                 if timeline.meta.burn_captions:
-                    cmd.extend(["-vf", _subtitle_filter(ass_path)])
-                cmd.extend(["-filter_complex", audio_plan.filter_complex])
-                cmd.extend(["-map", "0:v:0"])
-                cmd.extend(audio_plan.map_args)
-                cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(tmp_output_path)])
-                ffmpeg_commands.append(cmd)
-                run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec)
+                    mux_cmd.extend(["-vf", _subtitle_filter(ass_path)])
+                mux_cmd.extend(
+                    [
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "1:a:0",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-crf",
+                        "24",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-movflags",
+                        "+faststart",
+                        str(tmp_output_path),
+                    ]
+                )
+                ffmpeg_commands.append(mux_cmd)
+                run_cmd(mux_cmd, log_path=log_file, timeout_sec=command_timeout_sec)
             else:
                 cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
                 if timeline.meta.burn_captions:
