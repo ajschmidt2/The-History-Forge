@@ -1106,6 +1106,11 @@ def generate_image_for_scene(
                 last_error = (
                     "Missing GOOGLE_AI_STUDIO_API_KEY. Add it to Streamlit Secrets or environment variables."
                 )
+            elif "invalid google_ai_studio_api_key" in err_text.lower() or "api key not valid" in err_text.lower():
+                last_error = (
+                    "Invalid GOOGLE_AI_STUDIO_API_KEY. Generate a valid Google AI Studio API key and set it in "
+                    "`.streamlit/secrets.toml` as `GEMINI_API_KEY` (or `GOOGLE_AI_STUDIO_API_KEY`)."
+                )
             elif _is_retryable(e):
                 last_error = (
                     "AI Studio rate limit reached. Retry later or reduce the number of images."
