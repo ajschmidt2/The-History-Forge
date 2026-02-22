@@ -697,6 +697,33 @@ def _normalize_script_text(script: str) -> str:
     return cleaned
 
 
+
+
+def _extract_numbered_scene_lines(script: str) -> list[str]:
+    """Extract scene-like lines formatted as `01: ...`, `01 - ...`, or `1) ...`."""
+    if not script:
+        return []
+
+    lines = [line.strip() for line in script.replace("\r\n", "\n").split("\n") if line.strip()]
+    extracted: list[str] = []
+    for line in lines:
+        match = re.match(r"^\s*(?:scene\s*)?(\d{1,3})\s*(?:[:.)\-–—]|\s+-\s+)\s*(.+)$", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+        content = re.sub(r"\s+", " ", match.group(2)).strip(" -–—:	")
+        if content:
+            extracted.append(content)
+
+    # Keep only meaningful candidates and de-duplicate exact adjacent repeats.
+    cleaned: list[str] = []
+    for candidate in extracted:
+        if len(candidate.split()) < 3:
+            continue
+        if cleaned and cleaned[-1].casefold() == candidate.casefold():
+            continue
+        cleaned.append(candidate)
+    return cleaned
+
 def _split_sentences(text: str) -> list[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
 
@@ -1031,6 +1058,23 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
         return []
 
     target = max(1, min(int(max_scenes or 8), 75))
+    numbered_scene_lines = _extract_numbered_scene_lines(script)
+    if len(numbered_scene_lines) >= 3:
+        selected = numbered_scene_lines[:target]
+        scenes_from_lines: list[Scene] = []
+        for i, txt in enumerate(selected, start=1):
+            excerpt = txt.strip()
+            scenes_from_lines.append(
+                Scene(
+                    index=i,
+                    title=_scene_title_from_text(excerpt, i),
+                    script_excerpt=excerpt,
+                    visual_intent=_extract_visual_keywords(excerpt),
+                    estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
+                )
+            )
+        return scenes_from_lines
+
     beats = _outline_beats(outline)
 
     if beats:

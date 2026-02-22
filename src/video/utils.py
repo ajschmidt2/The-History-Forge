@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ def run_ffmpeg(cmd: list[str], timeout_sec: float | None = None) -> dict[str, An
             check=False,
             capture_output=True,
             text=True,
+            shell=False,
         )
         return {
             "ok": result.returncode == 0,
@@ -61,6 +63,11 @@ def run_cmd(
         log_file.parent.mkdir(parents=True, exist_ok=True)
         with log_file.open("a", encoding="utf-8") as handle:
             handle.write("$ " + " ".join(cmd) + "\n")
+            handle.write("cmd_json=" + json.dumps(cmd, ensure_ascii=False) + "\n")
+            if "-filter_complex" in cmd:
+                filter_idx = cmd.index("-filter_complex") + 1
+                if filter_idx < len(cmd):
+                    handle.write(f"filter_complex_repr={cmd[filter_idx]!r}\n")
             if result["stdout"]:
                 handle.write(result["stdout"] + "\n")
             if result["stderr"]:
