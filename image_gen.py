@@ -237,6 +237,19 @@ def _model_not_found_error(exc: Exception) -> bool:
     )
 
 
+def _is_invalid_api_key_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "api_key_invalid",
+            "api key not valid",
+            "invalid api key",
+            "invalid_argument",
+        )
+    ) and "api key" in msg
+
+
 def _candidate_models(primary_model: str) -> list[str]:
     candidates = [
         primary_model,
@@ -312,6 +325,10 @@ def generate_imagen_images(
             )
         except Exception as exc:  # noqa: BLE001 - bubble non-model errors after fallback attempts
             last_error = exc
+            if _is_invalid_api_key_error(exc):
+                raise RuntimeError(
+                    "invalid google_ai_studio_api_key: API key not valid for generativelanguage.googleapis.com"
+                ) from exc
             if _model_not_found_error(exc):
                 continue
             raise
