@@ -8,7 +8,7 @@ import streamlit as st
 from src.research.web_research import Source, search_topic, summarize_sources
 from src.script.refine import flag_uncertain_claims, refine_for_clarity, refine_for_retention
 from src.ui.state import active_project_id, clear_downstream, openai_error_message, script_ready
-from utils import generate_lucky_topic, generate_outline, generate_research_brief, generate_script, generate_script_from_outline
+from utils import generate_lucky_topic, generate_outline, generate_research_brief, generate_script, generate_script_from_outline, split_script_into_scene_strings
 
 
 
@@ -401,3 +401,22 @@ def tab_generate_script() -> None:
                 clear_downstream("script")
                 st.toast("Script updated.")
                 st.rerun()
+
+        with st.expander("Splitter debug", expanded=False):
+            splitter_debug = st.checkbox(
+                "Show script-to-scenes debug stats",
+                value=False,
+                key="generate_script_splitter_debug",
+            )
+            if splitter_debug:
+                target_scenes = int(st.session_state.get("max_scenes", 8) or 8)
+                scene_texts, debug = split_script_into_scene_strings(
+                    st.session_state.generated_script_text_input,
+                    target_scenes=target_scenes,
+                    return_debug=True,
+                )
+                st.write(f"len(scene_texts): {len(scene_texts)}")
+                st.write(f"word counts per scene: {debug.get('word_counts', [])}")
+                previews = [f"{idx + 1:02d}: {txt[:80]}" for idx, txt in enumerate(scene_texts)]
+                st.code("\n".join(previews) if previews else "(no scenes)")
+

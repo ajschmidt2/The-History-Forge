@@ -27,3 +27,24 @@ def test_many_short_paragraphs_exact_counts() -> None:
     script = "\n\n".join(paragraphs)
     for target in (1, 5, 12):
         _assert_exact(script, target)
+
+
+def test_single_huge_paragraph_nine_scenes() -> None:
+    script = " ".join(["A prolonged campaign changed borders, power, and trade across continents." for _ in range(220)])
+    scenes = split_script_into_scene_strings(script, 9)
+    assert len(scenes) == 9
+    assert all(scene.strip() for scene in scenes)
+
+
+def test_many_short_paragraphs_nine_scenes() -> None:
+    script = "\n\n".join([f"Beat {i} adds one clear development in the historical timeline." for i in range(1, 55)])
+    scenes = split_script_into_scene_strings(script, 9)
+    assert len(scenes) == 9
+    assert all(scene.strip() for scene in scenes)
+
+
+def test_short_script_nine_scenes() -> None:
+    script = "A turning point happened quickly, then everything changed."
+    scenes = split_script_into_scene_strings(script, 9)
+    assert len(scenes) == 9
+    assert all(scene.strip() for scene in scenes)

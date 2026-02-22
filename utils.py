@@ -691,12 +691,25 @@ def generate_thumbnail_image(prompt: str, aspect_ratio: str = "16:9") -> Tuple[O
 def _normalize_script_text(script: str) -> str:
     cleaned = (script or "").replace("\r\n", "\n").replace("\r", "\n")
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
-    cleaned = re.sub(r"\n\s*\n+", "\n\n", cleaned)
-    return cleaned.strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = cleaned.strip()
+    cleaned = re.split(r"(?im)^\s*##\s*notes\s+to\s+verify\b", cleaned, maxsplit=1)[0].strip()
+    return cleaned
 
 
 def _split_sentences(text: str) -> list[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
+
+
+def _count_words(text: str) -> int:
+    return len(re.findall(r"\b\w+\b", text or ""))
+
+
+def _scene_title_from_text(scene_text: str, index: int) -> str:
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", scene_text or "")
+    take = words[:6] if len(words) >= 6 else words[:3]
+    snippet = " ".join(take).strip() or "Scene"
+    return f"{index:02d} — {snippet}"
 
 
 def _make_atomic_beats(script: str, paragraph_word_threshold: int = 120) -> list[str]:
@@ -734,12 +747,12 @@ def _pack_beats_into_scene_strings(beats: list[str], target_scenes: int) -> list
     if target_scenes <= 0:
         return []
     if not beats:
-        return [""] * target_scenes
+        return ["Scene content unavailable"] * target_scenes
 
-    words_per_beat = [len(b.split()) for b in beats]
+    words_per_beat = [_count_words(b) for b in beats]
     total_words = sum(words_per_beat)
     target_words = max(1.0, total_words / float(target_scenes))
-    min_words = max(60, int(target_words * 0.55))
+    min_words = max(40, int(target_words * 0.55))
     max_words = max(min_words + 1, int(target_words * 1.65))
 
     scenes: list[list[str]] = []
@@ -819,8 +832,8 @@ def split_script_into_scene_strings(
     target_scenes = max(1, int(target_scenes or 1))
     normalized = _normalize_script_text(script)
     if not normalized:
-        out = [""] * target_scenes
-        debug = {"word_counts": [0] * target_scenes, "merges": 0, "splits": 0}
+        out = ["Scene content unavailable"] * target_scenes
+        debug = {"word_counts": [_count_words(v) for v in out], "merges": 0, "splits": 0}
         return (out, debug) if return_debug else out
 
     beats = _make_atomic_beats(normalized)
@@ -830,13 +843,23 @@ def split_script_into_scene_strings(
     splits = 0
 
     while len(scenes) > target_scenes:
-        smallest_idx = min(range(len(scenes) - 1), key=lambda i: len((scenes[i] + " " + scenes[i + 1]).split()))
-        scenes[smallest_idx] = "\n\n".join([scenes[smallest_idx], scenes[smallest_idx + 1]]).strip()
-        del scenes[smallest_idx + 1]
+        smallest_idx = min(range(len(scenes)), key=lambda i: _count_words(scenes[i]))
+        if smallest_idx == 0:
+            neighbor_idx = 1
+        elif smallest_idx == len(scenes) - 1:
+            neighbor_idx = len(scenes) - 2
+        else:
+            left_words = _count_words(scenes[smallest_idx - 1])
+            right_words = _count_words(scenes[smallest_idx + 1])
+            neighbor_idx = smallest_idx - 1 if left_words <= right_words else smallest_idx + 1
+
+        left_i, right_i = sorted([smallest_idx, neighbor_idx])
+        scenes[left_i] = "\n\n".join([scenes[left_i], scenes[right_i]]).strip()
+        del scenes[right_i]
         merges += 1
 
     while len(scenes) < target_scenes:
-        largest_idx = max(range(len(scenes)), key=lambda i: len(scenes[i].split()))
+        largest_idx = max(range(len(scenes)), key=lambda i: _count_words(scenes[i]))
         left, right = _split_scene_text_midpoint(scenes[largest_idx])
         if not right.strip():
             scenes.insert(largest_idx + 1, "")
@@ -848,24 +871,18 @@ def split_script_into_scene_strings(
     for idx, scene in enumerate(scenes):
         if scene.strip():
             continue
-        donor_idx = None
-        donor_words = 0
-        for j, candidate in enumerate(scenes):
-            words = candidate.split()
-            if j == idx or len(words) <= 1:
-                continue
-            if len(words) > donor_words:
-                donor_words = len(words)
-                donor_idx = j
-        if donor_idx is not None:
-            donor_words_list = scenes[donor_idx].split()
-            half = max(1, len(donor_words_list) // 2)
-            scenes[idx] = " ".join(donor_words_list[half:]).strip()
-            scenes[donor_idx] = " ".join(donor_words_list[:half]).strip()
-        if not scenes[idx].strip():
-            scenes[idx] = normalized
+        donor_idx = idx - 1 if idx > 0 else (idx + 1 if idx + 1 < len(scenes) else None)
+        moved = False
+        if donor_idx is not None and scenes[donor_idx].strip():
+            donor_sentences = _split_sentences(scenes[donor_idx])
+            if len(donor_sentences) >= 2:
+                scenes[idx] = donor_sentences[-1].strip()
+                scenes[donor_idx] = " ".join(donor_sentences[:-1]).strip()
+                moved = True
+        if not moved:
+            scenes[idx] = normalized[:120].strip() or "Scene content unavailable"
 
-    word_counts = [len(scene.split()) for scene in scenes]
+    word_counts = [_count_words(scene) for scene in scenes]
     debug = {"word_counts": word_counts, "merges": merges, "splits": splits}
     return (scenes, debug) if return_debug else scenes
 
@@ -915,7 +932,7 @@ def _fallback_chunk_scenes(script: str, target_n: int) -> List[Scene]:
         scenes.append(
             Scene(
                 index=i,
-                title=f"Scene {i}",
+                title=_scene_title_from_text(excerpt, i),
                 script_excerpt=txt2,
                 visual_intent=(
                     "Create a strong historical visual that matches this excerpt. "
@@ -1030,10 +1047,11 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
             excerpt = excerpt or script[:280].strip()
             beat_text = " ".join(beat.get("bullets", []))
             keyword_source = f"{beat.get('title', '')} {beat_text} {excerpt}"
+            scene_title = str(beat.get("title", "") or "").strip() or _scene_title_from_text(excerpt, i + 1)
             scenes.append(
                 Scene(
                     index=i + 1,
-                    title=str(beat.get("title", "") or f"Scene {i+1}"),
+                    title=scene_title,
                     script_excerpt=excerpt,
                     visual_intent=_extract_visual_keywords(keyword_source),
                     estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
@@ -1048,7 +1066,7 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
         scenes.append(
             Scene(
                 index=i,
-                title=f"Scene {i}",
+                title=_scene_title_from_text(excerpt, i),
                 script_excerpt=excerpt,
                 visual_intent=_extract_visual_keywords(excerpt),
                 estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
