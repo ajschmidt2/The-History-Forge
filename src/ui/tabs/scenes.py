@@ -196,6 +196,13 @@ def _move_scene(scene_position: int, direction: int) -> None:
     st.rerun()
 
 
+def _reset_all_scenes() -> None:
+    st.session_state.scenes = []
+    st.session_state.scene_transition_types = []
+    st.session_state.storyboard_selected_pos = 0
+    st.session_state.estimated_total_runtime_sec = 0.0
+    st.session_state[_timeline_state_key()] = []
+
 def tab_create_scenes() -> None:
     st.subheader("Create scenes")
 
@@ -219,7 +226,18 @@ def tab_create_scenes() -> None:
         help="Used to estimate each scene's duration and total runtime.",
     )
 
-    if st.button("Split script into scenes", type="primary", width="stretch"):
+    create_col, reset_col = st.columns([3, 2])
+    with create_col:
+        create_scenes_clicked = st.button("Split script into scenes", type="primary", width="stretch")
+    with reset_col:
+        reset_scenes_clicked = st.button(
+            "Reset scenes",
+            width="stretch",
+            disabled=not scenes_ready(),
+            help="Clear generated scenes and scene transitions, while keeping your script.",
+        )
+
+    if create_scenes_clicked:
         with st.spinner("Splitting script..."):
             st.session_state.scenes = split_script_into_scenes(
                 st.session_state.script_text,
@@ -233,6 +251,12 @@ def tab_create_scenes() -> None:
         _recompute_estimated_runtime()
         _sync_timeline_from_scenes()
         st.toast(f"Created {len(st.session_state.scenes)} scenes.")
+        st.rerun()
+
+    if reset_scenes_clicked:
+        _reset_all_scenes()
+        clear_downstream("scenes")
+        st.toast("Scenes reset.")
         st.rerun()
 
     if not scenes_ready():

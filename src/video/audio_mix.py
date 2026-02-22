@@ -12,7 +12,13 @@ class AudioMixPlan:
     map_args: list[str]
 
 
-def build_audio_mix_cmd(meta: Meta, total_duration: float, start_index: int = 0) -> AudioMixPlan:
+def build_audio_mix_cmd(
+    meta: Meta,
+    total_duration: float,
+    start_index: int = 0,
+    force_simple_vo: bool = False,
+    simplify_mix: bool = False,
+) -> AudioMixPlan:
     input_args: list[str] = []
     filters: list[str] = []
     next_index = start_index
@@ -22,12 +28,16 @@ def build_audio_mix_cmd(meta: Meta, total_duration: float, start_index: int = 0)
         input_args += ["-i", meta.voiceover.path]
         vo_input = f"[{next_index}:a]"
         next_index += 1
-        if meta.voiceover.loudnorm:
+        vo_base = (
+            f"{vo_input}aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=mono,"
+            "aresample=44100"
+        )
+        if meta.voiceover.loudnorm and not force_simple_vo:
             filters.append(
-                f"{vo_input}loudnorm=I={meta.voiceover.target_i}:TP={meta.voiceover.true_peak}:LRA={meta.voiceover.lra}[vo]"
+                f"{vo_base},loudnorm=I={meta.voiceover.target_i}:TP={meta.voiceover.true_peak}:LRA={meta.voiceover.lra}[vo]"
             )
         else:
-            filters.append(f"{vo_input}anull[vo]")
+            filters.append(f"{vo_base},volume=1.0[vo]")
         vo_label = "[vo]"
 
     music_label: str | None = None
@@ -36,11 +46,19 @@ def build_audio_mix_cmd(meta: Meta, total_duration: float, start_index: int = 0)
         music_input = f"[{next_index}:a]"
         next_index += 1
         filters.append(
-            f"{music_input}atrim=0:{total_duration},asetpts=N/SR/TB,volume={meta.music.volume_db}dB[music]"
+            f"{music_input}aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,"
+            f"aresample=44100,atrim=0:{total_duration},asetpts=N/SR/TB,volume={meta.music.volume_db}dB[music]"
         )
         music_label = "[music]"
 
-    if music_label and vo_label and meta.music and meta.music.ducking and meta.music.ducking.enabled:
+    if (
+        not simplify_mix
+        and music_label
+        and vo_label
+        and meta.music
+        and meta.music.ducking
+        and meta.music.ducking.enabled
+    ):
         ducking = meta.music.ducking
         filters.append(
             f"{music_label}{vo_label}sidechaincompress=threshold={ducking.threshold_db}dB:ratio={ducking.ratio}:"

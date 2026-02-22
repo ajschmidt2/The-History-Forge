@@ -32,7 +32,17 @@ def tab_create_prompts() -> None:
         index=style_options.index(current_style),
     )
 
-    if st.button("Generate prompts for all scenes", type="primary", width="stretch"):
+    generate_col, reset_col = st.columns([3, 2])
+    with generate_col:
+        generate_prompts_clicked = st.button("Generate prompts for all scenes", type="primary", width="stretch")
+    with reset_col:
+        reset_prompts_clicked = st.button(
+            "Reset prompts",
+            width="stretch",
+            help="Clear all generated image prompts so you can regenerate from scratch.",
+        )
+
+    if generate_prompts_clicked:
         from utils import generate_prompts_for_scenes
 
         with st.spinner("Generating prompts..."):
@@ -45,6 +55,14 @@ def tab_create_prompts() -> None:
                 st.session_state[f"prompt_{s.index}"] = s.image_prompt
         clear_downstream("prompts")
         st.toast("Prompts generated.")
+        st.rerun()
+
+    if reset_prompts_clicked:
+        for scene in st.session_state.scenes:
+            scene.image_prompt = ""
+            st.session_state[f"prompt_{scene.index}"] = ""
+        clear_downstream("prompts")
+        st.toast("Prompts reset.")
         st.rerun()
 
     st.divider()
