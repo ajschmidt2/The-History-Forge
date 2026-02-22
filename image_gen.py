@@ -4,29 +4,32 @@ from io import BytesIO
 from typing import Any, List, Optional, Sequence
 
 from google import genai
+import streamlit as st
 
 
 def _get_secret(name: str, default: str = "") -> str:
-    try:
-        import streamlit as st  # type: ignore
-
-        if hasattr(st, "secrets"):
-            candidates = {name, name.lower(), name.upper()}
-            for key in candidates:
-                if key in st.secrets:
-                    return str(st.secrets[key])
-    except Exception:
-        pass
-    return os.getenv(name, os.getenv(name.upper(), default))
+    if hasattr(st, "secrets") and name in st.secrets:
+        return str(st.secrets.get(name, default))
+    return os.getenv(name, default)
 
 
 def _resolve_api_key() -> str:
-    return (
-        _get_secret("GOOGLE_AI_STUDIO_API_KEY", "")
-        or _get_secret("GEMINI_API_KEY", "")
-        or _get_secret("google_ai_studio_api_key", "")
-        or _get_secret("gemini_api_key", "")
-    ).strip()
+    key = (
+        os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_AI_STUDIO_API_KEY")
+        or st.secrets.get("GEMINI_API_KEY")
+        or st.secrets.get("GOOGLE_AI_STUDIO_API_KEY")
+    )
+    return str(key or "").strip()
+
+
+def validate_gemini_api_key() -> str:
+    key = _resolve_api_key()
+    if not key:
+        raise RuntimeError(
+            "Missing Gemini API key. Set GEMINI_API_KEY in .streamlit/secrets.toml"
+        )
+    return key
 
 
 def _resolve_model() -> str:
@@ -237,6 +240,19 @@ def _model_not_found_error(exc: Exception) -> bool:
     )
 
 
+def _is_invalid_api_key_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "api_key_invalid",
+            "api key not valid",
+            "invalid api key",
+            "invalid_argument",
+        )
+    ) and "api key" in msg
+
+
 def _candidate_models(primary_model: str) -> list[str]:
     candidates = [
         primary_model,
@@ -288,9 +304,7 @@ def generate_imagen_images(
     number_of_images: int = 1,
     aspect_ratio: str = "16:9",
 ) -> List[bytes]:
-    api_key = _resolve_api_key()
-    if not api_key:
-        raise RuntimeError("missing google_ai_studio_api_key")
+    api_key = validate_gemini_api_key()
 
     client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
     model = _resolve_model()
@@ -312,6 +326,10 @@ def generate_imagen_images(
             )
         except Exception as exc:  # noqa: BLE001 - bubble non-model errors after fallback attempts
             last_error = exc
+            if _is_invalid_api_key_error(exc):
+                raise RuntimeError(
+                    "invalid google_ai_studio_api_key: API key not valid for generativelanguage.googleapis.com"
+                ) from exc
             if _model_not_found_error(exc):
                 continue
             raise
