@@ -686,6 +686,207 @@ def generate_thumbnail_image(prompt: str, aspect_ratio: str = "16:9") -> Tuple[O
 # ----------------------------
 # Deterministic fallback chunking (ENFORCES N scenes)
 # ----------------------------
+
+
+def _normalize_script_text(script: str) -> str:
+    cleaned = (script or "").replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = cleaned.strip()
+    cleaned = re.split(r"(?im)^\s*##\s*notes\s+to\s+verify\b", cleaned, maxsplit=1)[0].strip()
+    return cleaned
+
+
+def _split_sentences(text: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()]
+
+
+def _count_words(text: str) -> int:
+    return len(re.findall(r"\b\w+\b", text or ""))
+
+
+def _scene_title_from_text(scene_text: str, index: int) -> str:
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", scene_text or "")
+    take = words[:6] if len(words) >= 6 else words[:3]
+    snippet = " ".join(take).strip() or "Scene"
+    return f"{index:02d} — {snippet}"
+
+
+def _make_atomic_beats(script: str, paragraph_word_threshold: int = 120) -> list[str]:
+    normalized = _normalize_script_text(script)
+    if not normalized:
+        return []
+
+    paragraphs = [p.strip() for p in re.split(r"\n\n+", normalized) if p.strip()]
+    beats: list[str] = []
+    for paragraph in paragraphs:
+        if len(paragraph.split()) <= paragraph_word_threshold:
+            beats.append(paragraph)
+            continue
+
+        sentences = _split_sentences(paragraph)
+        if not sentences:
+            beats.append(paragraph)
+            continue
+
+        i = 0
+        while i < len(sentences):
+            chunk = [sentences[i]]
+            i += 1
+            while i < len(sentences) and len(chunk) < 3:
+                if len(" ".join(chunk).split()) >= 90:
+                    break
+                chunk.append(sentences[i])
+                i += 1
+            beats.append(" ".join(chunk).strip())
+
+    return [b for b in beats if b.strip()]
+
+
+def _pack_beats_into_scene_strings(beats: list[str], target_scenes: int) -> list[str]:
+    if target_scenes <= 0:
+        return []
+    if not beats:
+        return ["Scene content unavailable"] * target_scenes
+
+    words_per_beat = [_count_words(b) for b in beats]
+    total_words = sum(words_per_beat)
+    target_words = max(1.0, total_words / float(target_scenes))
+    min_words = max(40, int(target_words * 0.55))
+    max_words = max(min_words + 1, int(target_words * 1.65))
+
+    scenes: list[list[str]] = []
+    current: list[str] = []
+    current_words = 0
+
+    for beat, beat_words in zip(beats, words_per_beat):
+        should_break = (
+            current
+            and current_words >= min_words
+            and (current_words + beat_words) > max_words
+            and len(scenes) < target_scenes - 1
+        )
+        if should_break:
+            scenes.append(current)
+            current = []
+            current_words = 0
+
+        current.append(beat)
+        current_words += beat_words
+
+    if current:
+        scenes.append(current)
+
+    return ["\n\n".join(group).strip() for group in scenes]
+
+
+def _split_scene_text_midpoint(scene_text: str) -> tuple[str, str]:
+    parts = [p.strip() for p in re.split(r"\n\n+", scene_text) if p.strip()]
+    if len(parts) >= 2:
+        total = sum(len(p.split()) for p in parts)
+        running = 0
+        best_idx = 1
+        best_delta = float("inf")
+        for idx in range(1, len(parts)):
+            running += len(parts[idx - 1].split())
+            delta = abs((total / 2.0) - running)
+            if delta < best_delta:
+                best_delta = delta
+                best_idx = idx
+        left = "\n\n".join(parts[:best_idx]).strip()
+        right = "\n\n".join(parts[best_idx:]).strip()
+        if left and right:
+            return left, right
+
+    sentences = _split_sentences(scene_text)
+    if len(sentences) >= 2:
+        total = sum(len(s.split()) for s in sentences)
+        running = 0
+        best_idx = 1
+        best_delta = float("inf")
+        for idx in range(1, len(sentences)):
+            running += len(sentences[idx - 1].split())
+            delta = abs((total / 2.0) - running)
+            if delta < best_delta:
+                best_delta = delta
+                best_idx = idx
+        left = " ".join(sentences[:best_idx]).strip()
+        right = " ".join(sentences[best_idx:]).strip()
+        if left and right:
+            return left, right
+
+    words = scene_text.split()
+    if len(words) <= 1:
+        return scene_text.strip(), ""
+    mid = len(words) // 2
+    left = " ".join(words[:mid]).strip()
+    right = " ".join(words[mid:]).strip()
+    return left, right
+
+
+def split_script_into_scene_strings(
+    script: str,
+    target_scenes: int,
+    return_debug: bool = False,
+) -> list[str] | tuple[list[str], dict[str, Any]]:
+    target_scenes = max(1, int(target_scenes or 1))
+    normalized = _normalize_script_text(script)
+    if not normalized:
+        out = ["Scene content unavailable"] * target_scenes
+        debug = {"word_counts": [_count_words(v) for v in out], "merges": 0, "splits": 0}
+        return (out, debug) if return_debug else out
+
+    beats = _make_atomic_beats(normalized)
+    scenes = _pack_beats_into_scene_strings(beats, target_scenes)
+
+    merges = 0
+    splits = 0
+
+    while len(scenes) > target_scenes:
+        smallest_idx = min(range(len(scenes)), key=lambda i: _count_words(scenes[i]))
+        if smallest_idx == 0:
+            neighbor_idx = 1
+        elif smallest_idx == len(scenes) - 1:
+            neighbor_idx = len(scenes) - 2
+        else:
+            left_words = _count_words(scenes[smallest_idx - 1])
+            right_words = _count_words(scenes[smallest_idx + 1])
+            neighbor_idx = smallest_idx - 1 if left_words <= right_words else smallest_idx + 1
+
+        left_i, right_i = sorted([smallest_idx, neighbor_idx])
+        scenes[left_i] = "\n\n".join([scenes[left_i], scenes[right_i]]).strip()
+        del scenes[right_i]
+        merges += 1
+
+    while len(scenes) < target_scenes:
+        largest_idx = max(range(len(scenes)), key=lambda i: _count_words(scenes[i]))
+        left, right = _split_scene_text_midpoint(scenes[largest_idx])
+        if not right.strip():
+            scenes.insert(largest_idx + 1, "")
+        else:
+            scenes[largest_idx] = left
+            scenes.insert(largest_idx + 1, right)
+        splits += 1
+
+    for idx, scene in enumerate(scenes):
+        if scene.strip():
+            continue
+        donor_idx = idx - 1 if idx > 0 else (idx + 1 if idx + 1 < len(scenes) else None)
+        moved = False
+        if donor_idx is not None and scenes[donor_idx].strip():
+            donor_sentences = _split_sentences(scenes[donor_idx])
+            if len(donor_sentences) >= 2:
+                scenes[idx] = donor_sentences[-1].strip()
+                scenes[donor_idx] = " ".join(donor_sentences[:-1]).strip()
+                moved = True
+        if not moved:
+            scenes[idx] = normalized[:120].strip() or "Scene content unavailable"
+
+    word_counts = [_count_words(scene) for scene in scenes]
+    debug = {"word_counts": word_counts, "merges": merges, "splits": splits}
+    return (scenes, debug) if return_debug else scenes
+
+
 def _split_into_groups(items: List[str], target_n: int) -> List[List[str]]:
     if target_n <= 0:
         return []
@@ -731,7 +932,7 @@ def _fallback_chunk_scenes(script: str, target_n: int) -> List[Scene]:
         scenes.append(
             Scene(
                 index=i,
-                title=f"Scene {i}",
+                title=_scene_title_from_text(excerpt, i),
                 script_excerpt=txt2,
                 visual_intent=(
                     "Create a strong historical visual that matches this excerpt. "
@@ -846,10 +1047,11 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
             excerpt = excerpt or script[:280].strip()
             beat_text = " ".join(beat.get("bullets", []))
             keyword_source = f"{beat.get('title', '')} {beat_text} {excerpt}"
+            scene_title = str(beat.get("title", "") or "").strip() or _scene_title_from_text(excerpt, i + 1)
             scenes.append(
                 Scene(
                     index=i + 1,
-                    title=str(beat.get("title", "") or f"Scene {i+1}"),
+                    title=scene_title,
                     script_excerpt=excerpt,
                     visual_intent=_extract_visual_keywords(keyword_source),
                     estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
@@ -857,14 +1059,14 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
             )
         return scenes
 
-    chunks = _split_by_headings_paragraphs(script, target)
+    chunks = split_script_into_scene_strings(script, target)
     scenes: list[Scene] = []
     for i, txt in enumerate(chunks[:target], start=1):
         excerpt = txt.strip() or script[:280].strip()
         scenes.append(
             Scene(
                 index=i,
-                title=f"Scene {i}",
+                title=_scene_title_from_text(excerpt, i),
                 script_excerpt=excerpt,
                 visual_intent=_extract_visual_keywords(excerpt),
                 estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
@@ -1102,9 +1304,14 @@ def generate_image_for_scene(
             break
         except Exception as e:
             err_text = str(e)
-            if "missing google_ai_studio_api_key" in err_text.lower():
+            if "missing gemini api key" in err_text.lower():
                 last_error = (
-                    "Missing GOOGLE_AI_STUDIO_API_KEY. Add it to Streamlit Secrets or environment variables."
+                    "Missing Gemini API key. Set GEMINI_API_KEY in .streamlit/secrets.toml"
+                )
+            elif "invalid google_ai_studio_api_key" in err_text.lower() or "api key not valid" in err_text.lower():
+                last_error = (
+                    "Invalid GOOGLE_AI_STUDIO_API_KEY. Generate a valid Google AI Studio API key and set it in "
+                    "`.streamlit/secrets.toml` as `GEMINI_API_KEY` (or `GOOGLE_AI_STUDIO_API_KEY`)."
                 )
             elif _is_retryable(e):
                 last_error = (

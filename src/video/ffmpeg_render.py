@@ -31,6 +31,17 @@ def _parse_resolution(resolution: str) -> tuple[int, int]:
     return int(width), int(height)
 
 
+
+
+def _apply_max_width(width: int, height: int, max_width: int) -> tuple[int, int]:
+    if width <= max_width:
+        return width, height
+    scale = max_width / float(width)
+    scaled_height = int(height * scale)
+    if scaled_height % 2:
+        scaled_height += 1
+    return max_width, max(2, scaled_height)
+
 def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     motion = scene.motion
     if motion is None:
@@ -93,6 +104,10 @@ def _render_scene(
             "-an",
             "-c:v",
             "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "24",
             "-pix_fmt",
             "yuv420p",
             str(output_path),
@@ -114,6 +129,10 @@ def _render_scene(
             str(fps),
             "-c:v",
             "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "24",
             "-pix_fmt",
             "yuv420p",
             str(output_path),
@@ -161,6 +180,10 @@ def _concat_scenes(
             str(concat_list),
             "-c:v",
             "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "24",
             "-pix_fmt",
             "yuv420p",
             str(stitched_path),
@@ -212,6 +235,10 @@ def _crossfade_scenes(
         str(fps),
         "-c:v",
         "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "24",
         "-pix_fmt",
         "yuv420p",
         str(stitched_path),
@@ -288,6 +315,7 @@ def render_video_from_timeline(
     log_path: str | Path | None = None,
     report_path: str | Path | None = None,
     command_timeout_sec: float | None = None,
+    max_width: int = 1280,
 ) -> Path:
     ensure_ffmpeg_exists()
 
@@ -306,6 +334,9 @@ def render_video_from_timeline(
     ffmpeg_commands: list[list[str]] = []
     render_error: str | None = None
     cache_hits = 0
+    tmp_output_path = output_path.with_name(f"{output_path.stem}_tmp{output_path.suffix}")
+    if tmp_output_path.exists():
+        tmp_output_path.unlink()
 
     try:
         with tempfile.TemporaryDirectory(prefix="history_forge_video_") as tmp_dir:
@@ -314,6 +345,7 @@ def render_video_from_timeline(
             scenes_dir.mkdir(parents=True, exist_ok=True)
 
             width, height = _parse_resolution(timeline.meta.resolution)
+            width, height = _apply_max_width(width, height, max_width=max_width)
             fps = timeline.meta.fps
 
             scene_paths: list[Path] = []
@@ -377,16 +409,21 @@ def render_video_from_timeline(
                 cmd.extend(["-filter_complex", audio_plan.filter_complex])
                 cmd.extend(["-map", "0:v:0"])
                 cmd.extend(audio_plan.map_args)
-                cmd.extend(["-c:v", "libx264", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(output_path)])
+                cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(tmp_output_path)])
                 ffmpeg_commands.append(cmd)
                 run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec)
             else:
                 cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
                 if timeline.meta.burn_captions:
                     cmd.extend(["-vf", _subtitle_filter(ass_path)])
-                cmd.extend(["-c:v", "libx264", "-movflags", "+faststart", str(output_path)])
+                cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-movflags", "+faststart", str(tmp_output_path)])
                 ffmpeg_commands.append(cmd)
                 run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec)
+
+        if tmp_output_path.exists():
+            tmp_output_path.replace(output_path)
+        else:
+            raise RuntimeError(f"Expected render output was not created: {tmp_output_path}")
     except Exception as exc:
         render_error = str(exc)
         raise
@@ -401,6 +438,7 @@ def render_video_from_timeline(
             "success": render_error is None,
             "error_excerpt": render_error,
             "scene_cache": {"directory": str(cache_dir), "hits": cache_hits, "total_scenes": len(timeline.scenes)},
+            "tmp_output_path": str(tmp_output_path),
             "log_tail": _tail_log_lines(log_file, lines=50),
         }
         report_file.parent.mkdir(parents=True, exist_ok=True)
