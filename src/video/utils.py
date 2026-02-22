@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any
 
 
 class FFmpegNotFoundError(RuntimeError):
@@ -21,40 +22,55 @@ def ensure_ffmpeg_exists() -> None:
         ) from exc
 
 
+def run_ffmpeg(cmd: list[str], timeout_sec: float | None = None) -> dict[str, Any]:
+    """Run ffmpeg/ffprobe command safely without bubbling process exceptions."""
+    try:
+        result = subprocess.run(
+            cmd,
+            timeout=timeout_sec,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return {
+            "ok": result.returncode == 0,
+            "returncode": result.returncode,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "timed_out": False,
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "returncode": None,
+            "stdout": str(exc.stdout or ""),
+            "stderr": str(exc.stderr or ""),
+            "timed_out": True,
+        }
+
+
 def run_cmd(
     cmd: list[str],
     log_path: str | Path | None = None,
     check: bool = True,
     timeout_sec: float | None = None,
-) -> subprocess.CompletedProcess:
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
-    except subprocess.TimeoutExpired as exc:
-        timed_out = RuntimeError(
-            f"Command timed out after {timeout_sec}s: {' '.join(cmd)}"
-        )
-        if log_path:
-            log_file = Path(log_path)
-            log_file.parent.mkdir(parents=True, exist_ok=True)
-            with log_file.open("a", encoding="utf-8") as handle:
-                handle.write("$ " + " ".join(cmd) + "\n")
-                if exc.stdout:
-                    handle.write(str(exc.stdout) + "\n")
-                if exc.stderr:
-                    handle.write(str(exc.stderr) + "\n")
-                handle.write(str(timed_out) + "\n")
-        raise timed_out from exc
+) -> dict[str, Any]:
+    result = run_ffmpeg(cmd, timeout_sec=timeout_sec)
     if log_path:
         log_file = Path(log_path)
         log_file.parent.mkdir(parents=True, exist_ok=True)
         with log_file.open("a", encoding="utf-8") as handle:
             handle.write("$ " + " ".join(cmd) + "\n")
-            if result.stdout:
-                handle.write(result.stdout + "\n")
-            if result.stderr:
-                handle.write(result.stderr + "\n")
-    if check and result.returncode != 0:
-        raise RuntimeError(f"Command failed ({result.returncode}): {' '.join(cmd)}\n{result.stderr}")
+            if result["stdout"]:
+                handle.write(result["stdout"] + "\n")
+            if result["stderr"]:
+                handle.write(result["stderr"] + "\n")
+            if result["timed_out"]:
+                handle.write(f"Command timed out after {timeout_sec}s\n")
+    if check and not result["ok"]:
+        if result["timed_out"]:
+            raise RuntimeError(f"Command timed out after {timeout_sec}s: {' '.join(cmd)}")
+        raise RuntimeError(f"Command failed ({result['returncode']}): {' '.join(cmd)}\n{result['stderr']}")
     return result
 
 
@@ -69,10 +85,10 @@ def get_media_duration(path: str | Path) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"ffprobe failed for {path}: {result.stderr}")
-    return float(result.stdout.strip())
+    result = run_ffmpeg(cmd)
+    if not result["ok"]:
+        raise RuntimeError(f"ffprobe failed for {path}: {result['stderr']}")
+    return float(result["stdout"].strip())
 
 
 def ensure_parent_dir(path: str | Path) -> Path:

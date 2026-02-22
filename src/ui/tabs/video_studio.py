@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from collections import deque
 from io import BytesIO
@@ -41,6 +42,64 @@ def _load_render_report(report_path: Path) -> dict:
     except json.JSONDecodeError:
         return {}
 
+
+
+
+def _compute_render_timeout(duration_seconds: float, user_timeout_seconds: int, allow_long_timeout: bool) -> int:
+    adaptive_timeout = max(int(user_timeout_seconds), int(60 + (duration_seconds * 12)))
+    if allow_long_timeout:
+        return adaptive_timeout
+    return min(2700, adaptive_timeout)
+
+
+def _validate_render_preflight(
+    timeline: Timeline,
+    media_files: list[Path],
+    output_path: Path,
+    allow_silent_build: bool,
+) -> bool:
+    missing_or_empty_media: list[str] = []
+    for scene in timeline.scenes:
+        scene_path = Path(scene.image_path)
+        if not scene_path.exists() or scene_path.stat().st_size <= 0:
+            missing_or_empty_media.append(str(scene_path))
+
+    if missing_or_empty_media:
+        st.error("Missing or empty scene media files referenced by timeline.json.")
+        st.code("\n".join(missing_or_empty_media))
+        return False
+
+    if timeline.meta.include_voiceover and not allow_silent_build:
+        if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
+            st.error("Voiceover is enabled but timeline.json has no voiceover path.")
+            return False
+        voiceover_path = Path(timeline.meta.voiceover.path)
+        if not voiceover_path.exists() or voiceover_path.stat().st_size <= 0:
+            st.error(f"Voiceover audio not found or empty: {timeline.meta.voiceover.path}")
+            return False
+
+    if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
+        music_path = Path(timeline.meta.music.path)
+        if not music_path.exists() or music_path.stat().st_size <= 0:
+            st.error(f"Music file not found or empty: {timeline.meta.music.path}")
+            return False
+
+    output_dir = output_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not output_dir.exists() or not output_dir.is_dir():
+        st.error(f"Render output directory is unavailable: {output_dir}")
+        return False
+    if not os.access(output_dir, os.W_OK):
+        st.error(f"Render output directory is not writable: {output_dir}")
+        return False
+
+    expected_paths = {str(path) for path in media_files}
+    timeline_paths = [scene.image_path for scene in timeline.scenes]
+    if len(timeline_paths) != len(media_files) or any(path not in expected_paths for path in timeline_paths):
+        st.error("timeline.json is out of sync with project media. Click Generate timeline.json to resync.")
+        return False
+
+    return True
 
 def _trim_debug_text(value: str, limit: int = 140) -> str:
     normalized = (value or "").strip()
@@ -741,6 +800,16 @@ def tab_video_compile() -> None:
         key="video_render_timeout_sec",
         help="Stops any single FFmpeg command that hangs too long; cached scene clips make retries faster.",
     )
+    allow_silent_build = st.checkbox(
+        "Allow silent build when voiceover is missing",
+        value=False,
+        key="video_allow_silent_build",
+    )
+    allow_long_timeout = st.checkbox(
+        "Allow timeout above 45 minutes",
+        value=False,
+        key="video_allow_long_timeout",
+    )
 
     timeline_meta_overrides = {
         "title": title,
@@ -847,28 +916,14 @@ def tab_video_compile() -> None:
             st.error(f"Unable to read timeline.json: {exc}")
             return
 
-        expected_paths = {str(path) for path in media_files}
-        timeline_paths = [scene.image_path for scene in timeline.scenes]
-        if len(timeline_paths) != len(media_files) or any(path not in expected_paths for path in timeline_paths):
-            st.error("timeline.json is out of sync with project media. Click Generate timeline.json to resync.")
+        final_output_path = renders_dir / "final.mp4"
+        if not _validate_render_preflight(
+            timeline=timeline,
+            media_files=media_files,
+            output_path=final_output_path,
+            allow_silent_build=allow_silent_build,
+        ):
             return
-
-        missing_images = [scene.image_path for scene in timeline.scenes if not Path(scene.image_path).exists()]
-        if missing_images:
-            st.error("Missing scene media referenced by timeline.json.")
-            st.code("\n".join(missing_images))
-            return
-        if timeline.meta.include_voiceover:
-            if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
-                st.error("Voiceover is enabled but timeline.json has no voiceover path.")
-                return
-            if not Path(timeline.meta.voiceover.path).exists():
-                st.error(f"Voiceover audio not found: {timeline.meta.voiceover.path}")
-                return
-        if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
-            if not Path(timeline.meta.music.path).exists():
-                st.error(f"Music file not found: {timeline.meta.music.path}")
-                return
 
         try:
             ensure_ffmpeg_exists()
@@ -876,16 +931,32 @@ def tab_video_compile() -> None:
             st.error(str(exc))
         else:
             renders_dir.mkdir(parents=True, exist_ok=True)
-            log_path = renders_dir / "render.log"
+            log_path = renders_dir / "render_logs" / "ffmpeg_last.log"
             report_path = renders_dir / "render_report.json"
+            timeout_seconds = _compute_render_timeout(
+                duration_seconds=float(getattr(timeline, "total_duration", 0.0) or 0.0),
+                user_timeout_seconds=int(render_timeout_sec),
+                allow_long_timeout=allow_long_timeout,
+            )
+            render_timeline_path = timeline_path
+            if allow_silent_build and timeline.meta.include_voiceover:
+                voice_path = timeline.meta.voiceover.path if timeline.meta.voiceover else ""
+                if not voice_path or not Path(voice_path).exists() or Path(voice_path).stat().st_size <= 0:
+                    timeline.meta.include_voiceover = False
+                    timeline.meta.voiceover = None
+                    render_timeline_path = renders_dir / "timeline.silent.json"
+                    render_timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+                    st.info("Rendering without voiceover because silent build is enabled and voiceover is missing.")
+
             with st.spinner("Rendering video with FFmpeg..."):
                 try:
                     render_video_from_timeline(
-                        timeline_path,
-                        renders_dir / "final.mp4",
+                        render_timeline_path,
+                        final_output_path,
                         log_path=log_path,
                         report_path=report_path,
-                        command_timeout_sec=float(render_timeout_sec),
+                        command_timeout_sec=float(timeout_seconds),
+                        max_width=1280,
                     )
                 except (RuntimeError, FileNotFoundError, ValueError) as exc:
                     st.error(
@@ -896,9 +967,9 @@ def tab_video_compile() -> None:
                         st.warning(
                             "A render command hit the timeout. Increase 'FFmpeg command timeout', or retry now that scene clips are cached."
                         )
-                    failure_log = _tail_file(log_path, lines=50)
+                    failure_log = _tail_file(log_path, lines=60)
                     if failure_log:
-                        st.markdown("#### Last 50 log lines")
+                        st.markdown("#### Last ~60 ffmpeg stderr/stdout lines")
                         st.code(failure_log, language="bash")
                     report = _load_render_report(report_path)
                     if report:
@@ -910,7 +981,7 @@ def tab_video_compile() -> None:
     st.markdown("### Render output")
     video_path = renders_dir / "final.mp4"
     srt_path = renders_dir / "captions.srt"
-    log_path = renders_dir / "render.log"
+    log_path = renders_dir / "render_logs" / "ffmpeg_last.log"
     report_path = renders_dir / "render_report.json"
 
     if video_path.exists():
