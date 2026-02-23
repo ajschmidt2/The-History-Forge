@@ -168,7 +168,7 @@ def _concat_scenes(
     try:
         ffmpeg_commands.append(concat_cmd)
         run_cmd(concat_cmd, log_path=log_path, timeout_sec=command_timeout_sec)
-    except RuntimeError:
+    except subprocess.CalledProcessError:
         fallback_cmd = [
             "ffmpeg",
             "-y",
@@ -264,7 +264,7 @@ def _assert_filter_complex_arg(cmd: list[str]) -> None:
     assert filter_graph.strip(), "filtergraph argument must not be empty"
 
 def _ffmpeg_version() -> str:
-    result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+    result = subprocess.run(["ffmpeg", "-version"], check=False, capture_output=True, text=True)
     version_line = (result.stdout or result.stderr).splitlines()
     return version_line[0].strip() if version_line else "unknown"
 

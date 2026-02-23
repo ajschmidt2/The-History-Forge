@@ -1,14 +1,40 @@
 import json
 import re
 import shutil
+import sys
+import importlib
+import importlib.util
 from pathlib import Path
 
 import streamlit as st
-import utils as forge_utils
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
 
 from src.storage import delete_project_records
-from utils import Scene
+
+
+def _load_forge_utils():
+    """Load the root-level utils module with a resilient fallback loader."""
+    try:
+        return importlib.import_module("utils")
+    except Exception:
+        module_name = "history_forge_utils"
+        cached_module = sys.modules.get(module_name)
+        if cached_module is not None:
+            return cached_module
+
+        module_path = Path(__file__).resolve().parents[2] / "utils.py"
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load utils module from {module_path}")
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
+
+
+forge_utils = _load_forge_utils()
+Scene = forge_utils.Scene
 
 PREFERENCES_PATH = Path("data/user_preferences.json")
 PROJECTS_ROOT = Path("data/projects")
