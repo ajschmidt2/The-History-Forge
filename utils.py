@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict, field
 from typing import Any, Dict, List, Optional, Tuple
 from io import BytesIO
 from pathlib import Path
+from uuid import uuid4
 
 import requests
 from PIL import Image
@@ -125,6 +126,7 @@ class Scene:
     title: str
     script_excerpt: str
     visual_intent: str
+    scene_id: str = field(default_factory=lambda: uuid4().hex)
     image_prompt: str = ""
     image_bytes: Optional[bytes] = None  # PNG bytes (streamlit-safe)
     image_variations: List[Optional[bytes]] = field(default_factory=list)
@@ -379,8 +381,15 @@ def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_lev
         f"Reading level: {(reading_level or 'General').strip()}\n"
         f"Pacing: {(pacing or 'Balanced').strip()}\n\n"
         f"Outline JSON:\n{json.dumps(normalized_outline, indent=2)}\n\n"
-        "Write one continuous script with no headings or bullet points. "
-        "Cover each beat in order, include natural transitions, and end with the CTA."
+        "Write scene-delimited output so parsing is deterministic. "
+        "Cover each beat in order with natural transitions and end with the CTA.\n"
+        "Format every scene exactly as:\n"
+        "SCENE 01 | <title>\n"
+        "NARRATION: <text>\n"
+        "VISUAL INTENT: <text>\n"
+        "END SCENE 01\n"
+        "---SCENE_BREAK---\n"
+        "Use incrementing scene numbers and place ---SCENE_BREAK--- only between scenes."
     )
 
     try:
@@ -448,11 +457,16 @@ def generate_script(
         f"Target length: ~{target_words} words\n"
         f"{audience_block}"
         f"{angle_block}"
-        "\nWrite a single continuous narration script with:\n"
-        "1) Hook (1–3 sentences)\n"
-        "2) Main story (well-structured paragraphs)\n"
-        "3) Ending CTA (1–2 sentences)\n"
-        "No headings. No bullet lists."
+        "\nWrite scene-delimited output so parsing is deterministic.\n"
+        "Use this exact structure for every scene:\n"
+        "SCENE 01 | <title>\n"
+        "NARRATION: <narration text>\n"
+        "VISUAL INTENT: <historical visual guidance>\n"
+        "END SCENE 01\n"
+        "---SCENE_BREAK---\n"
+        "Repeat with incrementing scene numbers and keep ---SCENE_BREAK--- between scenes only.\n"
+        "Include hook, main story progression, and final CTA across the sequence.\n"
+        "No markdown code fences. No bullet lists outside VISUAL INTENT prose."
         f"{brief_block}"
     )
 
@@ -1052,68 +1066,78 @@ def _outline_beats(outline: object) -> list[dict[str, Any]]:
     return clean
 
 
+def _scene_chunks_from_script(script: str) -> list[str]:
+    text = (script or "").strip()
+    if not text:
+        return []
+
+    # 1) Explicit delimiter
+    if "---SCENE_BREAK---" in text:
+        return [c.strip() for c in text.split("---SCENE_BREAK---") if c.strip()]
+
+    # 2) SCENE heading boundaries (keep heading with each chunk)
+    scene_heading = re.compile(r"(?im)^\s*SCENE\s+\d+\b.*$")
+    if scene_heading.search(text):
+        parts = re.split(r"(?im)^(?=\s*SCENE\s+\d+\b)", text)
+        return [p.strip() for p in parts if p.strip()]
+
+    # 3) Paragraph boundaries
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+    if len(paragraphs) > 1:
+        return paragraphs
+
+    # 4) Sentence-window fallback (3-sentence windows)
+    sentences = [seg.strip() for seg in re.split(r"(?<=[.!?])\s+", text) if seg.strip()]
+    if not sentences:
+        return [text]
+
+    chunks: list[str] = []
+    window: list[str] = []
+    for sentence in sentences:
+        window.append(sentence)
+        if len(window) >= 3:
+            chunks.append(" ".join(window).strip())
+            window = []
+    if window:
+        chunks.append(" ".join(window).strip())
+    return chunks
+
+
 def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str, Any] | None = None, wpm: int = 160) -> List[Scene]:
-    script = (script or "").strip()
-    if not script:
+    text = (script or "").strip()
+    if not text:
         return []
 
     target = max(1, min(int(max_scenes or 8), 75))
-    numbered_scene_lines = _extract_numbered_scene_lines(script)
-    if len(numbered_scene_lines) >= 3:
-        selected = numbered_scene_lines[:target]
-        scenes_from_lines: list[Scene] = []
-        for i, txt in enumerate(selected, start=1):
-            excerpt = txt.strip()
-            scenes_from_lines.append(
-                Scene(
-                    index=i,
-                    title=_scene_title_from_text(excerpt, i),
-                    script_excerpt=excerpt,
-                    visual_intent=_extract_visual_keywords(excerpt),
-                    estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
-                )
-            )
-        return scenes_from_lines
+    chunks = _scene_chunks_from_script(text)
+
+    # De-dupe repeated chunks to avoid duplicate scene cards.
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        normalized = re.sub(r"\s+", " ", chunk).strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(chunk.strip())
+
+    if not deduped:
+        deduped = [text]
 
     beats = _outline_beats(outline)
-
-    if beats:
-        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", script) if s.strip()]
-        base_units = sentences if len(sentences) >= target else [p.strip() for p in re.split(r"\n\s*\n+", script) if p.strip()]
-        if not base_units:
-            base_units = [script]
-        groups = _split_into_groups(base_units, target)
-
-        scenes: list[Scene] = []
-        for i in range(target):
-            beat = beats[i] if i < len(beats) else {}
-            excerpt = " ".join(groups[i]).strip() if i < len(groups) else ""
-            excerpt = excerpt or script[:280].strip()
-            beat_text = " ".join(beat.get("bullets", []))
-            keyword_source = f"{beat.get('title', '')} {beat_text} {excerpt}"
-            scene_title = str(beat.get("title", "") or "").strip() or _scene_title_from_text(excerpt, i + 1)
-            scenes.append(
-                Scene(
-                    index=i + 1,
-                    title=scene_title,
-                    script_excerpt=excerpt,
-                    visual_intent=_extract_visual_keywords(keyword_source),
-                    estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
-                )
-            )
-        return scenes
-
-    chunks = split_script_into_scene_strings(script, target)
     scenes: list[Scene] = []
-    for i, txt in enumerate(chunks[:target], start=1):
-        excerpt = txt.strip() or script[:280].strip()
+    for i, chunk in enumerate(deduped[:target], start=1):
+        beat = beats[i - 1] if i - 1 < len(beats) else {}
+        beat_text = " ".join(beat.get("bullets", [])) if isinstance(beat, dict) else ""
+        keyword_source = f"{beat.get('title', '') if isinstance(beat, dict) else ''} {beat_text} {chunk}"
+        title = str(beat.get("title", "") or "").strip() if isinstance(beat, dict) else ""
         scenes.append(
             Scene(
                 index=i,
-                title=_scene_title_from_text(excerpt, i),
-                script_excerpt=excerpt,
-                visual_intent=_extract_visual_keywords(excerpt),
-                estimated_duration_sec=_estimate_duration_sec(excerpt, wpm),
+                title=title or _scene_title_from_text(chunk, i),
+                script_excerpt=chunk,
+                visual_intent=_extract_visual_keywords(keyword_source),
+                estimated_duration_sec=_estimate_duration_sec(chunk, wpm),
             )
         )
 
