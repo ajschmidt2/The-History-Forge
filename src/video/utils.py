@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -10,10 +12,32 @@ class FFmpegNotFoundError(RuntimeError):
     pass
 
 
+def get_ffmpeg_exe() -> str:
+    env = os.environ.get("FFMPEG_PATH")
+    if env and Path(env).exists():
+        return env
+
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+
+    try:
+        import imageio_ffmpeg
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and Path(exe).exists():
+            return exe
+    except Exception:
+        pass
+
+    raise FileNotFoundError("FFmpeg executable not found. Install ffmpeg or set FFMPEG_PATH env var.")
+
+
 def ensure_ffmpeg_exists() -> None:
     try:
-        subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True, text=True)
-    except FileNotFoundError as exc:
+        ffmpeg_exe = get_ffmpeg_exe()
+        subprocess.run([ffmpeg_exe, "-version"], check=True, capture_output=True, text=True)
+    except (FileNotFoundError, RuntimeError) as exc:
         raise FFmpegNotFoundError(
             "FFmpeg is not installed. Add a packages.txt file with 'ffmpeg' to deploy on Streamlit Cloud."
         ) from exc
@@ -26,8 +50,11 @@ def ensure_ffmpeg_exists() -> None:
 def run_ffmpeg(cmd: list[str], timeout_sec: float | None = None) -> dict[str, Any]:
     """Run ffmpeg/ffprobe command safely without bubbling process exceptions."""
     try:
+        resolved_cmd = list(cmd)
+        if resolved_cmd and Path(str(resolved_cmd[0])).name == "ffmpeg":
+            resolved_cmd = [get_ffmpeg_exe(), *resolved_cmd[1:]]
         result = subprocess.run(
-            cmd,
+            resolved_cmd,
             timeout=timeout_sec,
             check=False,
             capture_output=True,
@@ -77,11 +104,19 @@ def run_cmd(
     if check and not result["ok"]:
         if result["timed_out"]:
             raise RuntimeError(f"Command timed out after {timeout_sec}s: {' '.join(cmd)}")
-        raise RuntimeError(f"Command failed ({result['returncode']}): {' '.join(cmd)}\n{result['stderr']}")
+        raise subprocess.CalledProcessError(
+            returncode=int(result["returncode"] or 1),
+            cmd=cmd,
+            output=result.get("stdout", ""),
+            stderr=result.get("stderr", ""),
+        )
     return result
 
 
 def get_media_duration(path: str | Path) -> float:
+    media_path = Path(path)
+    if not media_path.exists():
+        return 0.0
     cmd = [
         "ffprobe",
         "-v",
@@ -90,7 +125,7 @@ def get_media_duration(path: str | Path) -> float:
         "format=duration",
         "-of",
         "default=noprint_wrappers=1:nokey=1",
-        str(path),
+        str(media_path),
     ]
     result = run_ffmpeg(cmd)
     if not result["ok"]:
