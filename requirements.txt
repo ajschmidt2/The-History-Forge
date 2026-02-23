@@ -3,5 +3,7 @@ openai>=1.10.0
 google-genai>=0.8.0
 pillow>=10.0
 requests>=2.31
-moviepy>=1.0.3
+numpy<2
+moviepy==1.0.3
+imageio-ffmpeg==0.6.0
 pydantic>=1.10

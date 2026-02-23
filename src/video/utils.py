@@ -77,7 +77,12 @@ def run_cmd(
     if check and not result["ok"]:
         if result["timed_out"]:
             raise RuntimeError(f"Command timed out after {timeout_sec}s: {' '.join(cmd)}")
-        raise RuntimeError(f"Command failed ({result['returncode']}): {' '.join(cmd)}\n{result['stderr']}")
+        raise subprocess.CalledProcessError(
+            returncode=int(result["returncode"] or 1),
+            cmd=cmd,
+            output=result.get("stdout", ""),
+            stderr=result.get("stderr", ""),
+        )
     return result
 
 
