@@ -12,7 +12,7 @@ class FFmpegNotFoundError(RuntimeError):
     pass
 
 
-def get_ffmpeg_exe() -> str:
+def resolve_ffmpeg_exe() -> str:
     env = os.environ.get("FFMPEG_PATH")
     if env and Path(env).exists():
         return env
@@ -30,10 +30,10 @@ def get_ffmpeg_exe() -> str:
     except Exception:
         pass
 
-    raise FileNotFoundError("FFmpeg executable not found. Install ffmpeg or set FFMPEG_PATH env var.")
+    raise FileNotFoundError("ffmpeg executable not found. Install ffmpeg or ensure it is on PATH.")
 
 
-def get_ffprobe_exe() -> str:
+def resolve_ffprobe_exe() -> str:
     env = os.environ.get("FFPROBE_PATH")
     if env and Path(env).exists():
         return env
@@ -42,20 +42,34 @@ def get_ffprobe_exe() -> str:
     if exe:
         return exe
 
+    common = Path("/usr/bin/ffprobe")
+    if common.exists():
+        return str(common)
+
     try:
-        ffmpeg_exe = Path(get_ffmpeg_exe())
+        ffmpeg_exe = Path(resolve_ffmpeg_exe())
         sibling = ffmpeg_exe.with_name("ffprobe")
         if sibling.exists():
             return str(sibling)
     except Exception:
         pass
 
-    raise FileNotFoundError("FFprobe executable not found. Install ffprobe or set FFPROBE_PATH env var.")
+    raise FileNotFoundError("ffprobe executable not found. Install ffmpeg (includes ffprobe) or ensure it is on PATH.")
+
+
+def get_ffmpeg_exe() -> str:
+    """Backward-compatible alias; prefer resolve_ffmpeg_exe."""
+    return resolve_ffmpeg_exe()
+
+
+def get_ffprobe_exe() -> str:
+    """Backward-compatible alias; prefer resolve_ffprobe_exe."""
+    return resolve_ffprobe_exe()
 
 
 def ensure_ffmpeg_exists() -> None:
     try:
-        ffmpeg_exe = get_ffmpeg_exe()
+        ffmpeg_exe = resolve_ffmpeg_exe()
         subprocess.run([ffmpeg_exe, "-version"], check=True, capture_output=True, text=True)
     except (FileNotFoundError, RuntimeError) as exc:
         raise FFmpegNotFoundError(
@@ -69,14 +83,16 @@ def ensure_ffmpeg_exists() -> None:
 
 def run_ffmpeg(cmd: list[str], timeout_sec: float | None = None) -> dict[str, Any]:
     """Run ffmpeg/ffprobe command safely without bubbling process exceptions."""
+    if not cmd or not cmd[0]:
+        raise ValueError(f"Invalid ffmpeg/ffprobe command: {cmd!r}")
     try:
         resolved_cmd = list(cmd)
         if resolved_cmd:
             first = Path(str(resolved_cmd[0])).name
             if first == "ffmpeg":
-                resolved_cmd = [get_ffmpeg_exe(), *resolved_cmd[1:]]
+                resolved_cmd = [resolve_ffmpeg_exe(), *resolved_cmd[1:]]
             elif first == "ffprobe":
-                resolved_cmd = [get_ffprobe_exe(), *resolved_cmd[1:]]
+                resolved_cmd = [resolve_ffprobe_exe(), *resolved_cmd[1:]]
         result = subprocess.run(
             resolved_cmd,
             timeout=timeout_sec,
@@ -105,7 +121,11 @@ def run_ffmpeg(cmd: list[str], timeout_sec: float | None = None) -> dict[str, An
             "ok": False,
             "returncode": None,
             "stdout": "",
-            "stderr": str(exc),
+            "stderr": (
+                f"Executable not found for command: {cmd!r}. "
+                f"which(ffmpeg)={shutil.which('ffmpeg')!r}, which(ffprobe)={shutil.which('ffprobe')!r}. "
+                f"Error: {exc}"
+            ),
             "timed_out": False,
         }
 
@@ -149,8 +169,12 @@ def get_media_duration(path: str | Path) -> float:
     media_path = Path(path)
     if not media_path.exists():
         return 0.0
+    try:
+        ffprobe_exe = resolve_ffprobe_exe()
+    except FileNotFoundError:
+        return 0.0
     cmd = [
-        "ffprobe",
+        ffprobe_exe,
         "-v",
         "error",
         "-show_entries",
