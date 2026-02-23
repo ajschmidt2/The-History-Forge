@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import traceback
 from collections import deque
@@ -15,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 from src.storage import record_asset, record_assets, upsert_project
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_schema import CaptionStyle, Timeline
-from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists
+from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists, get_ffmpeg_exe
 from src.ui.state import active_project_id
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.ui.caption_format import format_caption
@@ -878,6 +879,11 @@ def tab_video_compile() -> None:
                 st.success("timeline.json generated.")
 
     with st.expander("Debug: Captions & Timeline", expanded=False):
+        st.write(f"ffmpeg on PATH: {shutil.which('ffmpeg')}")
+        try:
+            st.write(f"Resolved ffmpeg: {get_ffmpeg_exe()}")
+        except Exception as exc:
+            st.write(f"Resolved ffmpeg: unavailable ({exc})")
         st.write(f"len(images): {len(media_files)}")
         st.write(f"len(scene_captions): {len(scene_captions)}")
         _render_debug_samples(scene_captions, "Scene captions")
