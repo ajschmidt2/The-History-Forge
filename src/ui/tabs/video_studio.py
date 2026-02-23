@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import subprocess
+import traceback
 from collections import deque
 from io import BytesIO
 from pathlib import Path
@@ -41,6 +43,14 @@ def _load_render_report(report_path: Path) -> dict:
         return json.loads(report_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
+
+
+def _render_error_output_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    return str(value)
 
 
 
@@ -958,15 +968,18 @@ def tab_video_compile() -> None:
                         command_timeout_sec=float(timeout_seconds),
                         max_width=1280,
                     )
-                except (RuntimeError, FileNotFoundError, ValueError) as exc:
-                    st.error(
-                        "Render failed. Verify media paths/codecs and inspect the FFmpeg diagnostics below for the"
-                        f" exact command error.\n\nDetails: {exc}"
-                    )
-                    if "timed out" in str(exc).lower():
-                        st.warning(
-                            "A render command hit the timeout. Increase 'FFmpeg command timeout', or retry now that scene clips are cached."
-                        )
+                except subprocess.CalledProcessError as exc:
+                    st.error("FFmpeg failed.")
+                    stdout_text = _render_error_output_text(exc.output)
+                    stderr_text = _render_error_output_text(exc.stderr)
+                    if stdout_text:
+                        st.markdown("#### ffmpeg stdout")
+                        st.code(stdout_text, language="bash")
+                    if stderr_text:
+                        st.markdown("#### ffmpeg stderr")
+                        st.code(stderr_text, language="bash")
+                    st.markdown("#### Python traceback")
+                    st.code(traceback.format_exc(), language="python")
                     failure_log = _tail_file(log_path, lines=60)
                     if failure_log:
                         st.markdown("#### Last ~60 ffmpeg stderr/stdout lines")
@@ -975,6 +988,20 @@ def tab_video_compile() -> None:
                     if report:
                         st.markdown("#### Structured render report")
                         st.json(report)
+                    raise
+                except (RuntimeError, FileNotFoundError, ValueError):
+                    st.error("Video render crashed.")
+                    st.markdown("#### Python traceback")
+                    st.code(traceback.format_exc(), language="python")
+                    failure_log = _tail_file(log_path, lines=60)
+                    if failure_log:
+                        st.markdown("#### Last ~60 ffmpeg stderr/stdout lines")
+                        st.code(failure_log, language="bash")
+                    report = _load_render_report(report_path)
+                    if report:
+                        st.markdown("#### Structured render report")
+                        st.json(report)
+                    raise
                 else:
                     st.success("Render complete.")
 
