@@ -238,9 +238,14 @@ def tab_create_scenes() -> None:
         )
 
     if create_scenes_clicked:
+        script_for_splitter = (
+            str(st.session_state.get("generated_script_text_input", "") or "").strip()
+            or str(st.session_state.get("script_text_input", "") or "").strip()
+            or str(st.session_state.get("script_text", "") or "").strip()
+        )
         with st.spinner("Splitting script..."):
             st.session_state.scenes = split_script_into_scenes(
-                st.session_state.script_text,
+                script_for_splitter,
                 max_scenes=int(st.session_state.max_scenes),
                 outline=_outline_payload(),
                 wpm=int(st.session_state.scene_wpm),
