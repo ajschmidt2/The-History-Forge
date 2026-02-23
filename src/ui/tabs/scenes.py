@@ -35,6 +35,10 @@ def _captions_from_scenes(scenes: list[Scene]) -> list[str]:
     return [str(scene.script_excerpt or "") for scene in scenes]
 
 
+def _scene_widget_key(prefix: str, scene: Scene) -> str:
+    return f"{prefix}{scene.index}_{getattr(scene, 'scene_id', '')}"
+
+
 def _normalize_scene_transitions(scene_count: int) -> list[str]:
     needed = max(0, scene_count - 1)
     current = st.session_state.get("scene_transition_types", [])
@@ -105,7 +109,7 @@ def _auto_match_scene_lengths_to_voiceover_equal(scenes: list[Scene]) -> tuple[b
 
     for idx, (scene, duration) in enumerate(zip(scenes, durations), start=1):
         scene.estimated_duration_sec = float(duration)
-        st.session_state[f"story_duration_{idx}"] = float(duration)
+        st.session_state[_scene_widget_key("story_duration_", scene)] = float(duration)
 
     st.session_state[_timeline_state_key()] = _captions_from_scenes(scenes)
     _recompute_estimated_runtime()
@@ -256,6 +260,9 @@ def tab_create_scenes() -> None:
         _recompute_estimated_runtime()
         _sync_timeline_from_scenes()
         st.toast(f"Created {len(st.session_state.scenes)} scenes.")
+        st.caption(f"Split debug: {len(st.session_state.scenes)} scene(s)")
+        for debug_scene in st.session_state.scenes:
+            st.write(debug_scene.index, debug_scene.title, str(debug_scene.script_excerpt or "")[:60])
         st.rerun()
 
     if reset_scenes_clicked:
@@ -322,15 +329,15 @@ def tab_create_scenes() -> None:
         for pos, scene in enumerate(scenes):
             row = st.columns([1, 1, 3])
             with row[0]:
-                if st.button("↑", key=f"scene_up_{pos}_{scene.index}", disabled=pos == 0, width="stretch"):
+                if st.button("↑", key=_scene_widget_key(f"scene_up_{pos}_", scene), disabled=pos == 0, width="stretch"):
                     _move_scene(pos, -1)
             with row[1]:
-                if st.button("↓", key=f"scene_down_{pos}_{scene.index}", disabled=pos == len(scenes) - 1, width="stretch"):
+                if st.button("↓", key=_scene_widget_key(f"scene_down_{pos}_", scene), disabled=pos == len(scenes) - 1, width="stretch"):
                     _move_scene(pos, 1)
             with row[2]:
                 is_selected = pos == st.session_state.storyboard_selected_pos
                 label = f"{scene.index:02d} — {scene.title}"
-                if st.button(("✅ " if is_selected else "") + label, key=f"scene_pick_{pos}_{scene.index}", width="stretch"):
+                if st.button(("✅ " if is_selected else "") + label, key=_scene_widget_key(f"scene_pick_{pos}_", scene), width="stretch"):
                     st.session_state.storyboard_selected_pos = pos
                     st.rerun()
 
@@ -338,18 +345,18 @@ def tab_create_scenes() -> None:
 
     with center:
         st.markdown("### Scene editor")
-        selected.title = st.text_input("Title", value=selected.title, key=f"story_title_{selected.index}")
+        selected.title = st.text_input("Title", value=selected.title, key=_scene_widget_key("story_title_", selected))
         selected.script_excerpt = st.text_area(
             "Excerpt",
             value=selected.script_excerpt,
             height=200,
-            key=f"story_excerpt_{selected.index}",
+            key=_scene_widget_key("story_excerpt_", selected),
         )
         selected.visual_intent = st.text_area(
             "Visual intent",
             value=selected.visual_intent,
             height=140,
-            key=f"story_visual_{selected.index}",
+            key=_scene_widget_key("story_visual_", selected),
         )
         est_sec = float(getattr(selected, "estimated_duration_sec", 0.0) or 0.0)
         selected.estimated_duration_sec = float(
@@ -359,7 +366,7 @@ def tab_create_scenes() -> None:
                 max_value=60.0,
                 value=max(0.5, est_sec if est_sec > 0 else 3.0),
                 step=0.1,
-                key=f"story_duration_{selected.index}",
+                key=_scene_widget_key("story_duration_", selected),
                 help="Initial values are auto-estimated from script pace; adjust per scene as needed.",
             )
         )
@@ -371,7 +378,7 @@ def tab_create_scenes() -> None:
             "Prompt",
             value=selected.image_prompt or "",
             height=140,
-            key=f"story_prompt_{selected.index}",
+            key=_scene_widget_key("story_prompt_", selected),
         )
         if selected.image_bytes:
             st.image(selected.image_bytes, width="stretch")
@@ -390,7 +397,7 @@ def tab_create_scenes() -> None:
             "Caption (matches excerpt)",
             value=caption_value,
             height=120,
-            key=f"story_caption_{selected.index}",
+            key=_scene_widget_key("story_caption_", selected),
             help="Captions are synced from each scene excerpt to keep preview/video text aligned.",
             disabled=True,
         )
@@ -412,13 +419,13 @@ def tab_create_scenes() -> None:
         pending_edits: dict[int, dict[str, str]] = {}
         for s in scenes:
             st.markdown(f"#### {s.index:02d} — {s.title}")
-            st.text_input("Title", value=s.title, key=f"bulk_title_{s.index}")
-            st.text_area("Excerpt", value=s.script_excerpt, height=120, key=f"bulk_txt_{s.index}")
-            st.text_area("Visual intent", value=s.visual_intent, height=90, key=f"bulk_vi_{s.index}")
+            st.text_input("Title", value=s.title, key=_scene_widget_key("bulk_title_", s))
+            st.text_area("Excerpt", value=s.script_excerpt, height=120, key=_scene_widget_key("bulk_txt_", s))
+            st.text_area("Visual intent", value=s.visual_intent, height=90, key=_scene_widget_key("bulk_vi_", s))
             pending_edits[s.index] = {
-                "title": st.session_state.get(f"bulk_title_{s.index}", s.title),
-                "script_excerpt": st.session_state.get(f"bulk_txt_{s.index}", s.script_excerpt),
-                "visual_intent": st.session_state.get(f"bulk_vi_{s.index}", s.visual_intent),
+                "title": st.session_state.get(_scene_widget_key("bulk_title_", s), s.title),
+                "script_excerpt": st.session_state.get(_scene_widget_key("bulk_txt_", s), s.script_excerpt),
+                "visual_intent": st.session_state.get(_scene_widget_key("bulk_vi_", s), s.visual_intent),
             }
 
         if st.button("Save bulk edits", width="stretch"):

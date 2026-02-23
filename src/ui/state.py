@@ -5,6 +5,7 @@ import sys
 import importlib
 import importlib.util
 from pathlib import Path
+from uuid import uuid4
 
 import streamlit as st
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
@@ -121,6 +122,7 @@ def _scene_to_serializable(scene: Scene) -> dict[str, object]:
         "title": str(scene.title or ""),
         "script_excerpt": str(scene.script_excerpt or ""),
         "visual_intent": str(scene.visual_intent or ""),
+        "scene_id": str(getattr(scene, "scene_id", "") or ""),
         "image_prompt": str(scene.image_prompt or ""),
         "status": str(scene.status or "active"),
         "estimated_duration_sec": float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0),
@@ -141,6 +143,7 @@ def _scene_from_serializable(raw: object, project_id: str) -> Scene | None:
         title=str(raw.get("title", "") or ""),
         script_excerpt=str(raw.get("script_excerpt", "") or ""),
         visual_intent=str(raw.get("visual_intent", "") or ""),
+        scene_id=str(raw.get("scene_id", "") or "").strip() or uuid4().hex,
         image_prompt=str(raw.get("image_prompt", "") or ""),
     )
     scene.status = str(raw.get("status", "active") or "active")

@@ -93,8 +93,6 @@ def _clean_generated_script(script: str) -> str:
 
         if re.match(r"(?i)^\s*(?:here(?:'|’)s|below\s+is|let\s+me\s+know|i\s+can\s+also)\b", line):
             continue
-        if re.match(r"(?i)^\s*(?:scene|shot)\s*\d+\s*[:\-]", line):
-            continue
         if re.match(r"(?i)^\s*(?:visual|b-?roll|on-?screen(?:\s+text)?|sfx|music|camera|transition|cta)\s*:", line):
             continue
         if re.match(r"(?i)^\s*(?:estimated\s+runtime|word\s+count|title\s+ideas?)\s*:", line):
