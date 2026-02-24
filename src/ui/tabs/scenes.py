@@ -214,22 +214,19 @@ def tab_create_scenes() -> None:
         st.warning("Paste or generate a script first.")
         return
 
-    default_max = int(st.session_state.get("max_scenes", 8) or 8)
-    default_max = max(3, min(default_max, 75))
-
-    st.session_state.max_scenes = st.number_input(
+    st.number_input(
         "Number of scenes",
         min_value=3,
         max_value=75,
-        value=default_max,
         step=1,
+        key="max_scenes",
     )
-    st.session_state.scene_wpm = st.number_input(
+    st.number_input(
         "Narration speed (WPM)",
         min_value=90,
         max_value=240,
-        value=int(st.session_state.scene_wpm),
         step=5,
+        key="scene_wpm",
         help="Used to estimate each scene's duration and total runtime.",
     )
 
@@ -250,6 +247,8 @@ def tab_create_scenes() -> None:
             or str(st.session_state.get("script_text_input", "") or "").strip()
             or str(st.session_state.get("script_text", "") or "").strip()
         )
+        st.write("DEBUG max_scenes:", st.session_state.max_scenes)
+        st.write("DEBUG script length:", len(script_for_splitter))
         with st.spinner("Splitting script..."):
             st.session_state.scenes = split_script_into_scenes(
                 script_for_splitter,

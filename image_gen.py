@@ -7,34 +7,45 @@ from google import genai
 import streamlit as st
 
 
+def _normalize_secret(value: str) -> str:
+    cleaned = str(value or "").strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"\"", "'"}:
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
 def _get_secret(name: str, default: str = "") -> str:
     if hasattr(st, "secrets") and name in st.secrets:
-        return str(st.secrets.get(name, default))
-    return os.getenv(name, default)
+        return _normalize_secret(str(st.secrets.get(name, default)))
+    return _normalize_secret(os.getenv(name, default))
 
 
 def _resolve_api_key() -> str:
     env_keys = (
         "GEMINI_API_KEY",
         "GOOGLE_AI_STUDIO_API_KEY",
+        "GOOGLE_API_KEY",
         "gemini_api_key",
         "google_ai_studio_api_key",
+        "google_api_key",
     )
     for key_name in env_keys:
         value = os.getenv(key_name, "")
         if value:
-            return str(value).strip()
+            return _normalize_secret(str(value))
 
     secret_keys = (
         "GEMINI_API_KEY",
         "GOOGLE_AI_STUDIO_API_KEY",
+        "GOOGLE_API_KEY",
         "gemini_api_key",
         "google_ai_studio_api_key",
+        "google_api_key",
     )
     for key_name in secret_keys:
         value = _get_secret(key_name, "")
         if value:
-            return str(value).strip()
+            return _normalize_secret(str(value))
 
     return ""
 
