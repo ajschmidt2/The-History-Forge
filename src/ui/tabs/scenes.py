@@ -214,11 +214,14 @@ def tab_create_scenes() -> None:
         st.warning("Paste or generate a script first.")
         return
 
+    default_max = int(st.session_state.get("max_scenes", 8) or 8)
+    default_max = max(3, min(default_max, 75))
+
     st.session_state.max_scenes = st.number_input(
         "Number of scenes",
         min_value=3,
         max_value=75,
-        value=int(st.session_state.max_scenes),
+        value=default_max,
         step=1,
     )
     st.session_state.scene_wpm = st.number_input(

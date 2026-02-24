@@ -356,10 +356,11 @@ def generate_outline(
     return _normalize_outline_payload(parsed, topic_clean)
 
 
-def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_level: str, pacing: str) -> str:
+def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_level: str, pacing: str, desired_scenes: int = 8) -> str:
     normalized_outline = _normalize_outline_payload(outline, str(outline.get("hook", "History topic")) if isinstance(outline, dict) else "History topic")
 
     client = _openai_client()
+    target_scenes = max(3, min(int(desired_scenes or 8), 75))
     if client is None:
         beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
         return (
@@ -382,6 +383,7 @@ def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_lev
         f"Pacing: {(pacing or 'Balanced').strip()}\n\n"
         f"Outline JSON:\n{json.dumps(normalized_outline, indent=2)}\n\n"
         "Write scene-delimited output so parsing is deterministic. "
+        f"Output exactly {target_scenes} scenes total.\n"
         "Cover each beat in order with natural transitions and end with the CTA.\n"
         "Format every scene exactly as:\n"
         "SCENE 01 | <title>\n"
@@ -422,12 +424,14 @@ def generate_script(
     audience: str = "",
     angle: str = "",
     research_brief: str = "",
+    desired_scenes: int = 8,
 ) -> str:
     topic = (topic or "").strip()
     if not topic:
         return "Please enter a topic."
 
     client = _openai_client()
+    target_scenes = max(3, min(int(desired_scenes or 8), 75))
     if client is None:
         return (
             f"[Missing openai_api_key] Placeholder script for: {topic}\n\n"
@@ -458,6 +462,7 @@ def generate_script(
         f"{audience_block}"
         f"{angle_block}"
         "\nWrite scene-delimited output so parsing is deterministic.\n"
+        f"Output exactly {target_scenes} scenes total.\n"
         "Use this exact structure for every scene:\n"
         "SCENE 01 | <title>\n"
         "NARRATION: <narration text>\n"
