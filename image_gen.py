@@ -51,25 +51,16 @@ def _resolve_api_key() -> str:
 
 
 def validate_gemini_api_key() -> str:
-    # Prefer Streamlit secrets, then environment variables
-    api_key = (
-        st.secrets.get("GEMINI_API_KEY", "")
-        or st.secrets.get("GOOGLE_AI_STUDIO_API_KEY", "")
-        or os.getenv("GEMINI_API_KEY", "")
-        or os.getenv("GOOGLE_AI_STUDIO_API_KEY", "")
-    )
+    api_key = _resolve_api_key()
 
-    api_key = str(api_key).strip()
-
-    # Don't over-validate. Just ensure it's not empty.
-    # (Google keys often start with AIza, but don't depend on that.)
-    if not api_key or len(api_key) < 20:
+    # Keep validation permissive to avoid rejecting valid keys from older/newer formats.
+    if not api_key:
         raise RuntimeError(
             "Invalid GOOGLE_AI_STUDIO_API_KEY. Generate a valid Google AI Studio API key "
             "and set it in Streamlit secrets as GEMINI_API_KEY (or GOOGLE_AI_STUDIO_API_KEY)."
         )
 
-    # Optionally store into env for downstream libs that read env vars:
+    # Ensure both env names are populated for downstream SDKs.
     os.environ["GEMINI_API_KEY"] = api_key
     os.environ["GOOGLE_AI_STUDIO_API_KEY"] = api_key
 
