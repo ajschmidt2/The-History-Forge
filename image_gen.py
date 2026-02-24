@@ -17,8 +17,10 @@ def _resolve_api_key() -> str:
     env_keys = (
         "GEMINI_API_KEY",
         "GOOGLE_AI_STUDIO_API_KEY",
+        "GOOGLE_API_KEY",
         "gemini_api_key",
         "google_ai_studio_api_key",
+        "google_api_key",
     )
     for key_name in env_keys:
         value = os.getenv(key_name, "")
@@ -28,8 +30,10 @@ def _resolve_api_key() -> str:
     secret_keys = (
         "GEMINI_API_KEY",
         "GOOGLE_AI_STUDIO_API_KEY",
+        "GOOGLE_API_KEY",
         "gemini_api_key",
         "google_ai_studio_api_key",
+        "google_api_key",
     )
     for key_name in secret_keys:
         value = _get_secret(key_name, "")
