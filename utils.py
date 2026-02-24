@@ -1071,22 +1071,41 @@ def _scene_chunks_from_script(script: str) -> list[str]:
     if not text:
         return []
 
+    def _split_on_heading_pattern(pattern: str, raw_text: str) -> list[str]:
+        heading_re = re.compile(pattern, re.MULTILINE | re.IGNORECASE)
+        if not heading_re.search(raw_text):
+            return []
+        parts = re.split(rf"(?im)^(?={pattern})", raw_text)
+        return [p.strip() for p in parts if p.strip()]
+
     # 1) Explicit delimiter
     if "---SCENE_BREAK---" in text:
         return [c.strip() for c in text.split("---SCENE_BREAK---") if c.strip()]
 
-    # 2) SCENE heading boundaries (keep heading with each chunk)
-    scene_heading = re.compile(r"(?im)^\s*SCENE\s+\d+\b.*$")
-    if scene_heading.search(text):
-        parts = re.split(r"(?im)^(?=\s*SCENE\s+\d+\b)", text)
-        return [p.strip() for p in parts if p.strip()]
+    # 2) Explicit END SCENE boundaries
+    if re.search(r"(?im)^\s*END\s+SCENE\b", text):
+        parts = re.split(r"(?im)^\s*END\s+SCENE\b[^\n]*", text)
+        cleaned = [p.strip() for p in parts if p.strip()]
+        if len(cleaned) > 1:
+            return cleaned
 
-    # 3) Paragraph boundaries
+    # 3) SCENE heading boundaries (keep heading with each chunk)
+    heading_patterns = [
+        r"\s*SCENE\s+\d+\b.*$",
+        r"\s*SCENE\s*[#:|\-]?\s*\d+[A-Z]?\s*[:|\-]?.*$",
+        r"\s*(?:#{1,6}\s*)?SCENE\b.*$",
+    ]
+    for pattern in heading_patterns:
+        parts = _split_on_heading_pattern(pattern, text)
+        if len(parts) > 1:
+            return parts
+
+    # 4) Paragraph boundaries
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
     if len(paragraphs) > 1:
         return paragraphs
 
-    # 4) Sentence-window fallback (3-sentence windows)
+    # 5) Sentence-window fallback (3-sentence windows)
     sentences = [seg.strip() for seg in re.split(r"(?<=[.!?])\s+", text) if seg.strip()]
     if not sentences:
         return [text]
