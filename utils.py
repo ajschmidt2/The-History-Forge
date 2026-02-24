@@ -978,7 +978,7 @@ def _fallback_chunk_scenes(script: str, target_n: int) -> List[Scene]:
         scenes.append(
             Scene(
                 index=i,
-                title=_scene_title_from_text(excerpt, i),
+                title=_scene_title_from_text(txt2, i),
                 script_excerpt=txt2,
                 visual_intent=(
                     "Create a strong historical visual that matches this excerpt. "
@@ -1164,6 +1164,10 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
     chunk_pool = _rebalance_chunks_to_target(deduped, target)
     if not chunk_pool:
         chunk_pool = [text]
+
+    # Fallback to robust exact-count splitter if rebalancing misses the target.
+    if len(chunk_pool) != target:
+        chunk_pool = split_script_into_scene_strings(text, target)
 
     beats = _outline_beats(outline)
     scenes: list[Scene] = []
