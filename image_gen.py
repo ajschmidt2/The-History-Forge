@@ -51,12 +51,20 @@ def _resolve_api_key() -> str:
 
 
 def validate_gemini_api_key() -> str:
-    key = _resolve_api_key()
-    if not key:
+    api_key = _resolve_api_key()
+
+    # Keep validation permissive to avoid rejecting valid keys from older/newer formats.
+    if not api_key:
         raise RuntimeError(
-            "Missing Gemini API key. Set GEMINI_API_KEY in .streamlit/secrets.toml"
+            "Invalid GOOGLE_AI_STUDIO_API_KEY. Generate a valid Google AI Studio API key "
+            "and set it in Streamlit secrets as GEMINI_API_KEY (or GOOGLE_AI_STUDIO_API_KEY)."
         )
-    return key
+
+    # Ensure both env names are populated for downstream SDKs.
+    os.environ["GEMINI_API_KEY"] = api_key
+    os.environ["GOOGLE_AI_STUDIO_API_KEY"] = api_key
+
+    return api_key
 
 
 def _resolve_model() -> str:
