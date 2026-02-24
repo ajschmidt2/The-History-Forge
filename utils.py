@@ -1071,41 +1071,22 @@ def _scene_chunks_from_script(script: str) -> list[str]:
     if not text:
         return []
 
-    def _split_on_heading_pattern(pattern: str, raw_text: str) -> list[str]:
-        heading_re = re.compile(pattern, re.MULTILINE | re.IGNORECASE)
-        if not heading_re.search(raw_text):
-            return []
-        parts = re.split(rf"(?im)^(?={pattern})", raw_text)
-        return [p.strip() for p in parts if p.strip()]
-
     # 1) Explicit delimiter
     if "---SCENE_BREAK---" in text:
         return [c.strip() for c in text.split("---SCENE_BREAK---") if c.strip()]
 
-    # 2) Explicit END SCENE boundaries
-    if re.search(r"(?im)^\s*END\s+SCENE\b", text):
-        parts = re.split(r"(?im)^\s*END\s+SCENE\b[^\n]*", text)
-        cleaned = [p.strip() for p in parts if p.strip()]
-        if len(cleaned) > 1:
-            return cleaned
+    # 2) SCENE heading boundaries (keep heading with each chunk)
+    scene_heading = re.compile(r"(?im)^\s*SCENE\s+\d+\b.*$")
+    if scene_heading.search(text):
+        parts = re.split(r"(?im)^(?=\s*SCENE\s+\d+\b)", text)
+        return [p.strip() for p in parts if p.strip()]
 
-    # 3) SCENE heading boundaries (keep heading with each chunk)
-    heading_patterns = [
-        r"\s*SCENE\s+\d+\b.*$",
-        r"\s*SCENE\s*[#:|\-]?\s*\d+[A-Z]?\s*[:|\-]?.*$",
-        r"\s*(?:#{1,6}\s*)?SCENE\b.*$",
-    ]
-    for pattern in heading_patterns:
-        parts = _split_on_heading_pattern(pattern, text)
-        if len(parts) > 1:
-            return parts
-
-    # 4) Paragraph boundaries
+    # 3) Paragraph boundaries
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
     if len(paragraphs) > 1:
         return paragraphs
 
-    # 5) Sentence-window fallback (3-sentence windows)
+    # 4) Sentence-window fallback (3-sentence windows)
     sentences = [seg.strip() for seg in re.split(r"(?<=[.!?])\s+", text) if seg.strip()]
     if not sentences:
         return [text]
@@ -1120,6 +1101,38 @@ def _scene_chunks_from_script(script: str) -> list[str]:
     if window:
         chunks.append(" ".join(window).strip())
     return chunks
+
+
+
+
+def _rebalance_chunks_to_target(chunks: list[str], target: int) -> list[str]:
+    cleaned = [c.strip() for c in chunks if str(c or "").strip()]
+    if not cleaned:
+        return []
+
+    while len(cleaned) > target:
+        smallest_idx = min(range(len(cleaned)), key=lambda i: _count_words(cleaned[i]))
+        if smallest_idx == 0:
+            neighbor_idx = 1
+        elif smallest_idx == len(cleaned) - 1:
+            neighbor_idx = len(cleaned) - 2
+        else:
+            left_words = _count_words(cleaned[smallest_idx - 1])
+            right_words = _count_words(cleaned[smallest_idx + 1])
+            neighbor_idx = smallest_idx - 1 if left_words <= right_words else smallest_idx + 1
+        left_i, right_i = sorted([smallest_idx, neighbor_idx])
+        cleaned[left_i] = "\n\n".join([cleaned[left_i], cleaned[right_i]]).strip()
+        del cleaned[right_i]
+
+    while len(cleaned) < target:
+        largest_idx = max(range(len(cleaned)), key=lambda i: _count_words(cleaned[i]))
+        left, right = _split_scene_text_midpoint(cleaned[largest_idx])
+        if not right.strip() or left.strip() == cleaned[largest_idx].strip():
+            break
+        cleaned[largest_idx] = left.strip()
+        cleaned.insert(largest_idx + 1, right.strip())
+
+    return [c for c in cleaned if c.strip()]
 
 
 def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str, Any] | None = None, wpm: int = 160) -> List[Scene]:
@@ -1143,9 +1156,13 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
     if not deduped:
         deduped = [text]
 
+    chunk_pool = _rebalance_chunks_to_target(deduped, target)
+    if not chunk_pool:
+        chunk_pool = [text]
+
     beats = _outline_beats(outline)
     scenes: list[Scene] = []
-    for i, chunk in enumerate(deduped[:target], start=1):
+    for i, chunk in enumerate(chunk_pool[:target], start=1):
         beat = beats[i - 1] if i - 1 < len(beats) else {}
         beat_text = " ".join(beat.get("bullets", [])) if isinstance(beat, dict) else ""
         keyword_source = f"{beat.get('title', '') if isinstance(beat, dict) else ''} {beat_text} {chunk}"
