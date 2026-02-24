@@ -212,7 +212,8 @@ def save_project_state(project_id: str) -> None:
         "visual_style": str(st.session_state.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic"),
         "aspect_ratio": str(st.session_state.get("aspect_ratio", "16:9") or "16:9"),
         "variations_per_scene": int(st.session_state.get("variations_per_scene", 1) or 1),
-        "max_scenes": int(st.session_state.get("max_scenes", 12) or 12),
+        "num_images": int(st.session_state.get("num_images", st.session_state.get("max_scenes", 8)) or 8),
+        "max_scenes": int(st.session_state.get("max_scenes", 8) or 8),
         "scene_wpm": int(st.session_state.get("scene_wpm", 160) or 160),
         "estimated_total_runtime_sec": float(st.session_state.get("estimated_total_runtime_sec", 0.0) or 0.0),
         "scene_transition_types": st.session_state.get("scene_transition_types", []),
@@ -285,7 +286,8 @@ def load_project_state(project_id: str) -> None:
     st.session_state.visual_style = str(raw.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic")
     st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "16:9") or "16:9")
     st.session_state.variations_per_scene = int(raw.get("variations_per_scene", 1) or 1)
-    st.session_state.max_scenes = int(raw.get("max_scenes", 12) or 12)
+    st.session_state.num_images = int(raw.get("num_images", raw.get("max_scenes", 8)) or 8)
+    st.session_state.max_scenes = int(raw.get("max_scenes", 8) or 8)
     st.session_state.scene_wpm = int(raw.get("scene_wpm", 160) or 160)
     st.session_state.estimated_total_runtime_sec = float(raw.get("estimated_total_runtime_sec", 0.0) or 0.0)
     raw_transitions = raw.get("scene_transition_types", [])
@@ -340,7 +342,8 @@ def init_state() -> None:
     st.session_state.setdefault("aspect_ratio", "16:9")
     st.session_state.setdefault("variations_per_scene", 1)
 
-    st.session_state.setdefault("max_scenes", 12)
+    st.session_state.setdefault("max_scenes", 8)
+    st.session_state.setdefault("num_images", 8)
     st.session_state.setdefault("scene_wpm", 160)
     st.session_state.setdefault("estimated_total_runtime_sec", 0.0)
     st.session_state.setdefault("scenes", [])

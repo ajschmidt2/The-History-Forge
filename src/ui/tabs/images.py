@@ -54,6 +54,13 @@ def tab_create_images() -> None:
         aspect_ratio_options,
         index=aspect_ratio_options.index(current_aspect_ratio),
     )
+    st.session_state.num_images = st.slider(
+        "Number of images",
+        min_value=1,
+        max_value=75,
+        value=int(st.session_state.get("num_images", st.session_state.get("max_scenes", 8)) or 8),
+        step=1,
+    )
     st.session_state.variations_per_scene = st.slider(
         "Variations per scene",
         1,
@@ -82,7 +89,8 @@ def tab_create_images() -> None:
         generated_count = 0
         cache: dict[str, bytes] = st.session_state.get("generated_image_cache", {})
         with st.spinner("Generating images..."):
-            for s in st.session_state.scenes:
+            selected_scenes = st.session_state.scenes[: int(st.session_state.num_images)]
+            for s in selected_scenes:
                 if not (s.image_prompt or "").strip():
                     s.image_prompt = f"Create a cinematic historical visual for: {s.title}."
 

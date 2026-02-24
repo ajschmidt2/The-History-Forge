@@ -331,6 +331,7 @@ def tab_generate_script() -> None:
             st.warning("Outline must be valid JSON before script generation.")
             return
         _save_outline_json(st.session_state.outline_json_text)
+        desired = int(st.session_state.get("max_scenes", 8) or 8)
         with st.spinner("Generating script from outline..."):
             try:
                 generated_script = generate_script_from_outline(
@@ -338,6 +339,7 @@ def tab_generate_script() -> None:
                     tone=st.session_state.tone,
                     reading_level=st.session_state.reading_level,
                     pacing=st.session_state.pacing,
+                    desired_scenes=desired,
                 )
                 generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001
@@ -357,6 +359,7 @@ def tab_generate_script() -> None:
             st.warning("Enter a topic or use I'm Feeling Lucky.")
             return
         brief_for_script = st.session_state.research_brief_text if st.session_state.use_research_brief_for_script else ""
+        desired = int(st.session_state.get("max_scenes", 8) or 8)
         with st.spinner("Generating script..."):
             try:
                 generated_script = generate_script(
@@ -366,6 +369,7 @@ def tab_generate_script() -> None:
                     audience=st.session_state.audience,
                     angle=st.session_state.story_angle,
                     research_brief=brief_for_script,
+                    desired_scenes=desired,
                 )
                 generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
