@@ -14,13 +14,29 @@ def _get_secret(name: str, default: str = "") -> str:
 
 
 def _resolve_api_key() -> str:
-    key = (
-        os.getenv("GEMINI_API_KEY")
-        or os.getenv("GOOGLE_AI_STUDIO_API_KEY")
-        or st.secrets.get("GEMINI_API_KEY")
-        or st.secrets.get("GOOGLE_AI_STUDIO_API_KEY")
+    env_keys = (
+        "GEMINI_API_KEY",
+        "GOOGLE_AI_STUDIO_API_KEY",
+        "gemini_api_key",
+        "google_ai_studio_api_key",
     )
-    return str(key or "").strip()
+    for key_name in env_keys:
+        value = os.getenv(key_name, "")
+        if value:
+            return str(value).strip()
+
+    secret_keys = (
+        "GEMINI_API_KEY",
+        "GOOGLE_AI_STUDIO_API_KEY",
+        "gemini_api_key",
+        "google_ai_studio_api_key",
+    )
+    for key_name in secret_keys:
+        value = _get_secret(key_name, "")
+        if value:
+            return str(value).strip()
+
+    return ""
 
 
 def validate_gemini_api_key() -> str:
