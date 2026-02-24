@@ -27,6 +27,32 @@ def test_split_script_into_scenes_uses_scene_headings_without_delimiter() -> Non
     assert all(scene.script_excerpt.startswith("SCENE 0") for scene in scenes)
 
 
+def test_split_script_into_scenes_supports_markdown_scene_headings() -> None:
+    script = (
+        "### Scene 1: Opening\nNARRATION: Intro line.\nVISUAL INTENT: Port city.\n\n"
+        "### Scene 2: Turning Point\nNARRATION: Middle line.\nVISUAL INTENT: Fortress."
+    )
+
+    scenes = split_script_into_scenes(script, max_scenes=8, outline=None, wpm=150)
+
+    assert len(scenes) == 2
+    assert scenes[0].script_excerpt.startswith("### Scene 1")
+    assert scenes[1].script_excerpt.startswith("### Scene 2")
+
+
+def test_split_script_into_scenes_supports_end_scene_boundaries_without_delimiter() -> None:
+    script = (
+        "SCENE 01 | Opening\nNARRATION: Intro line.\nVISUAL INTENT: Port city.\nEND SCENE 01\n"
+        "SCENE 02 | Turning Point\nNARRATION: Middle line.\nVISUAL INTENT: Fortress.\nEND SCENE 02"
+    )
+
+    scenes = split_script_into_scenes(script, max_scenes=8, outline=None, wpm=150)
+
+    assert len(scenes) == 2
+    assert scenes[0].script_excerpt.startswith("SCENE 01")
+    assert scenes[1].script_excerpt.startswith("SCENE 02")
+
+
 def test_split_script_into_scenes_falls_back_to_paragraphs_then_sentence_windows() -> None:
     paragraph_script = "Para one.\n\nPara two.\n\nPara three."
     paragraph_scenes = split_script_into_scenes(paragraph_script, max_scenes=8, outline=None, wpm=150)
