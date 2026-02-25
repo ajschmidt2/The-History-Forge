@@ -14,6 +14,7 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 from src.storage import record_asset, record_assets, upsert_project
+import src.supabase_storage as sb_storage
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_schema import CaptionStyle, Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists, get_ffmpeg_exe
@@ -502,10 +503,32 @@ def tab_video_compile() -> None:
     session_images = _session_scene_images()
     if session_images:
         st.caption(f"Generated images in session: {len(session_images)}")
-        if st.button("Save generated images to assets/images", width="stretch", key="video_sync_images"):
-            saved_count = _sync_session_images(images_dir, project_name)
-            st.success(f"Saved {saved_count} generated image(s) to assets/images as s##.png.")
-            st.rerun()
+        img_cols = st.columns(2)
+        with img_cols[0]:
+            if st.button("Save generated images to assets/images", width="stretch", key="video_sync_images"):
+                saved_count = _sync_session_images(images_dir, project_name)
+                st.success(f"Saved {saved_count} generated image(s) to assets/images as s##.png.")
+                st.rerun()
+        with img_cols[1]:
+            sb_configured = sb_storage.is_configured()
+            if st.button(
+                "☁️ Upload images to Supabase",
+                width="stretch",
+                key="video_sync_images_supabase",
+                disabled=not sb_configured,
+                help="Supabase credentials not configured." if not sb_configured else "Upload session images directly to Supabase storage.",
+            ):
+                saved_count = _sync_session_images(images_dir, project_name)
+                uploaded = 0
+                for f in sorted(images_dir.glob("*.png")):
+                    url = sb_storage.upload_image(project_name, f.name, f)
+                    if url:
+                        uploaded += 1
+                if uploaded:
+                    st.success(f"Saved {saved_count} image(s) locally and uploaded {uploaded} to Supabase.")
+                else:
+                    st.warning(f"Saved {saved_count} image(s) locally, but Supabase upload failed. Check the Diagnostics page.")
+                st.rerun()
     else:
         st.caption("No generated images found in the current session.")
 
@@ -1019,8 +1042,33 @@ def tab_video_compile() -> None:
 
     if video_path.exists():
         st.video(str(video_path))
-        with video_path.open("rb") as handle:
-            st.download_button("Download video", handle, file_name="final.mp4")
+        dl_col, sb_col = st.columns(2)
+        with dl_col:
+            with video_path.open("rb") as handle:
+                st.download_button("Download video", handle, file_name="final.mp4", width="stretch")
+        with sb_col:
+            sb_configured = sb_storage.is_configured()
+            if st.button(
+                "☁️ Save project to Supabase",
+                width="stretch",
+                key="video_save_supabase",
+                type="primary",
+                disabled=not sb_configured,
+                help="Supabase credentials not configured — see the Diagnostics page." if not sb_configured else "Upload all project assets (images, audio, video) to Supabase cloud storage.",
+            ):
+                with st.spinner("Syncing project to Supabase..."):
+                    sb_storage.upsert_project(project_name, title or project_name)
+                    results = sb_storage.sync_project_assets(project_name, project_path)
+                    total = sum(len(v) for v in results.values())
+                if total:
+                    st.success(
+                        f"Saved to Supabase — "
+                        f"{len(results['image'])} image(s), "
+                        f"{len(results['audio'])} audio file(s), "
+                        f"{len(results['video'])} video(s)."
+                    )
+                else:
+                    st.warning("Project record saved but no files were uploaded. Check bucket names and policies on the Diagnostics page.")
 
     if srt_path.exists():
         st.download_button("Download captions.srt", srt_path.read_bytes(), file_name="captions.srt")
