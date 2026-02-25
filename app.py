@@ -9,6 +9,7 @@ from src.ui.tabs.images import tab_create_images
 from src.ui.tabs.paste_script import tab_paste_script
 from src.ui.tabs.prompts import tab_create_prompts
 from src.ui.tabs.scenes import tab_create_scenes
+from src.ui.tabs.supabase_diagnostics import tab_supabase_diagnostics
 from src.ui.tabs.thumbnail import tab_thumbnail_title
 from src.ui.tabs.video_studio import tab_video_compile
 from src.ui.tabs.voiceover import tab_voiceover
@@ -36,6 +37,7 @@ def main() -> None:
             "📦 Export",
             "🎬 Video Studio",
             "🖼️ Title + Thumbnail",
+            "🔌 Supabase",
         ]
     )
 
@@ -57,6 +59,8 @@ def main() -> None:
         tab_video_compile()
     with tabs[8]:
         tab_thumbnail_title()
+    with tabs[9]:
+        tab_supabase_diagnostics()
 
     save_project_state(active_project_id())
 
