@@ -361,12 +361,15 @@ def tab_create_scenes() -> None:
             key=_scene_widget_key("story_visual_", selected),
         )
         est_sec = float(getattr(selected, "estimated_duration_sec", 0.0) or 0.0)
+        _dur_min = 0.5
+        _dur_max = 300.0
+        _dur_val = max(_dur_min, min(_dur_max, est_sec if est_sec > 0 else 3.0))
         selected.estimated_duration_sec = float(
             st.number_input(
                 "Scene duration (seconds)",
-                min_value=0.5,
-                max_value=60.0,
-                value=max(0.5, est_sec if est_sec > 0 else 3.0),
+                min_value=_dur_min,
+                max_value=_dur_max,
+                value=_dur_val,
                 step=0.1,
                 key=_scene_widget_key("story_duration_", selected),
                 help="Initial values are auto-estimated from script pace; adjust per scene as needed.",
