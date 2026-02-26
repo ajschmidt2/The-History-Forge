@@ -998,7 +998,7 @@ def tab_video_compile() -> None:
                     if report:
                         st.markdown("#### Structured render report")
                         st.json(report)
-                    raise
+                    return
                 except (RuntimeError, FileNotFoundError, ValueError):
                     st.error("Video render crashed.")
                     st.markdown("#### Python traceback")
@@ -1011,7 +1011,7 @@ def tab_video_compile() -> None:
                     if report:
                         st.markdown("#### Structured render report")
                         st.json(report)
-                    raise
+                    return
                 else:
                     st.success("Render complete.")
                     _sb_store.upload_video(project_name, "final.mp4", final_output_path)
