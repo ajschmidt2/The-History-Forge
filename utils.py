@@ -18,12 +18,26 @@ from image_gen import generate_imagen_images
 # ----------------------------
 # Secrets
 # ----------------------------
+
+# Regex to detect common API-key placeholder patterns beyond the exact-match set below.
+# Catches variants like PASTE_KEHERE (typo), PASTE_API_KEY, ADD_KEY_HERE, YOUR_API_KEY, etc.
+_PLACEHOLDER_RE = re.compile(
+    r"^paste[_\-\s]"           # PASTE_KEY_HERE, PASTE_KEHERE, PASTE_API_KEY …
+    r"|[_\-\s]here$"           # ADD_KEY_HERE, YOUR_TOKEN_HERE, INSERT_SECRET_HERE …
+    r"|^your[_\-\s]"           # YOUR_API_KEY, YOUR_KEY, YOUR_TOKEN …
+    r"|^(replace[\-_]?me|fixme|todo|changeme)$",
+    re.IGNORECASE,
+)
+
+
 def _normalize_secret(value: str) -> str:
     cleaned = str(value or "").strip()
     if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"\"", "'"}:
         cleaned = cleaned[1:-1].strip()
     lowered = cleaned.lower()
     if lowered in {"paste_key_here", "your_api_key_here", "replace_me", "none", "null"}:
+        return ""
+    if _PLACEHOLDER_RE.search(cleaned):
         return ""
     return cleaned
 
@@ -105,10 +119,8 @@ def _openai_client():
 
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
     if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY not found in environment variables")
+        return None
 
-    assert "os" in globals()
-    _ = os.getenv
     from openai import OpenAI  # openai>=1.x
     return OpenAI(api_key=OPENAI_API_KEY)
 
