@@ -119,9 +119,13 @@ def flag_uncertain_claims(script: str, research_brief: str) -> str:
     client = _openai_client()
     if client is not None:
         prompt = (
-            "Review this history script and flag uncertain or weakly sourced claims. "
-            "Soften certainty where needed and append a final section titled 'Notes to Verify' "
-            "with bullet points of claims needing verification.\n\n"
+            "You are editing a history documentary script. "
+            "Identify any claims that are uncertain or weakly sourced based on the research brief. "
+            "Rewrite those sentences in place using softer, hedged language "
+            "(e.g. 'reportedly', 'possibly', 'it is believed that', 'accounts suggest'). "
+            "Do NOT list revisions, do NOT include section headers, do NOT add commentary or notes. "
+            "Return ONLY the complete revised script as clean, flowing narrative prose — "
+            "exactly as it should appear to the viewer, with no formatting or meta-text.\n\n"
             f"Research brief:\n{(research_brief or '').strip()}\n\n"
             f"Script:\n{base}"
         )
@@ -130,7 +134,7 @@ def flag_uncertain_claims(script: str, research_brief: str) -> str:
                 model="gpt-4.1-mini",
                 temperature=0.2,
                 messages=[
-                    {"role": "system", "content": "You are a cautious historical fact-check editor."},
+                    {"role": "system", "content": "You are a cautious historical fact-check editor. You apply softened language directly inline and return only the revised script text with no commentary."},
                     {"role": "user", "content": prompt},
                 ],
             )
@@ -139,7 +143,15 @@ def flag_uncertain_claims(script: str, research_brief: str) -> str:
             print("OpenAI request failed:", str(exc))
             pass
 
-    notes = _heuristic_uncertain_notes(base)
-    if not notes:
-        notes = ["- No obvious uncertainty markers detected; still verify dates, quotes, and numbers."]
-    return f"{base}\n\n## Notes to Verify\n" + "\n".join(notes)
+    # Heuristic fallback: apply simple softening substitutions in-place
+    uncertain_phrases = {
+        r"\bproved\b": "suggested",
+        r"\bundeniably\b": "reportedly",
+        r"\bdefinitely\b": "possibly",
+        r"\balways\b": "often",
+        r"\bnever\b": "rarely",
+    }
+    text = base
+    for pattern, replacement in uncertain_phrases.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text

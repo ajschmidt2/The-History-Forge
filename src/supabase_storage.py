@@ -151,6 +151,21 @@ def _upload_bytes(
         return None
 
 
+def upload_script(project_id: str, script_text: str, filename: str = "script.txt") -> Optional[str]:
+    """Upload a script as plain text to ``history-forge-scripts`` and return the public URL.
+
+    Returns None if Supabase is not configured or the upload fails.
+    """
+    if not script_text:
+        return None
+    data = script_text.encode("utf-8")
+    storage_path = f"{project_id}/scripts/{filename}"
+    url = _upload_bytes("history-forge-scripts", storage_path, data, "text/plain")
+    if url:
+        record_asset(project_id, "script", filename, url)
+    return url
+
+
 def upload_image(project_id: str, filename: str, image_path: Path) -> Optional[str]:
     """Upload a scene image to ``history-forge-images`` and return the public URL.
 

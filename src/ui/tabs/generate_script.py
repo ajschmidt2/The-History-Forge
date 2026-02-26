@@ -7,10 +7,19 @@ import streamlit as st
 
 from src.research.web_research import Source, search_topic, summarize_sources
 from src.script.refine import flag_uncertain_claims, refine_for_clarity, refine_for_retention
+from src.supabase_storage import upload_script
 from src.ui.state import active_project_id, clear_downstream, openai_error_message, save_project_state, script_ready
 from utils import generate_lucky_topic, generate_outline, generate_research_brief, generate_script, generate_script_from_outline, split_script_into_scene_strings
 
 
+
+
+def _save_script_to_supabase(project_id: str, script_text: str) -> None:
+    """Upload the final script text to Supabase Storage (best-effort, silent on failure)."""
+    try:
+        upload_script(project_id, script_text)
+    except Exception:
+        pass
 
 
 def _save_outline_json(outline_text: str) -> None:
@@ -411,6 +420,7 @@ def tab_generate_script() -> None:
         st.session_state.project_title = st.session_state.topic or st.session_state.project_title
         clear_downstream("script")
         save_project_state(active_project_id())
+        _save_script_to_supabase(active_project_id(), generated_script)
         st.toast("Script generated from outline.")
         st.rerun()
 
@@ -442,6 +452,7 @@ def tab_generate_script() -> None:
         st.session_state.project_title = st.session_state.topic or st.session_state.project_title
         clear_downstream("script")
         save_project_state(active_project_id())
+        _save_script_to_supabase(active_project_id(), generated_script)
         st.toast("Script generated.")
         st.rerun()
 
@@ -463,6 +474,7 @@ def tab_generate_script() -> None:
                 st.session_state.pending_script_text_input = cleaned_script
                 clear_downstream("script")
                 save_project_state(active_project_id())
+                _save_script_to_supabase(active_project_id(), cleaned_script)
                 st.toast("Script updated.")
                 st.rerun()
 
