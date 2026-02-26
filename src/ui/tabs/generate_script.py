@@ -207,7 +207,7 @@ def tab_generate_script() -> None:
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
                 tb = traceback.format_exc()
                 st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
-                raise
+                return
             st.session_state.project_title = st.session_state.topic
             st.toast(st.session_state.topic)
             clear_downstream("script")
@@ -311,7 +311,7 @@ def tab_generate_script() -> None:
                 except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
                     tb = traceback.format_exc()
                     st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
-                    raise
+                    return
             st.toast("Research brief generated.")
 
         st.session_state.research_sources = [
@@ -376,7 +376,7 @@ def tab_generate_script() -> None:
             except Exception as exc:  # noqa: BLE001
                 tb = traceback.format_exc()
                 st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
-                raise
+                return
         st.session_state.outline_json_text = json.dumps(outline_payload, indent=2)
         _save_outline_json(st.session_state.outline_json_text)
         st.toast("Outline generated.")
@@ -413,7 +413,7 @@ def tab_generate_script() -> None:
             except Exception as exc:  # noqa: BLE001
                 tb = traceback.format_exc()
                 st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
-                raise
+                return
         st.session_state.script_text = generated_script
         st.session_state.generated_script_text_input = generated_script
         st.session_state.pending_script_text_input = generated_script
@@ -445,7 +445,7 @@ def tab_generate_script() -> None:
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
                 tb = traceback.format_exc()
                 st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
-                raise
+                return
         st.session_state.script_text = generated_script
         st.session_state.generated_script_text_input = generated_script
         st.session_state.pending_script_text_input = generated_script

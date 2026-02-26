@@ -34,7 +34,7 @@ def tab_thumbnail_title() -> None:
             ):
                 tb = traceback.format_exc()
                 st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
-                raise
+                return
             else:
                 message = str(exc)
                 if "invalid_api_key" in message or "Incorrect API key" in message:
@@ -82,7 +82,7 @@ def tab_thumbnail_title() -> None:
             ):
                 tb = traceback.format_exc()
                 st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
-                raise
+                return
             else:
                 st.error(f"Description generation failed: {exc}")
         else:
@@ -125,7 +125,7 @@ def tab_thumbnail_title() -> None:
             ):
                 tb = traceback.format_exc()
                 st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
-                raise
+                return
             else:
                 message = str(exc)
                 if "invalid_api_key" in message or "Incorrect API key" in message:
