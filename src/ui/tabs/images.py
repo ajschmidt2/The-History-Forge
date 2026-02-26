@@ -4,6 +4,7 @@ import streamlit as st
 
 from utils import Scene, generate_image_for_scene
 from src.storage import record_asset
+import src.supabase_storage as _sb_store
 from src.ui.state import active_project_id, scenes_ready
 from src.ui.timeline_sync import sync_timeline_for_project
 
@@ -19,6 +20,7 @@ def _save_scene_image_bytes(scene: Scene, image_bytes: bytes) -> None:
     destination = images_dir / f"s{scene.index:02d}.png"
     destination.write_bytes(image_bytes)
     record_asset(active_project_id(), "image", destination)
+    _sb_store.upload_image(active_project_id(), destination.name, destination)
 
 
 

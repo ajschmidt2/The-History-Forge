@@ -221,6 +221,9 @@ def save_project_state(project_id: str) -> None:
     }
     state_path = _project_state_path(normalized)
     state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    script = payload["script_text"]
+    if script:
+        (PROJECTS_ROOT / normalized / "script.txt").write_text(script, encoding="utf-8")
 
 
 def load_project_state(project_id: str) -> None:
@@ -264,7 +267,14 @@ def load_project_state(project_id: str) -> None:
 
     st.session_state.project_title = str(raw.get("project_title", normalized.replace("-", " ").title()) or "")
     st.session_state.topic = str(raw.get("topic", "") or "")
-    st.session_state.script_text = str(raw.get("script_text", "") or "")
+    script_file = PROJECTS_ROOT / normalized / "script.txt"
+    if script_file.exists():
+        try:
+            st.session_state.script_text = script_file.read_text(encoding="utf-8")
+        except OSError:
+            st.session_state.script_text = str(raw.get("script_text", "") or "")
+    else:
+        st.session_state.script_text = str(raw.get("script_text", "") or "")
     st.session_state.script_text_input = st.session_state.script_text
     st.session_state.generated_script_text_input = st.session_state.script_text
     st.session_state.pending_script_text_input = ""

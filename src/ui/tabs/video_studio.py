@@ -14,6 +14,7 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 
 from src.storage import record_asset, record_assets, upsert_project
+import src.supabase_storage as _sb_store
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_schema import CaptionStyle, Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists, get_ffmpeg_exe
@@ -472,6 +473,7 @@ def tab_video_compile() -> None:
     project_path = projects_root / project_name
     st.caption(f"Active project ID for new assets: {project_name}")
     upsert_project(project_name, project_name.replace("_", " "))
+    _sb_store.upsert_project(project_name, project_name.replace("_", " "))
 
     images_dir = project_path / "assets/images"
     videos_dir = project_path / "assets/videos"
@@ -537,6 +539,7 @@ def tab_video_compile() -> None:
                 destination = audio_dir / "voiceover.mp3"
                 destination.write_bytes(st.session_state.voiceover_bytes)
                 record_asset(project_name, "voiceover", destination)
+                _sb_store.upload_audio(project_name, destination.name, destination)
                 st.success("Saved generated voiceover to assets/audio/voiceover.mp3.")
                 st.rerun()
 
@@ -552,6 +555,7 @@ def tab_video_compile() -> None:
             destination = audio_dir / voiceover_upload.name
             destination.write_bytes(voiceover_upload.getbuffer())
             record_asset(project_name, "voiceover", destination)
+            _sb_store.upload_audio(project_name, destination.name, destination)
             st.session_state.video_voiceover_upload_signature = voiceover_signature
             st.success(f"Saved {voiceover_upload.name} to assets/audio.")
             st.rerun()
@@ -1010,6 +1014,7 @@ def tab_video_compile() -> None:
                     raise
                 else:
                     st.success("Render complete.")
+                    _sb_store.upload_video(project_name, "final.mp4", final_output_path)
 
     st.markdown("### Render output")
     video_path = renders_dir / "final.mp4"
