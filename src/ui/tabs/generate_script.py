@@ -36,6 +36,62 @@ def _apply_refinement_passes(script: str) -> str:
     return revised
 
 
+def _extract_narration_from_structured_script(text: str) -> str:
+    """Strip scene markers and visual intent lines from structured LLM output.
+
+    When the model returns the scene-delimited format (SCENE XX | title /
+    NARRATION: ... / VISUAL INTENT: ... / END SCENE XX / ---SCENE_BREAK---),
+    this extracts only the NARRATION text and returns it as plain paragraphs
+    separated by blank lines.  Returns the original text unchanged if no
+    NARRATION: markers are found.
+    """
+    if not re.search(r"(?im)^NARRATION:", text):
+        return text
+
+    parts: list[str] = []
+    current: list[str] = []
+    state = "between"  # "between" | "narration" | "visual"
+
+    for line in text.replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+
+        if stripped == "---SCENE_BREAK---":
+            if current:
+                parts.append(" ".join(current).strip())
+                current = []
+            state = "between"
+            continue
+
+        if re.match(r"(?i)^(?:SCENE\s+\d+\b|END\s+SCENE\s+\d+\b)", stripped):
+            state = "between"
+            continue
+
+        if re.match(r"(?i)^NARRATION:", stripped):
+            if current:
+                parts.append(" ".join(current).strip())
+                current = []
+            content = re.sub(r"(?i)^NARRATION:\s*", "", stripped).strip()
+            if content:
+                current.append(content)
+            state = "narration"
+            continue
+
+        if re.match(r"(?i)^VISUAL INTENT:", stripped):
+            state = "visual"
+            continue
+
+        if state == "narration" and stripped:
+            current.append(stripped)
+
+    if current:
+        parts.append(" ".join(current).strip())
+
+    if not parts:
+        return text
+
+    return "\n\n".join(p for p in parts if p)
+
+
 def _clean_generated_script(script: str) -> str:
     text = str(script or "").strip()
     if not text:
@@ -44,6 +100,9 @@ def _clean_generated_script(script: str) -> str:
     text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     text = text.strip()
+
+    # Strip scene structure markers, keeping only NARRATION text.
+    text = _extract_narration_from_structured_script(text)
 
     # If the model wrapped narration with commentary, prefer explicit script blocks.
     revised_block = re.search(
