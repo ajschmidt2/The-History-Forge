@@ -22,7 +22,7 @@ from image_gen import generate_imagen_images
 # Regex to detect common API-key placeholder patterns beyond the exact-match set below.
 # Catches variants like PASTE_KEHERE (typo), PASTE_API_KEY, ADD_KEY_HERE, YOUR_API_KEY, etc.
 _PLACEHOLDER_RE = re.compile(
-    r"^paste[_\-\s]"           # PASTE_KEY_HERE, PASTE_KEHERE, PASTE_API_KEY …
+    r"^paste"                  # PASTE_KEY_HERE, PASTE_KEHERE, PASTEKEHERE, PASTE_API_KEY …
     r"|[_\-\s]here$"           # ADD_KEY_HERE, YOUR_TOKEN_HERE, INSERT_SECRET_HERE …
     r"|^your[_\-\s]"           # YOUR_API_KEY, YOUR_KEY, YOUR_TOKEN …
     r"|^(replace[\-_]?me|fixme|todo|changeme)$",
@@ -230,14 +230,30 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
         "Do not add any other headings or sections."
     )
 
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0.2,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.2,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        return (
+            f"# Research Brief: {topic}\n\n"
+            "## Key Facts\n"
+            "- [OpenAI request failed] Unable to generate research brief — check your API key and quota.\n"
+            f"- Topic focus: {topic}.\n\n"
+            "## Timeline\n"
+            "- [Request failed — no timeline available]\n\n"
+            "## Key People and Places\n"
+            "- [Request failed — no data available]\n\n"
+            "## Suggested Angles\n"
+            "1. [Request failed]\n\n"
+            "## Risky Claims / Uncertain Areas\n"
+            "- [Request failed — verify all claims before publishing]"
+        )
     return resp.choices[0].message.content.strip()
 
 
@@ -488,14 +504,20 @@ def generate_script(
         f"{brief_block}"
     )
 
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0.7,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        return (
+            f"[OpenAI request failed] Unable to generate script for: {topic}\n\n"
+            "Check your API key and quota, then try again."
+        )
     return resp.choices[0].message.content.strip()
 
 
@@ -518,14 +540,26 @@ def generate_lucky_topic() -> str:
         "title suitable for a short YouTube documentary."
     )
     user = "Give me one unique historical story idea. Respond with only the title."
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=1.0,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=1.0,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        return random.choice(
+            [
+                "The Lost City of Cahokia",
+                "The Great Fire of London",
+                "The Spy Who Fooled Hitler",
+                "The Silk Road's Hidden Empires",
+                "The Mystery of the Mary Celeste",
+                "The Battle Won by an Eclipse",
+            ]
+        )
     return resp.choices[0].message.content.strip().strip('"')
 
 
@@ -563,15 +597,8 @@ def rewrite_description(script: str, description: str, mode: str = "refresh") ->
             ],
         )
     except Exception:
-        beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
         return (
-            "[OpenAI request failed] Placeholder script from outline.\n\n"
-            f"Hook: {normalized_outline['hook']}\n"
-            f"Context: {normalized_outline['context']}\n"
-            f"Beats: {beat_titles}\n"
-            f"Twist: {normalized_outline['twist_or_insight']}\n"
-            f"Modern relevance: {normalized_outline['modern_relevance']}\n"
-            f"CTA: {normalized_outline['cta']}"
+            "[OpenAI request failed] Unable to rewrite description — check your API key and quota."
         )
 
     return resp.choices[0].message.content.strip()
@@ -602,14 +629,24 @@ def generate_video_titles(topic: str, script: str, count: int = 5) -> List[str]:
         f"Script excerpt:\n{script[:1200]}\n\n"
         f"Return exactly {count} titles as a JSON array of strings."
     )
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0.7,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        base = topic or "Untitled History Story"
+        return [
+            f"{base}: The Forgotten Turning Point",
+            f"The Hidden Truth Behind {base}",
+            f"{base} in 10 Minutes",
+            f"{base}: What Really Happened",
+            f"The Untold Story of {base}",
+        ][:count]
     raw = resp.choices[0].message.content.strip()
     try:
         parsed = json.loads(raw)
@@ -658,14 +695,22 @@ def generate_video_description(
         f"4) Exactly {hashtag_count} relevant hashtags at the end\n"
         "Return plain text only."
     )
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0.7,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        base = title or topic or "This history story"
+        return (
+            f"{base} changed the course of history in ways most people never hear about. "
+            "In this episode, we break down the turning points, key figures, and the real stakes behind the event.\n\n"
+            f"#{(topic or 'history').replace(' ', '')} #History #Documentary #Storytelling #WorldHistory"
+        )
     return resp.choices[0].message.content.strip()
 
 
@@ -691,14 +736,21 @@ def generate_thumbnail_prompt(topic: str, title: str, style: str) -> str:
         "Write one short prompt (1-2 sentences) for a 16:9 YouTube thumbnail image. "
         "No text, no logos, no watermarks."
     )
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0.7,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception:
+        base = title or topic or "Epic historical moment"
+        return (
+            f"{base}, {style} lighting, dramatic composition, high contrast, sharp focus, "
+            "no text, no watermark, YouTube thumbnail style, 16:9."
+        )
     return resp.choices[0].message.content.strip()
 
 
