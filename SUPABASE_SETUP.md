@@ -98,6 +98,7 @@ In the Supabase dashboard go to **Storage** and create these three buckets:
 | `history-forge-images`   | Yes     | Generated scene images     |
 | `history-forge-audio`    | Yes     | Voiceover & music files    |
 | `history-forge-videos`   | Yes     | Rendered video exports     |
+| `history-forge-scripts`  | Yes     | Generated script text files |
 
 For each bucket you also need a storage policy that allows the anon key to
 upload.  In the **Policies** tab of each bucket add:
