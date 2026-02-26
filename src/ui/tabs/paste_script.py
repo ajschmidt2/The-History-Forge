@@ -1,6 +1,6 @@
 import streamlit as st
 
-from src.ui.state import clear_downstream
+from src.ui.state import active_project_id, clear_downstream, save_project_state
 
 
 def tab_paste_script() -> None:
@@ -26,5 +26,6 @@ def tab_paste_script() -> None:
     if st.button("Use this script →", type="primary", width="stretch"):
         st.session_state.script_text = st.session_state.script_text_input
         clear_downstream("script")
+        save_project_state(active_project_id())
         st.toast("Script loaded.")
         st.rerun()
