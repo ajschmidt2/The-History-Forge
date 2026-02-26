@@ -107,10 +107,9 @@ def _auto_match_scene_lengths_to_voiceover_equal(scenes: list[Scene]) -> tuple[b
     if not durations:
         return False, "No scenes available to adjust."
 
-    _dur_widget_max = 300.0
     for idx, (scene, duration) in enumerate(zip(scenes, durations), start=1):
         scene.estimated_duration_sec = float(duration)
-        st.session_state[_scene_widget_key("story_duration_", scene)] = min(_dur_widget_max, float(duration))
+        st.session_state[_scene_widget_key("story_duration_", scene)] = float(duration)
 
     st.session_state[_timeline_state_key()] = _captions_from_scenes(scenes)
     _recompute_estimated_runtime()
@@ -362,17 +361,11 @@ def tab_create_scenes() -> None:
             key=_scene_widget_key("story_visual_", selected),
         )
         est_sec = float(getattr(selected, "estimated_duration_sec", 0.0) or 0.0)
-        _dur_min = 0.5
-        _dur_max = 300.0
-        _dur_val = max(_dur_min, min(_dur_max, est_sec if est_sec > 0 else 3.0))
-        _dur_key = _scene_widget_key("story_duration_", selected)
-        if st.session_state.get(_dur_key, 0) > _dur_max:
-            st.session_state[_dur_key] = _dur_val
+        _dur_val = max(0.5, est_sec if est_sec > 0 else 3.0)
         selected.estimated_duration_sec = float(
             st.number_input(
                 "Scene duration (seconds)",
-                min_value=_dur_min,
-                max_value=_dur_max,
+                min_value=0.5,
                 value=_dur_val,
                 step=0.1,
                 key=_scene_widget_key("story_duration_", selected),
