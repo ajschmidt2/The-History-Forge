@@ -2,6 +2,7 @@ import streamlit as st
 
 from image_gen import validate_gemini_api_key
 from src.storage import upsert_project
+import src.supabase_storage as _sb_store
 from src.ui.state import active_project_id, init_state, render_project_selector, require_passcode, save_project_state
 from src.ui.tabs.export import tab_export
 from src.ui.tabs.generate_script import tab_generate_script
@@ -24,6 +25,7 @@ def main() -> None:
 
     render_project_selector()
     upsert_project(active_project_id(), st.session_state.project_title)
+    _sb_store.upsert_project(active_project_id(), st.session_state.project_title)
 
     tabs = st.tabs(
         [

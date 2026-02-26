@@ -4,6 +4,7 @@ import streamlit as st
 
 from utils import Scene, generate_voiceover
 from src.storage import record_asset
+import src.supabase_storage as _sb_store
 from src.ui.state import active_project_id, save_voice_id, script_ready
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.timeline_builder import compute_scene_durations
@@ -114,6 +115,7 @@ def tab_voiceover() -> None:
                 output_path.write_bytes(audio)
                 st.session_state.voiceover_saved_path = str(output_path)
                 record_asset(active_project_id(), "voiceover", output_path)
+                _sb_store.upload_audio(active_project_id(), output_path.name, output_path)
                 _auto_adjust_scene_lengths_to_voiceover(output_path)
                 st.toast("Voiceover generated and scene timings auto-adjusted.")
             st.rerun()
