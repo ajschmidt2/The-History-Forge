@@ -111,18 +111,19 @@ def get_secret(name: str, default: str = "") -> str:
 # Clients
 # ----------------------------
 def _openai_client():
-    # Load from secrets first, then enforce explicit env presence for downstream consistency.
+    # _get_secret normalises placeholder values (e.g. "PASTE_KEHERE") to "".
+    # Avoid a raw os.getenv fallback here: if the env var is already set to a
+    # placeholder, the raw read would bypass normalisation and send the literal
+    # placeholder string to OpenAI, causing a 401 AuthenticationError.
     key = _get_secret("openai_api_key", "").strip()
-    if key:
-        os.environ.setdefault("OPENAI_API_KEY", key)
-        os.environ.setdefault("openai_api_key", key)
-
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
-    if not OPENAI_API_KEY:
+    if not key:
         return None
 
+    os.environ.setdefault("OPENAI_API_KEY", key)
+    os.environ.setdefault("openai_api_key", key)
+
     from openai import OpenAI  # openai>=1.x
-    return OpenAI(api_key=OPENAI_API_KEY)
+    return OpenAI(api_key=key)
 
 
 def _elevenlabs_api_key() -> str:
