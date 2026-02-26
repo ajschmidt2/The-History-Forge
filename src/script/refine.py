@@ -9,20 +9,19 @@ from utils import get_secret
 def _openai_client():
     import os  # defensive local import to prevent future refactor/import-order regressions
 
+    # get_secret normalises placeholder values (e.g. "PASTE_KEY_HERE") to "".
+    # Avoid raw os.getenv fallbacks here: they bypass normalisation and would
+    # send placeholder strings to OpenAI, causing a 401 AuthenticationError.
     key = get_secret("openai_api_key", "").strip()
     if not key:
-        key = os.getenv("OPENAI_API_KEY", os.getenv("openai_api_key", "")).strip()
-    if key:
-        os.environ.setdefault("OPENAI_API_KEY", key)
-        os.environ.setdefault("openai_api_key", key)
-
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
-    if not OPENAI_API_KEY:
         return None
+
+    os.environ.setdefault("OPENAI_API_KEY", key)
+    os.environ.setdefault("openai_api_key", key)
 
     from openai import OpenAI
 
-    return OpenAI(api_key=OPENAI_API_KEY)
+    return OpenAI(api_key=key)
 
 
 def _fallback_tighten(script: str) -> str:
