@@ -103,12 +103,10 @@ def _openai_client():
         os.environ.setdefault("OPENAI_API_KEY", key)
         os.environ.setdefault("openai_api_key", key)
 
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
+    OPENAI_API_KEY = _normalize_secret(os.getenv("OPENAI_API_KEY", "") or os.getenv("openai_api_key", ""))
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY not found in environment variables")
 
-    assert "os" in globals()
-    _ = os.getenv
     from openai import OpenAI  # openai>=1.x
     return OpenAI(api_key=OPENAI_API_KEY)
 
