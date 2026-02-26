@@ -117,7 +117,12 @@ def _openai_client():
         os.environ.setdefault("OPENAI_API_KEY", key)
         os.environ.setdefault("openai_api_key", key)
 
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("openai_api_key")
+    # Normalize env values so a stale placeholder (e.g. set before this session
+    # started) cannot slip through even when _get_secret already returned "".
+    OPENAI_API_KEY = (
+        _normalize_secret(os.getenv("OPENAI_API_KEY", ""))
+        or _normalize_secret(os.getenv("openai_api_key", ""))
+    )
     if not OPENAI_API_KEY:
         return None
 
