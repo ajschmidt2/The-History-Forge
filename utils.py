@@ -114,11 +114,15 @@ def _openai_client():
     # Load from secrets first, then enforce explicit env presence for downstream consistency.
     key = _get_secret("openai_api_key", "").strip()
     if key:
-        os.environ.setdefault("OPENAI_API_KEY", key)
-        os.environ.setdefault("openai_api_key", key)
+        # Valid key — write it so the openai library can also pick it up.
+        os.environ["OPENAI_API_KEY"] = key
+        os.environ["openai_api_key"] = key
+    else:
+        # No valid key found; remove any stale placeholder value that a previous
+        # call may have written via setdefault before placeholder detection existed.
+        os.environ.pop("OPENAI_API_KEY", None)
+        os.environ.pop("openai_api_key", None)
 
-    # Normalize env values so a stale placeholder (e.g. set before this session
-    # started) cannot slip through even when _get_secret already returned "".
     OPENAI_API_KEY = (
         _normalize_secret(os.getenv("OPENAI_API_KEY", ""))
         or _normalize_secret(os.getenv("openai_api_key", ""))
