@@ -120,14 +120,10 @@ if st.button("Run Write Test", type="primary"):
 st.subheader("5. Storage Buckets")
 
 EXPECTED_BUCKETS = ["history-forge-images", "history-forge-audio", "history-forge-videos"]
-try:
-    buckets_resp = sb.storage.list_buckets()
-    existing = {b.name for b in buckets_resp} if buckets_resp else set()
-    for name in EXPECTED_BUCKETS:
-        if name in existing:
-            st.success(f"Bucket `{name}` exists.")
-        else:
-            st.warning(f"Bucket `{name}` NOT found. Create it in the Supabase dashboard under Storage.")
-except Exception as exc:
-    st.error(f"Could not list storage buckets: {exc}")
-    st.caption("This may be normal if the anon key lacks storage.read permissions.")
+
+for name in EXPECTED_BUCKETS:
+    try:
+        sb.storage.from_(name).list()
+        st.success(f"Bucket `{name}` exists and is accessible.")
+    except Exception:
+        st.warning(f"Bucket `{name}` NOT found or not accessible. Create it in the Supabase dashboard under Storage.")
