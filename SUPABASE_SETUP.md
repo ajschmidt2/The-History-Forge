@@ -126,25 +126,37 @@ Replace `<bucket-name>` with the actual bucket name for each policy.
 
 ## 6. AI Video Generation credentials
 
-The **AI Video Generator** tab supports two providers.  Add the relevant keys
-to `.streamlit/secrets.toml` (see step 2):
+The **AI Video Generator** tab supports two providers.
+
+### 6a) Google Veo via Supabase Edge Function (recommended)
+
+Veo must run server-side so the frontend does **not** hold a short-lived Google
+access token. This repository includes an Edge Function at
+`supabase/functions/veo-generate/index.ts`.
+
+Deploy it:
+
+```bash
+supabase functions deploy veo-generate
+```
+
+Set function secrets (never commit these to `.env`):
+
+```bash
+supabase secrets set GOOGLE_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+supabase secrets set GOOGLE_CLOUD_PROJECT_ID='my-project-123'
+supabase secrets set GOOGLE_CLOUD_LOCATION='us-central1'
+```
+
+Then add only Supabase invocation secrets to `.streamlit/secrets.toml`:
 
 ```toml
-# --- Google Veo (via Vertex AI) ---
-# Your Google Cloud project ID (e.g. "my-project-123")
-GOOGLE_CLOUD_PROJECT_ID = "PASTE_PROJECT_ID_HERE"
-
-# Vertex AI region — us-central1 is the most commonly supported
-GOOGLE_CLOUD_LOCATION = "us-central1"
-
-# Short-lived OAuth 2.0 access token for Vertex AI.
-# Generate with: gcloud auth print-access-token
-# In production this should come from a backend service account, not the frontend.
-GOOGLE_ACCESS_TOKEN = "PASTE_ACCESS_TOKEN_HERE"
+SUPABASE_URL = "https://<your-ref>.supabase.co"
+SUPABASE_KEY = "<your-anon-public-key>"
+# Optional if you rename the function:
+SUPABASE_VEO_FUNCTION_NAME = "veo-generate"
 
 # --- OpenAI Sora ---
-# Your OpenAI API key (same key used for script generation)
-# If openai_api_key is already set above, this key is reused automatically.
 openai_api_key = "sk-..."
 ```
 

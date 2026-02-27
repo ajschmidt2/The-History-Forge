@@ -1,12 +1,10 @@
 """AI video generation service — Google Veo and OpenAI Sora.
 
-Both providers follow an async / long-running-operation pattern:
-  1. Submit a generation job.
-  2. Poll until the job is done (typically 30 – 120 s).
-  3. Download the resulting video bytes.
-  4. Optionally save to a local directory.
-  5. Upload to the ``generated-videos`` Supabase bucket.
-  6. Record the asset in the ``assets`` table.
+Both providers follow an async pattern:
+  • Veo is proxied through a Supabase Edge Function (server-side Vertex AI call).
+  • Sora is called directly from this backend module.
+  • The resulting video bytes are optionally saved locally, uploaded to the
+    ``generated-videos`` Supabase bucket, and recorded in the ``assets`` table.
 
 Public API
 ----------
@@ -24,7 +22,6 @@ Public API
 from __future__ import annotations
 
 import base64
-import io
 import time
 import uuid
 from pathlib import Path
@@ -56,15 +53,14 @@ _SORA_SIZE_MAP: dict[str, str] = {
 # Credential helpers
 # ---------------------------------------------------------------------------
 
-_VEO_PLACEHOLDER = {"PASTE_PROJECT_ID_HERE", "PASTE_ACCESS_TOKEN_HERE", ""}
+_VEO_PLACEHOLDER = {"", "https://xxxxxxxxxxxx.supabase.co", "your-anon-public-key"}
 
 
 def veo_configured() -> bool:
-    """Return True when all three Veo / Vertex AI credentials are present."""
-    project_id = get_secret("GOOGLE_CLOUD_PROJECT_ID")
-    token = get_secret("GOOGLE_ACCESS_TOKEN")
-    return bool(project_id) and project_id not in _VEO_PLACEHOLDER \
-        and bool(token) and token not in _VEO_PLACEHOLDER
+    """Return True when the frontend can invoke the Veo Supabase Edge Function."""
+    url = get_secret("SUPABASE_URL")
+    key = get_secret("SUPABASE_KEY")
+    return bool(url) and url not in _VEO_PLACEHOLDER and bool(key) and key not in _VEO_PLACEHOLDER
 
 
 def sora_configured() -> bool:
@@ -74,105 +70,51 @@ def sora_configured() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Internal: Google Veo via Vertex AI
+# Internal: Google Veo via Supabase Edge Function
 # ---------------------------------------------------------------------------
 
-_VEO_MODEL = "veo-2.0-generate-001"
 _POLL_INTERVAL_S = 8   # seconds between status polls
 _MAX_POLLS = 90        # up to 12 minutes total
 
 
-def _veo_headers() -> dict[str, str]:
-    token = get_secret("GOOGLE_ACCESS_TOKEN")
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
 def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
-    """Submit a Veo job and block until the video is ready.  Returns MP4 bytes."""
-    project_id = get_secret("GOOGLE_CLOUD_PROJECT_ID")
-    location = get_secret("GOOGLE_CLOUD_LOCATION") or "us-central1"
+    """Generate Veo video bytes by invoking a Supabase Edge Function."""
+    supabase_url = get_secret("SUPABASE_URL")
+    supabase_key = get_secret("SUPABASE_KEY")
+    function_name = get_secret("SUPABASE_VEO_FUNCTION_NAME", "veo-generate")
 
-    if not project_id or not get_secret("GOOGLE_ACCESS_TOKEN"):
+    if not supabase_url or not supabase_key:
         raise ValueError(
-            "Google Veo credentials are not configured.  "
-            "Set GOOGLE_CLOUD_PROJECT_ID and GOOGLE_ACCESS_TOKEN in secrets.toml."
+            "Veo is not configured. Set SUPABASE_URL and SUPABASE_KEY so the app can "
+            "call the Supabase Edge Function."
         )
 
-    # Normalise to a value Veo actually accepts; fall back to 16:9.
     veo_ratio = aspect_ratio if aspect_ratio in VEO_ASPECT_RATIOS else "16:9"
-
-    submit_url = (
-        f"https://{location}-aiplatform.googleapis.com/v1beta1"
-        f"/projects/{project_id}/locations/{location}"
-        f"/publishers/google/models/{_VEO_MODEL}:predictLongRunning"
-    )
-    payload = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {
-            "aspectRatio": veo_ratio,
-            "videoDurationSeconds": 8,
-            "sampleCount": 1,
-        },
+    invoke_url = f"{supabase_url.rstrip('/')}/functions/v1/{function_name}"
+    headers = {
+        "Authorization": f"Bearer {supabase_key}",
+        "apikey": supabase_key,
+        "Content-Type": "application/json",
     }
+    payload = {"prompt": prompt, "aspectRatio": veo_ratio}
 
-    resp = requests.post(submit_url, json=payload, headers=_veo_headers(), timeout=60)
+    resp = requests.post(invoke_url, json=payload, headers=headers, timeout=300)
     if resp.status_code == 401:
         raise PermissionError(
-            "Vertex AI returned 401 Unauthorized.  "
-            "Your GOOGLE_ACCESS_TOKEN may have expired — regenerate it with "
-            "`gcloud auth print-access-token`."
+            "Supabase Edge Function returned 401 Unauthorized. Check SUPABASE_KEY "
+            "(anon key) and function JWT settings."
         )
     resp.raise_for_status()
 
-    operation_name = resp.json().get("name")
-    if not operation_name:
-        raise RuntimeError(f"Veo did not return an operation name.  Response: {resp.text[:500]}")
+    body = resp.json()
+    if body.get("error"):
+        raise RuntimeError(str(body["error"]))
 
-    # Poll the long-running operation
-    op_url = (
-        f"https://{location}-aiplatform.googleapis.com/v1beta1/{operation_name}"
-    )
+    b64 = body.get("videoBase64")
+    if not b64:
+        raise RuntimeError("Veo Edge Function returned no videoBase64 payload.")
 
-    for attempt in range(_MAX_POLLS):
-        time.sleep(_POLL_INTERVAL_S)
-        op_resp = requests.get(op_url, headers=_veo_headers(), timeout=30)
-        op_resp.raise_for_status()
-        op_data = op_resp.json()
-
-        if not op_data.get("done"):
-            continue  # Still running
-
-        error = op_data.get("error")
-        if error:
-            raise RuntimeError(
-                f"Veo generation failed: {error.get('message', op_data)}"
-            )
-
-        predictions = op_data.get("response", {}).get("predictions", [])
-        if not predictions:
-            raise RuntimeError("Veo reported done but returned no predictions.")
-
-        pred = predictions[0]
-
-        # Case 1: inline base-64 encoded video
-        b64 = pred.get("bytesBase64Encoded") or pred.get("videoData")
-        if b64:
-            return base64.b64decode(b64)
-
-        # Case 2: GCS URI — download via signed URL in the prediction
-        video_url = pred.get("videoUrl") or pred.get("gcsUri")
-        if video_url and video_url.startswith("http"):
-            dl = requests.get(video_url, timeout=120)
-            dl.raise_for_status()
-            return dl.content
-
-        raise RuntimeError(
-            f"Veo returned an unexpected prediction format: {str(pred)[:300]}"
-        )
-
-    raise TimeoutError(
-        f"Veo generation did not complete within {_MAX_POLLS * _POLL_INTERVAL_S} seconds."
-    )
+    return base64.b64decode(b64)
 
 
 # ---------------------------------------------------------------------------
