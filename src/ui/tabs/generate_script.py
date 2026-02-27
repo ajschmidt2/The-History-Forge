@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import streamlit as st
+from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
 
 from src.research.web_research import Source, search_topic, summarize_sources
 from src.script.refine import flag_uncertain_claims, refine_for_clarity, refine_for_retention
@@ -11,7 +12,20 @@ from src.supabase_storage import upload_script
 from src.ui.state import active_project_id, clear_downstream, openai_error_message, save_project_state, script_ready
 from utils import generate_lucky_topic, generate_outline, generate_research_brief, generate_script, generate_script_from_outline, split_script_into_scene_strings
 
+_OPENAI_API_ERRORS = (AuthenticationError, RateLimitError, APIConnectionError, APIError)
 
+
+
+
+def _show_openai_error(exc: Exception) -> None:
+    """Display an OpenAI error.  Known API errors get a clean one-line message; unexpected
+    errors include the traceback for easier debugging."""
+    msg = openai_error_message(exc)
+    if isinstance(exc, _OPENAI_API_ERRORS):
+        st.error(msg)
+    else:
+        tb = traceback.format_exc()
+        st.error(f"{msg}\n\nTRACEBACK:\n{tb}")
 
 
 def _save_script_to_supabase(project_id: str, script_text: str) -> None:
@@ -205,8 +219,7 @@ def tab_generate_script() -> None:
             try:
                 st.session_state.topic = generate_lucky_topic()
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
-                tb = traceback.format_exc()
-                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                _show_openai_error(exc)
                 return
             st.session_state.project_title = st.session_state.topic
             st.toast(st.session_state.topic)
@@ -309,8 +322,7 @@ def tab_generate_script() -> None:
                         angle=st.session_state.story_angle,
                     )
                 except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
-                    tb = traceback.format_exc()
-                    st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                    _show_openai_error(exc)
                     return
             st.toast("Research brief generated.")
 
@@ -374,8 +386,7 @@ def tab_generate_script() -> None:
                     angle=st.session_state.story_angle,
                 )
             except Exception as exc:  # noqa: BLE001
-                tb = traceback.format_exc()
-                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                _show_openai_error(exc)
                 return
         st.session_state.outline_json_text = json.dumps(outline_payload, indent=2)
         _save_outline_json(st.session_state.outline_json_text)
@@ -411,8 +422,7 @@ def tab_generate_script() -> None:
                 )
                 generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001
-                tb = traceback.format_exc()
-                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                _show_openai_error(exc)
                 return
         st.session_state.script_text = generated_script
         st.session_state.generated_script_text_input = generated_script
@@ -443,8 +453,7 @@ def tab_generate_script() -> None:
                 )
                 generated_script = _clean_generated_script(_apply_refinement_passes(generated_script))
             except Exception as exc:  # noqa: BLE001 - surface OpenAI errors to user
-                tb = traceback.format_exc()
-                st.error(f"{openai_error_message(exc)}\n\nTRACEBACK:\n{tb}")
+                _show_openai_error(exc)
                 return
         st.session_state.script_text = generated_script
         st.session_state.generated_script_text_input = generated_script

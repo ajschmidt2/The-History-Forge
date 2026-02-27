@@ -126,6 +126,21 @@ def _openai_client():
     return OpenAI(api_key=key)
 
 
+def _reraise_api_errors(exc: Exception) -> None:
+    """Re-raise OpenAI authentication and rate-limit errors so the UI layer can surface them.
+
+    Generic network or parsing failures are intentionally swallowed here so callers can
+    return a graceful placeholder.  Auth and quota errors, however, require user action and
+    must reach the UI so openai_error_message() can display actionable guidance.
+    """
+    try:
+        from openai import AuthenticationError, RateLimitError
+    except ImportError:
+        return
+    if isinstance(exc, (AuthenticationError, RateLimitError)):
+        raise exc from exc
+
+
 def _elevenlabs_api_key() -> str:
     return _get_secret("elevenlabs_api_key", "").strip()
 
@@ -239,7 +254,8 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         return (
             f"# Research Brief: {topic}\n\n"
             "## Key Facts\n"
@@ -374,7 +390,8 @@ def generate_outline(
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         return _default_outline(topic_clean)
 
     raw = resp.choices[0].message.content.strip()
@@ -432,7 +449,8 @@ def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_lev
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
         return (
             "[OpenAI request failed] Placeholder script from outline.\n\n"
@@ -513,7 +531,8 @@ def generate_script(
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         return (
             f"[OpenAI request failed] Unable to generate script for: {topic}\n\n"
             "Check your API key and quota, then try again."
@@ -549,7 +568,8 @@ def generate_lucky_topic() -> str:
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         return random.choice(
             [
                 "The Lost City of Cahokia",
@@ -596,7 +616,8 @@ def rewrite_description(script: str, description: str, mode: str = "refresh") ->
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         return (
             "[OpenAI request failed] Unable to rewrite description — check your API key and quota."
         )
@@ -638,7 +659,8 @@ def generate_video_titles(topic: str, script: str, count: int = 5) -> List[str]:
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         base = topic or "Untitled History Story"
         return [
             f"{base}: The Forgotten Turning Point",
@@ -704,7 +726,8 @@ def generate_video_description(
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         base = title or topic or "This history story"
         return (
             f"{base} changed the course of history in ways most people never hear about. "
@@ -745,7 +768,8 @@ def generate_thumbnail_prompt(topic: str, title: str, style: str) -> str:
                 {"role": "user", "content": user},
             ],
         )
-    except Exception:
+    except Exception as exc:
+        _reraise_api_errors(exc)
         base = title or topic or "Epic historical moment"
         return (
             f"{base}, {style} lighting, dramatic composition, high contrast, sharp focus, "

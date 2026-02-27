@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import List
 
-from utils import get_secret
+from utils import get_secret, _reraise_api_errors
 
 
 def _openai_client():
@@ -64,6 +64,7 @@ def refine_for_clarity(script: str) -> str:
         )
         return resp.choices[0].message.content.strip()
     except Exception as exc:
+        _reraise_api_errors(exc)
         print("OpenAI request failed:", str(exc))
         return _fallback_tighten(base)
 
@@ -94,6 +95,7 @@ def refine_for_retention(script: str) -> str:
         )
         return resp.choices[0].message.content.strip()
     except Exception as exc:
+        _reraise_api_errors(exc)
         print("OpenAI request failed:", str(exc))
         return _fallback_tighten(base)
 
@@ -139,8 +141,8 @@ def flag_uncertain_claims(script: str, research_brief: str) -> str:
             )
             return resp.choices[0].message.content.strip()
         except Exception as exc:
+            _reraise_api_errors(exc)
             print("OpenAI request failed:", str(exc))
-            pass
 
     # Heuristic fallback: apply simple softening substitutions in-place
     uncertain_phrases = {
