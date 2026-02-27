@@ -7,10 +7,18 @@ from google import genai
 import streamlit as st
 
 
+_PLACEHOLDER_VALUES = {
+    "paste_key_here", "your_api_key_here", "replace_me", "none", "null", "",
+    "aiza...", "your-api-key", "your_key_here",
+}
+
+
 def _normalize_secret(value: str) -> str:
     cleaned = str(value or "").strip()
     if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"\"", "'"}:
         cleaned = cleaned[1:-1].strip()
+    if cleaned.lower() in _PLACEHOLDER_VALUES:
+        return ""
     return cleaned
 
 
