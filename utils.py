@@ -1340,6 +1340,8 @@ def generate_prompts_for_scenes(
     scenes: List[Scene],
     tone: str,
     style: str = "Photorealistic cinematic",
+    characters: Optional[List[dict]] = None,
+    objects: Optional[List[dict]] = None,
 ) -> List[Scene]:
     if not scenes:
         return scenes
@@ -1347,22 +1349,53 @@ def generate_prompts_for_scenes(
     client = _openai_client()
     style_phrase = style.strip() or "Photorealistic cinematic"
 
+    # Build subject consistency block from defined characters and objects
+    valid_chars = [
+        c for c in (characters or [])
+        if str(c.get("name", "")).strip() and str(c.get("description", "")).strip()
+    ][:5]
+    valid_objs = [
+        o for o in (objects or [])
+        if str(o.get("name", "")).strip() and str(o.get("description", "")).strip()
+    ][:14]
+
+    consistency_lines: List[str] = []
+    if valid_chars or valid_objs:
+        consistency_lines.append(
+            "SUBJECT CONSISTENCY — when any of these characters or objects appear in the scene, "
+            "reproduce their visual description verbatim:"
+        )
+        for c in valid_chars:
+            consistency_lines.append(f"  Character '{c['name'].strip()}': {c['description'].strip()}")
+        for o in valid_objs:
+            consistency_lines.append(f"  Object '{o['name'].strip()}': {o['description'].strip()}")
+    consistency_block = "\n".join(consistency_lines)
+
     # fallback (no OpenAI) — still ensures prompts exist
     if client is None:
         for s in scenes:
-            s.image_prompt = (
-                f"Style: {style_phrase}. Tone: {tone}.\n"
-                f"{s.visual_intent}\n"
-                f"Scene excerpt: {s.script_excerpt}\n"
-                "No text overlays, captions, logos, or watermarks. High detail."
-            )
+            parts = [
+                f"Style: {style_phrase}. Tone: {tone}.",
+                s.visual_intent,
+                f"Scene excerpt: {s.script_excerpt}",
+                "No text overlays, captions, logos, or watermarks. High detail.",
+            ]
+            if consistency_block:
+                parts.append(consistency_block)
+            s.image_prompt = "\n".join(parts)
         return scenes
 
     packed = [
         {"index": s.index, "title": s.title, "text": s.script_excerpt, "visual_intent": s.visual_intent}
         for s in scenes
     ]
-    payload = {
+    constraints = [
+        "No text overlays, captions, logos, or watermarks.",
+        "Be specific about subject, setting, era cues, lighting, mood, camera feel.",
+        "Explicitly state the era/time period and setting grounded in the excerpt.",
+        "Match the selected style strongly.",
+    ]
+    payload: dict = {
         "tone": tone,
         "style": style_phrase,
         "task": (
@@ -1372,13 +1405,21 @@ def generate_prompts_for_scenes(
         ),
         "output": {"format": "json", "field": "prompts"},
         "scenes": packed,
-        "constraints": [
-            "No text overlays, captions, logos, or watermarks.",
-            "Be specific about subject, setting, era cues, lighting, mood, camera feel.",
-            "Explicitly state the era/time period and setting grounded in the excerpt.",
-            "Match the selected style strongly."
-        ],
+        "constraints": constraints,
     }
+    if valid_chars or valid_objs:
+        payload["subject_consistency"] = {
+            "characters": [
+                {"name": c["name"].strip(), "description": c["description"].strip()} for c in valid_chars
+            ],
+            "objects": [
+                {"name": o["name"].strip(), "description": o["description"].strip()} for o in valid_objs
+            ],
+        }
+        constraints.append(
+            "For any character or object listed in subject_consistency that appears in the scene, "
+            "include their exact visual description in the prompt."
+        )
 
     prompts: List[str] = []
     try:
@@ -1405,18 +1446,18 @@ def generate_prompts_for_scenes(
 
     for i, s in enumerate(scenes):
         p = prompts[i].strip()
-        context = (
-            f"Visual intent: {s.visual_intent}\n"
-            f"Scene excerpt: {s.script_excerpt}\n"
+        context_parts = [
+            f"Visual intent: {s.visual_intent}",
+            f"Scene excerpt: {s.script_excerpt}",
             "Include the time period and location inferred from the excerpt. "
             "Call out architecture, clothing, and props that fit the era. "
-            "No text overlays, captions, logos, or watermarks. High detail."
-        )
+            "No text overlays, captions, logos, or watermarks. High detail.",
+        ]
+        if consistency_block:
+            context_parts.append(consistency_block)
+        context = "\n".join(context_parts)
         if not p:
-            p = (
-                f"Style: {style_phrase}. Tone: {tone}.\n"
-                f"{context}"
-            )
+            p = f"Style: {style_phrase}. Tone: {tone}.\n{context}"
         else:
             p = f"{p}\n\n{context}"
         s.image_prompt = p

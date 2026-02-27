@@ -242,6 +242,8 @@ def save_project_state(project_id: str) -> None:
         "estimated_total_runtime_sec": float(st.session_state.get("estimated_total_runtime_sec", 0.0) or 0.0),
         "scene_transition_types": st.session_state.get("scene_transition_types", []),
         "scenes": [_scene_to_serializable(scene) for scene in scenes if isinstance(scene, Scene)],
+        "character_registry": st.session_state.get("character_registry", []),
+        "object_registry": st.session_state.get("object_registry", []),
     }
     state_path = _project_state_path(normalized)
     state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -280,6 +282,8 @@ def load_project_state(project_id: str) -> None:
         st.session_state.estimated_total_runtime_sec = 0.0
         st.session_state.scenes = []
         st.session_state.scene_transition_types = []
+        st.session_state.character_registry = []
+        st.session_state.object_registry = []
         return
 
     try:
@@ -326,6 +330,11 @@ def load_project_state(project_id: str) -> None:
     st.session_state.estimated_total_runtime_sec = float(raw.get("estimated_total_runtime_sec", 0.0) or 0.0)
     raw_transitions = raw.get("scene_transition_types", [])
     st.session_state.scene_transition_types = raw_transitions if isinstance(raw_transitions, list) else []
+
+    raw_characters = raw.get("character_registry", [])
+    st.session_state.character_registry = raw_characters if isinstance(raw_characters, list) else []
+    raw_objects = raw.get("object_registry", [])
+    st.session_state.object_registry = raw_objects if isinstance(raw_objects, list) else []
 
     scenes: list[Scene] = []
     for scene_raw in raw.get("scenes", []):
@@ -398,6 +407,8 @@ def init_state() -> None:
     st.session_state.setdefault("video_description_direction", "")
     st.session_state.setdefault("video_description_text", "")
     st.session_state.setdefault("generated_image_cache", {})
+    st.session_state.setdefault("character_registry", [])
+    st.session_state.setdefault("object_registry", [])
 
     if not st.session_state.project_id:
         existing = _available_project_ids()
