@@ -961,7 +961,11 @@ def tab_video_compile() -> None:
             render_timeline_path = timeline_path
             if allow_silent_build and timeline.meta.include_voiceover:
                 voice_path = timeline.meta.voiceover.path if timeline.meta.voiceover else ""
-                if not voice_path or not Path(voice_path).exists() or Path(voice_path).stat().st_size <= 0:
+                try:
+                    _voice_size = Path(voice_path).stat().st_size if voice_path and Path(voice_path).exists() else 0
+                except OSError:
+                    _voice_size = 0
+                if not voice_path or not Path(voice_path).exists() or _voice_size <= 0:
                     timeline.meta.include_voiceover = False
                     timeline.meta.voiceover = None
                     render_timeline_path = renders_dir / "timeline.silent.json"
@@ -999,7 +1003,7 @@ def tab_video_compile() -> None:
                         st.markdown("#### Structured render report")
                         st.json(report)
                     return
-                except (RuntimeError, FileNotFoundError, ValueError):
+                except Exception:
                     st.error("Video render crashed.")
                     st.markdown("#### Python traceback")
                     st.code(traceback.format_exc(), language="python")
