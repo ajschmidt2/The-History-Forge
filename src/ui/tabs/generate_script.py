@@ -10,7 +10,7 @@ from src.research.web_research import Source, search_topic, summarize_sources
 from src.script.refine import flag_uncertain_claims, refine_for_clarity, refine_for_retention
 from src.supabase_storage import upload_script
 from src.ui.state import active_project_id, clear_downstream, openai_error_message, save_project_state, script_ready
-from utils import generate_lucky_topic, generate_outline, generate_research_brief, generate_script, generate_script_from_outline, split_script_into_scene_strings
+from utils import edit_script_with_direction, generate_lucky_topic, generate_outline, generate_research_brief, generate_script, generate_script_from_outline, split_script_into_scene_strings
 
 _OPENAI_API_ERRORS = (AuthenticationError, RateLimitError, APIConnectionError, APIError)
 
@@ -486,6 +486,36 @@ def tab_generate_script() -> None:
                 _save_script_to_supabase(active_project_id(), cleaned_script)
                 st.toast("Script updated.")
                 st.rerun()
+
+            st.divider()
+            st.session_state.setdefault("script_edit_direction", "")
+            st.text_input(
+                "Direction for script edit",
+                key="script_edit_direction",
+                placeholder="e.g. make it shorter, add more humor, simplify for younger audiences",
+                help="Describe how you want the script revised, then click Apply Direction.",
+            )
+            if st.button("Apply Direction", width="stretch"):
+                direction = st.session_state.script_edit_direction.strip()
+                if not direction:
+                    st.warning("Enter a direction before applying.")
+                else:
+                    current_script = st.session_state.generated_script_text_input
+                    with st.spinner("Applying direction..."):
+                        try:
+                            revised = edit_script_with_direction(current_script, direction)
+                        except Exception as exc:
+                            _show_openai_error(exc)
+                            revised = None
+                    if revised:
+                        cleaned = _clean_generated_script(revised)
+                        st.session_state.script_text = cleaned
+                        st.session_state.pending_script_text_input = cleaned
+                        clear_downstream("script")
+                        save_project_state(active_project_id())
+                        _save_script_to_supabase(active_project_id(), cleaned)
+                        st.toast("Script updated with direction.")
+                        st.rerun()
 
         with st.expander("Splitter debug", expanded=False):
             splitter_debug = st.checkbox(
