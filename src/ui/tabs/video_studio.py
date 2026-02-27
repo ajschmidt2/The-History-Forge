@@ -481,6 +481,16 @@ def tab_video_compile() -> None:
     music_dir = project_path / "assets/music"
     renders_dir = project_path / "renders"
 
+    fetched_from_cloud = {"image": 0, "audio": 0, "video": 0}
+    if _sb_store.is_configured():
+        fetched_from_cloud = _sb_store.pull_project_assets(project_name, project_path)
+        fetched_total = sum(fetched_from_cloud.values())
+        if fetched_total > 0:
+            st.success(
+                "Loaded assets from Supabase "
+                f"(images: {fetched_from_cloud['image']}, audio: {fetched_from_cloud['audio']}, videos: {fetched_from_cloud['video']})."
+            )
+
     images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
     videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}])
     media_files = sorted(images + videos, key=_media_sort_key)
@@ -500,6 +510,14 @@ def tab_video_compile() -> None:
     cols[0].metric("Scene media", len(media_files))
     cols[1].metric("Voiceover files", len(audio_files))
     cols[2].metric("Music files", len(music_files))
+
+    if _sb_store.is_configured() and st.button("Refresh assets from Supabase", width="stretch", key="video_pull_assets"):
+        fetched = _sb_store.pull_project_assets(project_name, project_path)
+        st.success(
+            "Synced from Supabase "
+            f"(images: {fetched['image']}, audio: {fetched['audio']}, videos: {fetched['video']})."
+        )
+        st.rerun()
 
     session_images = _session_scene_images()
     if session_images:
