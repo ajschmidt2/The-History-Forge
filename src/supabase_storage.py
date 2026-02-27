@@ -11,6 +11,7 @@ Buckets expected in Supabase Storage
   history-forge-images   — generated scene images
   history-forge-audio    — voiceover / music files
   history-forge-videos   — rendered video exports
+  generated-videos       — AI-generated videos (Veo / Sora)
 
 Tables expected in Supabase Database
 --------------------------------------
@@ -243,6 +244,30 @@ def upload_video(project_id: str, filename: str, video_path: Path) -> Optional[s
     url = _upload_bytes("history-forge-videos", storage_path, data, "video/mp4")
     if url:
         record_asset(project_id, "video", filename, url)
+    return url
+
+
+def upload_generated_video(
+    project_id: str,
+    filename: str,
+    video_bytes: bytes,
+    prompt: str = "",
+    provider: str = "",
+) -> Optional[str]:
+    """Upload an AI-generated video to ``generated-videos`` and return the public URL.
+
+    Also records the asset in the ``assets`` table with asset_type
+    ``generated_video`` and stores *prompt* / *provider* in the filename
+    field as metadata (callers may pass a descriptive filename).
+
+    Returns None if Supabase is not configured or the upload fails.
+    """
+    if not video_bytes:
+        return None
+    storage_path = f"{project_id}/generated-videos/{filename}"
+    url = _upload_bytes("generated-videos", storage_path, video_bytes, "video/mp4")
+    if url:
+        record_asset(project_id, "generated_video", filename, url)
     return url
 
 
