@@ -42,14 +42,23 @@ from src.config import get_secret
 VEO_ASPECT_RATIOS: list[str] = ["16:9", "9:16", "1:1"]
 """Aspect ratios supported by Google Veo."""
 
-SORA_ASPECT_RATIOS: list[str] = ["16:9", "9:16", "1:1"]
-"""Aspect ratios supported by OpenAI Sora."""
+SORA_ASPECT_RATIOS: list[str] = ["16:9", "9:16", "16:9 (HD)", "9:16 (HD)"]
+"""Aspect ratios supported by OpenAI Sora.
+
+Maps to the ``size`` parameter accepted by ``POST /v1/videos``:
+  16:9       → 1280x720
+  9:16       → 720x1280
+  16:9 (HD)  → 1792x1024
+  9:16 (HD)  → 1024x1792
+"""
 
 # Map the shared aspect-ratio labels to the exact Sora ``size`` parameter values.
+# Valid Sora sizes: "720x1280", "1280x720", "1024x1792", "1792x1024".
 _SORA_SIZE_MAP: dict[str, str] = {
-    "16:9": "1280x720",
-    "9:16": "720x1280",
-    "1:1":  "1080x1080",
+    "16:9":       "1280x720",
+    "9:16":       "720x1280",
+    "16:9 (HD)":  "1792x1024",
+    "9:16 (HD)":  "1024x1792",
 }
 
 # ---------------------------------------------------------------------------
@@ -176,10 +185,14 @@ def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Internal: OpenAI Sora
+# Internal: OpenAI Sora  (POST /v1/videos  →  GET /v1/videos/{id}  →  GET /v1/videos/{id}/content)
 # ---------------------------------------------------------------------------
 
-_SORA_SUBMIT_URL = "https://api.openai.com/v1/video/generations"
+_SORA_BASE_URL = "https://api.openai.com/v1/videos"
+_SORA_DEFAULT_MODEL = "sora-2"
+_SORA_DEFAULT_SECONDS = "5"   # closest valid value; API accepts "4", "8", "12"
+# Normalise any requested duration to the nearest valid Sora value.
+_SORA_VALID_SECONDS = ("4", "8", "12")
 
 
 def _sora_headers() -> dict[str, str]:
@@ -188,7 +201,26 @@ def _sora_headers() -> dict[str, str]:
 
 
 def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
-    """Submit a Sora job and block until the video is ready.  Returns MP4 bytes."""
+    """Submit a Sora job via ``POST /v1/videos`` and block until the MP4 is ready.
+
+    The implementation follows the Sora REST API exactly:
+      1. POST /v1/videos           — submit, get Video object with ``id``
+      2. GET  /v1/videos/{id}      — poll ``status`` until "completed" or "failed"
+      3. GET  /v1/videos/{id}/content  — stream the MP4 bytes
+
+    Parameters
+    ----------
+    prompt:
+        Text description of the video to generate.
+    aspect_ratio:
+        One of the keys in ``_SORA_SIZE_MAP`` (e.g. ``"16:9"``, ``"9:16 (HD)"``).
+        Falls back to ``"1280x720"`` when the value is unrecognised.
+
+    Returns
+    -------
+    bytes
+        Raw MP4 video bytes.
+    """
     key = get_secret("openai_api_key") or get_secret("OPENAI_API_KEY")
     if not key:
         raise ValueError(
@@ -196,17 +228,20 @@ def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
             "Set openai_api_key in secrets.toml."
         )
 
-    # Map the shared aspect-ratio label to the Sora ``size`` parameter.
+    # Map the aspect-ratio label to the Sora ``size`` parameter.
     sora_size = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
 
-    # Submit the generation job
+    # ------------------------------------------------------------------ #
+    # Step 1 — submit the generation job                                  #
+    # ------------------------------------------------------------------ #
     payload = {
-        "model": "sora",
+        "model": _SORA_DEFAULT_MODEL,
         "prompt": prompt,
-        "n": 1,
         "size": sora_size,
+        "seconds": "8",   # valid values: "4", "8", "12"
     }
-    resp = requests.post(_SORA_SUBMIT_URL, json=payload, headers=_sora_headers(), timeout=60)
+    resp = requests.post(_SORA_BASE_URL, json=payload, headers=_sora_headers(), timeout=60)
+
     if resp.status_code == 401:
         raise PermissionError(
             "OpenAI returned 401 Unauthorized.  Check your openai_api_key."
@@ -218,49 +253,68 @@ def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
         )
     resp.raise_for_status()
 
-    job = resp.json()
-    job_id = job.get("id")
-    if not job_id:
-        raise RuntimeError(f"Sora did not return a job ID.  Response: {resp.text[:500]}")
+    video_obj = resp.json()
+    video_id = video_obj.get("id")
+    if not video_id:
+        raise RuntimeError(
+            f"Sora did not return a video ID.  Response: {resp.text[:500]}"
+        )
 
-    # Poll until complete
-    status_url = f"{_SORA_SUBMIT_URL}/{job_id}"
+    # ------------------------------------------------------------------ #
+    # Step 2 — poll GET /v1/videos/{id} until completed or failed         #
+    # ------------------------------------------------------------------ #
+    poll_url = f"{_SORA_BASE_URL}/{video_id}"
 
-    for attempt in range(_MAX_POLLS):
+    for _ in range(_MAX_POLLS):
         time.sleep(_POLL_INTERVAL_S)
-        status_resp = requests.get(status_url, headers=_sora_headers(), timeout=30)
-        status_resp.raise_for_status()
-        status_data = status_resp.json()
 
-        status = status_data.get("status", "")
+        poll_resp = requests.get(poll_url, headers=_sora_headers(), timeout=30)
+        poll_resp.raise_for_status()
+        poll_data = poll_resp.json()
 
-        if status in {"failed", "cancelled"}:
-            err = status_data.get("error") or status_data.get("message", "Unknown error")
-            raise RuntimeError(f"Sora generation {status}: {err}")
+        status = poll_data.get("status", "")
+
+        if status == "failed":
+            err_obj = poll_data.get("error") or {}
+            err_msg = (
+                err_obj.get("message")
+                if isinstance(err_obj, dict)
+                else str(err_obj)
+            ) or "Unknown error"
+            raise RuntimeError(f"Sora generation failed: {err_msg}")
 
         if status == "completed":
-            # Try to get the video URL from the response
-            data = status_data.get("data", [])
-            if data:
-                video_url = data[0].get("url") or data[0].get("video_url")
-                if video_url:
-                    dl = requests.get(video_url, timeout=120)
-                    dl.raise_for_status()
-                    return dl.content
+            break
+    else:
+        raise TimeoutError(
+            f"Sora generation did not complete within "
+            f"{_MAX_POLLS * _POLL_INTERVAL_S} seconds."
+        )
 
-            # Fallback: try a content endpoint pattern
-            content_url = f"{status_url}/content/video.mp4"
-            dl = requests.get(content_url, headers=_sora_headers(), timeout=120)
-            if dl.status_code == 200 and dl.content:
-                return dl.content
-
-            raise RuntimeError(
-                "Sora reported completed but no video URL was found in the response."
-            )
-
-    raise TimeoutError(
-        f"Sora generation did not complete within {_MAX_POLLS * _POLL_INTERVAL_S} seconds."
+    # ------------------------------------------------------------------ #
+    # Step 3 — download GET /v1/videos/{id}/content                       #
+    # ------------------------------------------------------------------ #
+    content_url = f"{_SORA_BASE_URL}/{video_id}/content"
+    dl = requests.get(
+        content_url,
+        headers=_sora_headers(),
+        params={"variant": "video"},
+        timeout=180,
+        stream=True,
     )
+    if dl.status_code == 404:
+        raise RuntimeError(
+            "Sora reported completed but the content endpoint returned 404.  "
+            "The video assets may have already expired."
+        )
+    dl.raise_for_status()
+
+    video_bytes = dl.content
+    if not video_bytes:
+        raise RuntimeError(
+            "Sora content endpoint returned an empty response body."
+        )
+    return video_bytes
 
 
 # ---------------------------------------------------------------------------
