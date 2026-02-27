@@ -109,10 +109,10 @@ def tab_ai_video_generator() -> None:
     if not available:
         st.error(
             "**No video generation providers are configured.**\n\n"
-            "Add credentials to `.streamlit/secrets.toml`:\n"
-            "- **Google Veo**: set `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_CLOUD_LOCATION`, "
-            "and `GOOGLE_ACCESS_TOKEN`.\n"
+            "Configure providers before generating:\n"
+            "- **Google Veo**: deploy the Supabase Edge Function and set `SUPABASE_URL` plus `SUPABASE_KEY` (or `SUPABASE_ANON_KEY`) in app secrets.\n"
             "- **OpenAI Sora**: set `openai_api_key`.\n\n"
+            "Veo credentials must be stored as **Supabase function secrets**, not in `.env` or frontend secrets.\n"
             "See `SUPABASE_SETUP.md` → *Section 6* for details."
         )
 
