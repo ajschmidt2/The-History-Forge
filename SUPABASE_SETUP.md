@@ -153,6 +153,8 @@ Then add only Supabase invocation secrets to `.streamlit/secrets.toml`:
 ```toml
 SUPABASE_URL = "https://<your-ref>.supabase.co"
 SUPABASE_KEY = "<your-anon-public-key>"
+# Or use this key name if your existing setup already uses it:
+# SUPABASE_ANON_KEY = "<your-anon-public-key>"
 # Optional if you rename the function:
 SUPABASE_VEO_FUNCTION_NAME = "veo-generate"
 

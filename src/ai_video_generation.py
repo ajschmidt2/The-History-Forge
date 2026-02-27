@@ -53,14 +53,24 @@ _SORA_SIZE_MAP: dict[str, str] = {
 # Credential helpers
 # ---------------------------------------------------------------------------
 
-_VEO_PLACEHOLDER = {"", "https://xxxxxxxxxxxx.supabase.co", "your-anon-public-key"}
+_PLACEHOLDER_URLS = {"", "https://xxxxxxxxxxxx.supabase.co"}
+_PLACEHOLDER_KEYS = {"", "your-anon-public-key", "your-anon-key-here"}
+
+
+def _supabase_invoke_key() -> str:
+    """Return the best available Supabase key for invoking Edge Functions."""
+    return (
+        get_secret("SUPABASE_KEY")
+        or get_secret("SUPABASE_ANON_KEY")
+        or get_secret("SUPABASE_SERVICE_ROLE_KEY")
+    )
 
 
 def veo_configured() -> bool:
     """Return True when the frontend can invoke the Veo Supabase Edge Function."""
     url = get_secret("SUPABASE_URL")
-    key = get_secret("SUPABASE_KEY")
-    return bool(url) and url not in _VEO_PLACEHOLDER and bool(key) and key not in _VEO_PLACEHOLDER
+    key = _supabase_invoke_key()
+    return bool(url) and url not in _PLACEHOLDER_URLS and bool(key) and key not in _PLACEHOLDER_KEYS
 
 
 def sora_configured() -> bool:
@@ -80,13 +90,13 @@ _MAX_POLLS = 90        # up to 12 minutes total
 def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
     """Generate Veo video bytes by invoking a Supabase Edge Function."""
     supabase_url = get_secret("SUPABASE_URL")
-    supabase_key = get_secret("SUPABASE_KEY")
+    supabase_key = _supabase_invoke_key()
     function_name = get_secret("SUPABASE_VEO_FUNCTION_NAME", "veo-generate")
 
     if not supabase_url or not supabase_key:
         raise ValueError(
-            "Veo is not configured. Set SUPABASE_URL and SUPABASE_KEY so the app can "
-            "call the Supabase Edge Function."
+            "Veo is not configured. Set SUPABASE_URL and one of "
+            "SUPABASE_KEY / SUPABASE_ANON_KEY so the app can call the Supabase Edge Function."
         )
 
     veo_ratio = aspect_ratio if aspect_ratio in VEO_ASPECT_RATIOS else "16:9"
@@ -101,8 +111,8 @@ def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
     resp = requests.post(invoke_url, json=payload, headers=headers, timeout=300)
     if resp.status_code == 401:
         raise PermissionError(
-            "Supabase Edge Function returned 401 Unauthorized. Check SUPABASE_KEY "
-            "(anon key) and function JWT settings."
+            "Supabase Edge Function returned 401 Unauthorized. Check your Supabase invoke key "
+            "(SUPABASE_KEY/SUPABASE_ANON_KEY) and function JWT settings."
         )
     resp.raise_for_status()
 
