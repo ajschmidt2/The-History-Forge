@@ -10,6 +10,7 @@ from uuid import uuid4
 import streamlit as st
 from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
 
+import src.supabase_storage as _sb_store
 from src.storage import delete_project_records
 
 
@@ -89,6 +90,29 @@ def slugify_project_id(value: str) -> str:
 def _existing_project_ids() -> list[str]:
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
     return sorted([p.name for p in PROJECTS_ROOT.iterdir() if p.is_dir()])
+
+
+def _supabase_project_ids() -> list[str]:
+    try:
+        raw_projects = _sb_store.list_projects()
+    except Exception:
+        return []
+
+    project_ids: list[str] = []
+    for raw in raw_projects:
+        if not isinstance(raw, dict):
+            continue
+        candidate = str(raw.get("id") or raw.get("title") or "").strip()
+        if not candidate:
+            continue
+        project_ids.append(slugify_project_id(candidate))
+    return project_ids
+
+
+def _available_project_ids() -> list[str]:
+    merged = set(_existing_project_ids())
+    merged.update(_supabase_project_ids())
+    return sorted(merged)
 
 
 def _matching_project_dirs(project_id_or_name: str) -> list[Path]:
@@ -376,7 +400,7 @@ def init_state() -> None:
     st.session_state.setdefault("generated_image_cache", {})
 
     if not st.session_state.project_id:
-        existing = _existing_project_ids()
+        existing = _available_project_ids()
         if existing:
             st.session_state.project_id = existing[0]
             load_project_state(existing[0])
@@ -390,7 +414,7 @@ def active_project_id() -> str:
 
 
 def render_project_selector() -> None:
-    existing = _existing_project_ids()
+    existing = _available_project_ids()
     new_label = "➕ New project"
 
     current = active_project_id()
@@ -410,7 +434,7 @@ def render_project_selector() -> None:
         options,
         index=options.index(st.session_state.get("project_selector", default_value)),
         key="project_selector",
-        help="All generated assets are saved under data/projects/<project_id>/...",
+        help="Projects are loaded from local storage and Supabase; generated assets save under data/projects/<project_id>/...",
     )
 
     if selected_option == new_label:
@@ -453,7 +477,7 @@ def render_project_selector() -> None:
                 st.warning("Check the confirmation box before deleting.")
                 return
             delete_project(selected_option)
-            remaining = _existing_project_ids()
+            remaining = _available_project_ids()
             if remaining:
                 st.session_state.project_id = remaining[0]
                 load_project_state(remaining[0])
