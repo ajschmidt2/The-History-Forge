@@ -154,7 +154,32 @@ def _reraise_api_errors(exc: Exception) -> None:
 
 
 def _elevenlabs_api_key() -> str:
-    return _get_secret("elevenlabs_api_key", "").strip()
+    key_names = ("elevenlabs_api_key", "ELEVENLABS_API_KEY")
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets"):
+            for k in key_names:
+                try:
+                    val = _normalize_secret(str(st.secrets[k]))
+                    if val:
+                        return val
+                except (KeyError, AttributeError):
+                    pass
+            # nested: [elevenlabs] / api_key
+            for section in ("elevenlabs", "ELEVENLABS"):
+                try:
+                    val = _normalize_secret(str(st.secrets[section]["api_key"]))
+                    if val:
+                        return val
+                except (KeyError, AttributeError, TypeError):
+                    pass
+    except Exception:
+        pass
+    for k in key_names:
+        val = _normalize_secret(os.environ.get(k, ""))
+        if val:
+            return val
+    return ""
 
 
 # ----------------------------
