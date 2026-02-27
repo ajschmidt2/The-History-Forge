@@ -80,6 +80,8 @@ def _render_scene(
     ffmpeg_commands: list[list[str]],
     command_timeout_sec: float | None,
 ) -> None:
+    if scene.duration <= 0:
+        raise ValueError(f"Scene '{scene.id}' has invalid duration {scene.duration}s (must be > 0).")
     source_path = Path(scene.image_path)
     is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
     if is_video:
@@ -264,9 +266,14 @@ def _assert_filter_complex_arg(cmd: list[str]) -> None:
     assert filter_graph.strip(), "filtergraph argument must not be empty"
 
 def _ffmpeg_version() -> str:
-    result = subprocess.run(["ffmpeg", "-version"], check=False, capture_output=True, text=True)
-    version_line = (result.stdout or result.stderr).splitlines()
-    return version_line[0].strip() if version_line else "unknown"
+    try:
+        from .utils import resolve_ffmpeg_exe
+        ffmpeg_exe = resolve_ffmpeg_exe()
+        result = subprocess.run([ffmpeg_exe, "-version"], check=False, capture_output=True, text=True)
+        version_line = (result.stdout or result.stderr).splitlines()
+        return version_line[0].strip() if version_line else "unknown"
+    except Exception:
+        return "unknown"
 
 
 def _tail_log_lines(log_path: Path | None, lines: int = 50) -> list[str]:
@@ -280,11 +287,14 @@ def _tail_log_lines(log_path: Path | None, lines: int = 50) -> list[str]:
 
 def _scene_cache_key(scene, fps: int, width: int, height: int) -> str:
     source_path = Path(scene.image_path)
-    source_stat = source_path.stat()
+    try:
+        source_stat = source_path.stat()
+    except OSError:
+        source_stat = None
     payload = {
         "image_path": str(source_path.resolve()),
-        "size": source_stat.st_size,
-        "mtime_ns": source_stat.st_mtime_ns,
+        "size": source_stat.st_size if source_stat else None,
+        "mtime_ns": source_stat.st_mtime_ns if source_stat else None,
         "duration": scene.duration,
         "fps": fps,
         "width": width,
@@ -383,7 +393,7 @@ def render_video_from_timeline(
                         transition_types=getattr(timeline.meta, "transition_types", []),
                         command_timeout_sec=command_timeout_sec,
                     )
-                except RuntimeError:
+                except (RuntimeError, subprocess.CalledProcessError):
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
                             handle.write("Crossfade graph failed; falling back to concat.\n")
