@@ -126,6 +126,37 @@ def list_projects() -> list[dict]:
         return []
 
 
+def _list_storage_objects(bucket: str, prefix: str) -> list[dict]:
+    """Return object metadata under *prefix* for a bucket."""
+    sb = get_client()
+    if sb is None:
+        return []
+
+    normalized_prefix = str(prefix or "").strip("/")
+    try:
+        listing = sb.storage.from_(bucket).list(normalized_prefix)
+    except Exception:
+        return []
+
+    if isinstance(listing, list):
+        return [item for item in listing if isinstance(item, dict)]
+    return []
+
+
+def _download_storage_object(bucket: str, storage_path: str) -> Optional[bytes]:
+    """Download a file from Supabase Storage and return bytes."""
+    sb = get_client()
+    if sb is None:
+        return None
+    try:
+        payload = sb.storage.from_(bucket).download(storage_path)
+    except Exception:
+        return None
+    if isinstance(payload, bytes):
+        return payload
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Storage (file upload) operations
 # ---------------------------------------------------------------------------
@@ -248,5 +279,45 @@ def sync_project_assets(project_id: str, project_dir: Path) -> dict[str, list[st
                 url = upload_video(project_id, f.name, f)
                 if url:
                     results["video"].append(url)
+
+    return results
+
+
+def pull_project_assets(project_id: str, project_dir: Path) -> dict[str, int]:
+    """Download image/audio/video assets for *project_id* from Supabase Storage.
+
+    Returns counts of newly downloaded files keyed by asset type.
+    """
+    results = {"image": 0, "audio": 0, "video": 0}
+    if not project_id:
+        return results
+
+    targets = [
+        ("image", "history-forge-images", f"{project_id}/images", project_dir / "assets" / "images"),
+        ("audio", "history-forge-audio", f"{project_id}/audio", project_dir / "assets" / "audio"),
+        ("video", "history-forge-videos", f"{project_id}/videos", project_dir / "assets" / "videos"),
+    ]
+
+    for asset_type, bucket, prefix, local_dir in targets:
+        objects = _list_storage_objects(bucket, prefix)
+        if not objects:
+            continue
+        local_dir.mkdir(parents=True, exist_ok=True)
+        for obj in objects:
+            name = str(obj.get("name") or "").strip()
+            if not name or "/" in name:
+                continue
+            destination = local_dir / name
+            if destination.exists() and destination.stat().st_size > 0:
+                continue
+            remote_path = f"{prefix}/{name}"
+            payload = _download_storage_object(bucket, remote_path)
+            if not payload:
+                continue
+            try:
+                destination.write_bytes(payload)
+            except OSError:
+                continue
+            results[asset_type] += 1
 
     return results
