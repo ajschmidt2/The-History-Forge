@@ -58,11 +58,13 @@ def _resolve_api_key() -> str:
     return ""
 
 
-def validate_gemini_api_key() -> str:
+def validate_gemini_api_key(*, required: bool = True) -> str:
     api_key = _resolve_api_key()
 
     # Keep validation permissive to avoid rejecting valid keys from older/newer formats.
     if not api_key:
+        if not required:
+            return ""
         raise RuntimeError(
             "Invalid GOOGLE_AI_STUDIO_API_KEY. Generate a valid Google AI Studio API key "
             "and set it in Streamlit secrets as GEMINI_API_KEY (or GOOGLE_AI_STUDIO_API_KEY)."

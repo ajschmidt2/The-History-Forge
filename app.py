@@ -17,7 +17,9 @@ from src.ui.tabs.voiceover import tab_voiceover
 
 def main() -> None:
     st.set_page_config(page_title="The History Forge", layout="wide")
-    validate_gemini_api_key()
+    # Allow the app shell to load even when image generation credentials
+    # are missing; image generation paths still validate strictly when used.
+    validate_gemini_api_key(required=False)
     require_passcode()
     init_state()
     st.title("The History Forge")
