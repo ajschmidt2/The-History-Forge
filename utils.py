@@ -92,6 +92,18 @@ def _get_secret(name: str, default: str = "") -> str:
                         os.environ.setdefault("OPENAI_API_KEY", value)
                         os.environ.setdefault("openai_api_key", value)
                         return value
+
+            if "elevenlabs" in name.lower():
+                nested_paths = [
+                    ("elevenlabs", "api_key"),
+                    ("elevenlabs", "ELEVENLABS_API_KEY"),
+                    ("ELEVENLABS", "api_key"),
+                    ("ELEVENLABS", "API_KEY"),
+                ]
+                for path in nested_paths:
+                    value = _secret_from_mapping(st.secrets, path)
+                    if value:
+                        return value
     except Exception:
         pass
 
