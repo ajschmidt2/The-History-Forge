@@ -4,6 +4,7 @@ from image_gen import validate_gemini_api_key
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.ui.state import active_project_id, init_state, render_project_selector, require_passcode, save_project_state
+from src.ui.tabs.ai_video_generator import tab_ai_video_generator
 from src.ui.tabs.export import tab_export
 from src.ui.tabs.generate_script import tab_generate_script
 from src.ui.tabs.images import tab_create_images
@@ -40,6 +41,7 @@ def main() -> None:
             "📦 Export",
             "🎬 Video Studio",
             "🖼️ Title + Thumbnail",
+            "🎥 AI Video Generator",
         ]
     )
 
@@ -61,6 +63,8 @@ def main() -> None:
         tab_video_compile()
     with tabs[8]:
         tab_thumbnail_title()
+    with tabs[9]:
+        tab_ai_video_generator()
 
     save_project_state(active_project_id())
 

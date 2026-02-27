@@ -91,14 +91,15 @@ CREATE POLICY "anon full access" ON assets   FOR ALL TO anon USING (true) WITH C
 
 ## 5. Create Storage buckets
 
-In the Supabase dashboard go to **Storage** and create these three buckets:
+In the Supabase dashboard go to **Storage** and create these buckets:
 
-| Bucket name              | Public? | Purpose                    |
-|--------------------------|---------|----------------------------|
-| `history-forge-images`   | Yes     | Generated scene images     |
-| `history-forge-audio`    | Yes     | Voiceover & music files    |
-| `history-forge-videos`   | Yes     | Rendered video exports     |
-| `history-forge-scripts`  | Yes     | Generated script text files |
+| Bucket name              | Public? | Purpose                             |
+|--------------------------|---------|-------------------------------------|
+| `history-forge-images`   | Yes     | Generated scene images              |
+| `history-forge-audio`    | Yes     | Voiceover & music files             |
+| `history-forge-videos`   | Yes     | Rendered video exports              |
+| `history-forge-scripts`  | Yes     | Generated script text files         |
+| `generated-videos`       | Yes     | AI-generated videos (Veo / Sora)    |
 
 For each bucket you also need a storage policy that allows the anon key to
 upload.  In the **Policies** tab of each bucket add:
@@ -117,9 +118,42 @@ CREATE POLICY "public read" ON storage.objects
 
 Replace `<bucket-name>` with the actual bucket name for each policy.
 
+> **Shortcut for `generated-videos`:** The file
+> `migrations/001_generated_videos_bucket.sql` creates the bucket *and* its
+> RLS policies in one step.  Paste it into the Supabase SQL Editor and run it.
+
 ---
 
-## 6. Verify the setup
+## 6. AI Video Generation credentials
+
+The **AI Video Generator** tab supports two providers.  Add the relevant keys
+to `.streamlit/secrets.toml` (see step 2):
+
+```toml
+# --- Google Veo (via Vertex AI) ---
+# Your Google Cloud project ID (e.g. "my-project-123")
+GOOGLE_CLOUD_PROJECT_ID = "PASTE_PROJECT_ID_HERE"
+
+# Vertex AI region — us-central1 is the most commonly supported
+GOOGLE_CLOUD_LOCATION = "us-central1"
+
+# Short-lived OAuth 2.0 access token for Vertex AI.
+# Generate with: gcloud auth print-access-token
+# In production this should come from a backend service account, not the frontend.
+GOOGLE_ACCESS_TOKEN = "PASTE_ACCESS_TOKEN_HERE"
+
+# --- OpenAI Sora ---
+# Your OpenAI API key (same key used for script generation)
+# If openai_api_key is already set above, this key is reused automatically.
+openai_api_key = "sk-..."
+```
+
+If a provider's credentials are missing the app shows a friendly warning and
+disables that option in the provider selector.
+
+---
+
+## 7. Verify the setup
 
 Start the app and navigate to the **Supabase Diagnostics** page in the
 sidebar.  All five checks should pass.
