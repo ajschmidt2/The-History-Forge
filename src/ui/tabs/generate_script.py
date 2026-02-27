@@ -115,14 +115,52 @@ def _extract_narration_from_structured_script(text: str) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def _clean_generated_script(script: str) -> str:
+def _clean_generated_script(script: str, light: bool = False) -> str:
+    """Clean a generated or edited script.
+
+    Parameters
+    ----------
+    script:
+        Raw script text to clean.
+    light:
+        When *True*, skip the aggressive structural stripping that is designed
+        for fresh LLM output containing SCENE markers / commentary.  Use this
+        flag when the input is already a cleaned plain-text script (e.g. after
+        "Apply Direction" editing) so that valid narration is never stripped.
+    """
     text = str(script or "").strip()
     if not text:
         return ""
 
+    # Strip markdown code fences produced by some models.
     text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     text = text.strip()
+
+    if light:
+        # Light mode: only strip obvious LLM preamble / fences; preserve the
+        # narration exactly as returned.  This is safe to use on scripts that
+        # have already been cleaned once (e.g. after "Apply Direction").
+        raw_lines = [line.rstrip() for line in text.splitlines()]
+        cleaned_lines: list[str] = []
+        for raw_line in raw_lines:
+            line = raw_line.strip()
+            if not line:
+                if cleaned_lines and cleaned_lines[-1] != "":
+                    cleaned_lines.append("")
+                continue
+            # Only strip obvious LLM meta-commentary lines.
+            if re.match(r"(?i)^\s*(?:here(?:’|’)s|below\s+is|let\s+me\s+know|i\s+can\s+also)\b", line):
+                continue
+            if re.match(r"(?i)^\s*(?:visual|b-?roll|on-?screen(?:\s+text)?|sfx|music|camera|transition)\s*:", line):
+                continue
+            cleaned_lines.append(line)
+        candidate = "\n".join(cleaned_lines)
+        candidate = re.sub(r"\n{3,}", "\n\n", candidate).strip()
+        # Never return empty — fall back to the original stripped text.
+        return candidate if candidate else text
+
+    # --- Full cleaning mode (for fresh LLM output with SCENE markers etc.) ---
 
     # Strip scene structure markers, keeping only NARRATION text.
     text = _extract_narration_from_structured_script(text)
@@ -144,7 +182,7 @@ def _clean_generated_script(script: str) -> str:
     trailing_section_pattern = (
         r"(?im)^\s*(?:#{1,6}\s*|\*{0,2})"
         r"(?:notes?\s+to\s+verify|verification(?:\s+notes?)?|fact-?check(?:ing)?(?:\s+notes?)?|"
-        r"sources?(?:\s+used)?|citations?|references?|editor(?:'s)?\s+notes?|"
+        r"sources?(?:\s+used)?|citations?|references?|editor(?:’s)?\s+notes?|"
         r"production\s+notes?|visual\s+notes?)"
         r"(?:\*{0,2})\s*:?\s*$"
     )
@@ -161,7 +199,7 @@ def _clean_generated_script(script: str) -> str:
     )[0].strip()
 
     raw_lines = [line.rstrip() for line in text.splitlines()]
-    cleaned_lines: list[str] = []
+    cleaned_lines = []
     for raw_line in raw_lines:
         line = raw_line.strip()
         if not line:
@@ -173,7 +211,7 @@ def _clean_generated_script(script: str) -> str:
         line = re.sub(r"(?im)^\s*(?:script|narration|voiceover\s+script)\s*:\s*", "", line)
         line = re.sub(r"(?im)^\s*(?:narrator|voiceover|host)\s*:\s*", "", line)
 
-        if re.match(r"(?i)^\s*(?:here(?:'|’)s|below\s+is|let\s+me\s+know|i\s+can\s+also)\b", line):
+        if re.match(r"(?i)^\s*(?:here(?:’|’)s|below\s+is|let\s+me\s+know|i\s+can\s+also)\b", line):
             continue
         if re.match(r"(?i)^\s*(?:visual|b-?roll|on-?screen(?:\s+text)?|sfx|music|camera|transition|cta)\s*:", line):
             continue
@@ -189,7 +227,7 @@ def _clean_generated_script(script: str) -> str:
     if candidate:
         return candidate
 
-    # Fallback if filtering was too aggressive.
+    # Fallback if filtering was too aggressive — never discard a non-empty input.
     text = re.sub(r"(?m)^\s*[-*]\s+", "", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -466,7 +504,17 @@ def tab_generate_script() -> None:
         st.rerun()
 
     if script_ready():
-        if st.session_state.pending_script_text_input:
+        # Flush any pending script update into the textarea's session-state key
+        # *before* the widget is rendered so Streamlit displays the new value.
+        # We use a dedicated boolean flag (_script_update_pending) instead of
+        # relying on pending_script_text_input being truthy — an empty string is
+        # falsy and would silently swallow a valid update to an empty script.
+        if st.session_state.get("_script_update_pending"):
+            st.session_state.generated_script_text_input = st.session_state.pending_script_text_input
+            st.session_state.pending_script_text_input = ""
+            st.session_state._script_update_pending = False
+        elif st.session_state.pending_script_text_input:
+            # Legacy path: handle any pending value set before the flag existed.
             st.session_state.generated_script_text_input = st.session_state.pending_script_text_input
             st.session_state.pending_script_text_input = ""
 
@@ -478,9 +526,15 @@ def tab_generate_script() -> None:
                 help="Edit the generated script directly. Only narration/script text should be kept here.",
             )
             if st.button("Save edited script", width="stretch"):
-                cleaned_script = _clean_generated_script(st.session_state.generated_script_text_input)
+                raw = st.session_state.generated_script_text_input or ""
+                # Light cleaning only — the user just typed this, no SCENE markers.
+                cleaned_script = _clean_generated_script(raw, light=True)
+                # Absolute fallback: never discard the user's edits.
+                if not cleaned_script:
+                    cleaned_script = raw.strip()
                 st.session_state.script_text = cleaned_script
                 st.session_state.pending_script_text_input = cleaned_script
+                st.session_state._script_update_pending = True
                 clear_downstream("script")
                 save_project_state(active_project_id())
                 _save_script_to_supabase(active_project_id(), cleaned_script)
@@ -508,9 +562,16 @@ def tab_generate_script() -> None:
                             _show_openai_error(exc)
                             revised = None
                     if revised:
-                        cleaned = _clean_generated_script(revised)
+                        # Use light cleaning: the input was already a clean
+                        # plain-text script; aggressive cleaning may strip valid
+                        # narration returned by the LLM.
+                        cleaned = _clean_generated_script(revised, light=True)
+                        # Absolute fallback: never lose the LLM's revision.
+                        if not cleaned:
+                            cleaned = revised.strip()
                         st.session_state.script_text = cleaned
                         st.session_state.pending_script_text_input = cleaned
+                        st.session_state._script_update_pending = True
                         clear_downstream("script")
                         save_project_state(active_project_id())
                         _save_script_to_supabase(active_project_id(), cleaned)

@@ -328,6 +328,7 @@ def init_state() -> None:
     st.session_state.setdefault("script_text_input", "")
     st.session_state.setdefault("generated_script_text_input", "")
     st.session_state.setdefault("pending_script_text_input", "")
+    st.session_state.setdefault("_script_update_pending", False)
     if st.session_state.script_text and not st.session_state.script_text_input:
         st.session_state.script_text_input = st.session_state.script_text
     if st.session_state.script_text and not st.session_state.generated_script_text_input:
