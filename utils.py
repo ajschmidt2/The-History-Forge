@@ -540,6 +540,50 @@ def generate_script(
     return resp.choices[0].message.content.strip()
 
 
+def edit_script_with_direction(script: str, direction: str) -> str:
+    """Revise an existing script according to a plain-English direction.
+
+    Examples of *direction*: "make it shorter", "add more humor",
+    "make the tone more dramatic", "simplify for a younger audience".
+    """
+    script = (script or "").strip()
+    direction = (direction or "").strip()
+    if not script:
+        return script
+    if not direction:
+        return script
+
+    client = _openai_client()
+    if client is None:
+        return script
+
+    system = (
+        "You are an expert YouTube history scriptwriter and editor. "
+        "You will receive a script and a direction for how to revise it. "
+        "Apply the direction faithfully while preserving the topic, key facts, and overall structure. "
+        "Return only the revised script text — no commentary, no markdown fences."
+    )
+    user = (
+        f"Direction: {direction}\n\n"
+        f"Script to revise:\n{script}"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception as exc:
+        _reraise_api_errors(exc)
+        return script
+
+    return resp.choices[0].message.content.strip()
+
+
 def generate_lucky_topic() -> str:
     client = _openai_client()
     if client is None:
