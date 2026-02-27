@@ -1,18 +1,30 @@
 """AI Video Generator tab — Google Veo and OpenAI Sora.
 
-Allows the user to enter a text prompt, choose a provider (Veo or Sora),
-generate a video (30 – 120 s), and watch it directly inside the app.
+Allows the user to:
+  • Choose a provider (Veo or Sora) and an aspect ratio appropriate for that provider.
+  • Enter a text prompt and generate a short video clip (30 – 120 s).
+  • Watch the result directly inside the app.
+  • Load the generated video into any scene in the current project.
 
 The generated video is automatically:
-  • Uploaded to the ``generated-videos`` Supabase bucket.
+  • Saved locally to ``data/projects/{project_id}/assets/videos/``.
+  • Uploaded to the ``generated-videos`` Supabase bucket (when configured).
   • Recorded in the ``assets`` table with the project ID, prompt, and provider.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
-from src.ai_video_generation import generate_video, sora_configured, veo_configured
-from src.ui.state import active_project_id
+from src.ai_video_generation import (
+    SORA_ASPECT_RATIOS,
+    VEO_ASPECT_RATIOS,
+    generate_video,
+    sora_configured,
+    veo_configured,
+)
+from src.ui.state import active_project_id, ensure_project_exists
 
 
 # ---------------------------------------------------------------------------
@@ -34,17 +46,47 @@ def _provider_key(label: str) -> str:
     return label.split("(")[0].strip().lower()
 
 
+def _aspect_ratios_for(provider_key: str) -> list[str]:
+    """Return the aspect-ratio options for the given provider key."""
+    if provider_key == "veo":
+        return VEO_ASPECT_RATIOS
+    if provider_key == "sora":
+        return SORA_ASPECT_RATIOS
+    return ["16:9"]
+
+
+def _videos_dir(project_id: str) -> Path:
+    return Path("data/projects") / project_id / "assets/videos"
+
+
+def _saved_videos(project_id: str) -> list[Path]:
+    """Return all .mp4 files saved locally for this project, newest first."""
+    d = _videos_dir(project_id)
+    if not d.exists():
+        return []
+    return sorted(d.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
 # ---------------------------------------------------------------------------
 # Session-state keys used by this tab
 # ---------------------------------------------------------------------------
 _KEY_RESULT_URL = "ai_video_result_url"
+_KEY_RESULT_LOCAL = "ai_video_result_local_path"
 _KEY_RESULT_PROMPT = "ai_video_result_prompt"
 _KEY_RESULT_PROVIDER = "ai_video_result_provider"
+_KEY_RESULT_RATIO = "ai_video_result_aspect_ratio"
 _KEY_ERROR = "ai_video_error"
 
 
 def _reset_result() -> None:
-    for key in (_KEY_RESULT_URL, _KEY_RESULT_PROMPT, _KEY_RESULT_PROVIDER, _KEY_ERROR):
+    for key in (
+        _KEY_RESULT_URL,
+        _KEY_RESULT_LOCAL,
+        _KEY_RESULT_PROMPT,
+        _KEY_RESULT_PROVIDER,
+        _KEY_RESULT_RATIO,
+        _KEY_ERROR,
+    ):
         st.session_state.pop(key, None)
 
 
@@ -74,7 +116,6 @@ def tab_ai_video_generator() -> None:
             "See `SUPABASE_SETUP.md` → *Section 6* for details."
         )
 
-        # Still show individual provider status for easier debugging
         with st.expander("Provider credential status"):
             veo_ok = veo_configured()
             sora_ok = sora_configured()
@@ -95,13 +136,28 @@ def tab_ai_video_generator() -> None:
     )
     provider_key = _provider_key(provider_label)
 
-    # Show a note when only one provider is available
     if len(available) == 1:
         missing = "Sora (OpenAI)" if provider_key == "veo" else "Veo (Google)"
         st.info(
             f"**{missing}** credentials are not configured — "
             "only the provider above is available."
         )
+
+    # ------------------------------------------------------------------
+    # Aspect-ratio selector — options depend on the chosen provider
+    # ------------------------------------------------------------------
+    ratio_options = _aspect_ratios_for(provider_key)
+
+    aspect_ratio = st.radio(
+        "Aspect ratio",
+        options=ratio_options,
+        horizontal=True,
+        help=(
+            "**16:9** — standard landscape (YouTube / desktop).  "
+            "**9:16** — vertical / Shorts / Reels.  "
+            "**1:1** — square."
+        ),
+    )
 
     st.divider()
 
@@ -129,27 +185,33 @@ def tab_ai_video_generator() -> None:
         help="Enter a prompt above to enable generation." if not can_generate else None,
     ):
         _reset_result()
+        project_id = active_project_id()
+        ensure_project_exists(project_id)
+        save_dir = _videos_dir(project_id)
 
         with st.spinner(
-            f"Generating video with {provider_label} — this can take 30 – 120 seconds…"
+            f"Generating video with {provider_label} ({aspect_ratio}) — "
+            "this can take 30 – 120 seconds…"
         ):
             try:
-                url = generate_video(
+                url, local_path = generate_video(
                     prompt=prompt.strip(),
                     provider=provider_key,
-                    project_id=active_project_id(),
+                    project_id=project_id,
+                    aspect_ratio=aspect_ratio,
+                    save_dir=save_dir,
                 )
                 st.session_state[_KEY_RESULT_URL] = url
+                st.session_state[_KEY_RESULT_LOCAL] = local_path
                 st.session_state[_KEY_RESULT_PROMPT] = prompt.strip()
                 st.session_state[_KEY_RESULT_PROVIDER] = provider_label
+                st.session_state[_KEY_RESULT_RATIO] = aspect_ratio
                 st.session_state.pop(_KEY_ERROR, None)
             except (ValueError, PermissionError) as exc:
-                # Configuration / auth problems — show as a warning (user-fixable)
                 st.session_state[_KEY_ERROR] = ("warning", str(exc))
             except TimeoutError as exc:
                 st.session_state[_KEY_ERROR] = ("warning", str(exc))
             except Exception as exc:  # noqa: BLE001
-                # Unexpected API / network errors
                 st.session_state[_KEY_ERROR] = ("error", str(exc))
 
         st.rerun()
@@ -165,12 +227,12 @@ def tab_ai_video_generator() -> None:
             st.error(f"**Unexpected error:** {message}")
 
     result_url = st.session_state.get(_KEY_RESULT_URL)
+    result_local = st.session_state.get(_KEY_RESULT_LOCAL)
     if result_url:
-        st.success(
-            f"Video generated with **{st.session_state.get(_KEY_RESULT_PROVIDER, provider_label)}**!"
-        )
+        res_provider = st.session_state.get(_KEY_RESULT_PROVIDER, provider_label)
+        res_ratio = st.session_state.get(_KEY_RESULT_RATIO, aspect_ratio)
+        st.success(f"Video generated with **{res_provider}** ({res_ratio})!")
 
-        # HTML5 video player — works for both http(s):// and data: URLs
         if result_url.startswith("data:"):
             st.video(result_url)
             st.info(
@@ -181,19 +243,107 @@ def tab_ai_video_generator() -> None:
             st.video(result_url)
             st.markdown(f"**Stored URL:** [{result_url}]({result_url})")
 
-        st.caption(
-            f"Prompt used: *{st.session_state.get(_KEY_RESULT_PROMPT, '')}*"
-        )
+        if result_local:
+            st.caption(f"Saved locally: `{result_local}`")
+
+        st.caption(f"Prompt used: *{st.session_state.get(_KEY_RESULT_PROMPT, '')}*")
+
+        # ------------------------------------------------------------------
+        # Load into scene
+        # ------------------------------------------------------------------
+        scenes = st.session_state.get("scenes", [])
+        if scenes:
+            st.markdown("**Load into scene**")
+            scene_labels = [f"Scene {s.index:02d} — {s.title}" for s in scenes]
+            col_sel, col_btn = st.columns([3, 1])
+            with col_sel:
+                chosen_label = st.selectbox(
+                    "Pick a scene",
+                    scene_labels,
+                    key="ai_video_scene_pick",
+                    label_visibility="collapsed",
+                )
+            with col_btn:
+                if st.button("Assign to scene", type="secondary", width="stretch"):
+                    chosen_idx = scene_labels.index(chosen_label)
+                    chosen_scene = scenes[chosen_idx]
+                    chosen_scene.video_url = result_url
+                    chosen_scene.video_path = result_local
+                    st.toast(
+                        f"Video assigned to {chosen_label}. "
+                        "Open the Scene Editor tab to review it."
+                    )
+                    st.rerun()
+        else:
+            st.info(
+                "No scenes exist yet — split the script into scenes first, "
+                "then return here to assign this video to a scene."
+            )
 
         if st.button("Generate another video", use_container_width=False):
             _reset_result()
             st.rerun()
 
     # ------------------------------------------------------------------
-    # History: previously generated videos for this project
+    # Saved videos for this project
+    # ------------------------------------------------------------------
+    _render_saved_videos()
+
+    # ------------------------------------------------------------------
+    # History: previously generated videos for this project (Supabase)
     # ------------------------------------------------------------------
     _render_history()
 
+
+# ---------------------------------------------------------------------------
+# Saved-videos panel (local files)
+# ---------------------------------------------------------------------------
+
+def _render_saved_videos() -> None:
+    """Show locally saved videos for this project with assign-to-scene controls."""
+    project_id = active_project_id()
+    videos = _saved_videos(project_id)
+    if not videos:
+        return
+
+    st.divider()
+    st.subheader("Saved videos (this project)")
+
+    scenes = st.session_state.get("scenes", [])
+    scene_labels = [f"Scene {s.index:02d} — {s.title}" for s in scenes]
+
+    for vid_path in videos:
+        with st.expander(vid_path.name, expanded=False):
+            st.video(str(vid_path))
+            st.caption(f"`{vid_path}`")
+
+            if scene_labels:
+                pick_key = f"saved_vid_scene_pick_{vid_path.name}"
+                btn_key = f"saved_vid_assign_{vid_path.name}"
+                col_a, col_b = st.columns([3, 1])
+                with col_a:
+                    chosen = st.selectbox(
+                        "Assign to scene",
+                        scene_labels,
+                        key=pick_key,
+                        label_visibility="visible",
+                    )
+                with col_b:
+                    st.write("")  # vertical alignment spacer
+                    if st.button("Assign", key=btn_key, width="stretch"):
+                        chosen_idx = scene_labels.index(chosen)
+                        chosen_scene = scenes[chosen_idx]
+                        chosen_scene.video_path = str(vid_path)
+                        chosen_scene.video_url = None  # local-only
+                        st.toast(f"Video assigned to {chosen}.")
+                        st.rerun()
+            else:
+                st.caption("Create scenes first to assign videos to them.")
+
+
+# ---------------------------------------------------------------------------
+# Supabase history panel
+# ---------------------------------------------------------------------------
 
 def _render_history() -> None:
     """Show previously generated videos recorded in Supabase for this project."""
@@ -225,7 +375,11 @@ def _render_history() -> None:
         return
 
     st.divider()
-    st.subheader("Previously generated videos")
+    st.subheader("Cloud history (Supabase)")
+
+    scenes = st.session_state.get("scenes", [])
+    scene_labels = [f"Scene {s.index:02d} — {s.title}" for s in scenes]
+
     for row in rows:
         label = row.get("filename", "video")
         url = row.get("url", "")
@@ -234,3 +388,24 @@ def _render_history() -> None:
             if url:
                 st.video(url)
                 st.markdown(f"[Open in new tab]({url})")
+
+                if scene_labels:
+                    pick_key = f"cloud_vid_scene_pick_{label}"
+                    btn_key = f"cloud_vid_assign_{label}"
+                    col_a, col_b = st.columns([3, 1])
+                    with col_a:
+                        chosen = st.selectbox(
+                            "Assign to scene",
+                            scene_labels,
+                            key=pick_key,
+                            label_visibility="visible",
+                        )
+                    with col_b:
+                        st.write("")
+                        if st.button("Assign", key=btn_key, width="stretch"):
+                            chosen_idx = scene_labels.index(chosen)
+                            chosen_scene = scenes[chosen_idx]
+                            chosen_scene.video_url = url
+                            chosen_scene.video_path = None
+                            st.toast(f"Video assigned to {chosen}.")
+                            st.rerun()

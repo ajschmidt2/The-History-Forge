@@ -10,6 +10,14 @@ from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.utils import get_media_duration
 
 
+def _saved_videos_for_project(project_id: str) -> list[Path]:
+    """Return locally saved AI-generated .mp4 files for *project_id*, newest first."""
+    d = Path("data/projects") / project_id / "assets/videos"
+    if not d.exists():
+        return []
+    return sorted(d.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
 _TRANSITION_OPTIONS = [
     "fade",
     "fadeblack",
@@ -393,6 +401,57 @@ def tab_create_scenes() -> None:
                 st.image(str(saved), width="stretch")
             else:
                 st.caption("No image selected yet.")
+
+        # ------------------------------------------------------------------
+        # AI video clip assigned to this scene
+        # ------------------------------------------------------------------
+        st.markdown("#### AI video clip")
+        scene_video_path = getattr(selected, "video_path", None)
+        scene_video_url = getattr(selected, "video_url", None)
+
+        # Resolve display source: prefer a valid local file, fall back to URL
+        _video_src = None
+        if scene_video_path and Path(scene_video_path).exists():
+            _video_src = scene_video_path
+        elif scene_video_url:
+            _video_src = scene_video_url
+
+        if _video_src:
+            st.video(_video_src)
+            if scene_video_path:
+                st.caption(f"`{Path(scene_video_path).name}`")
+            if st.button(
+                "Remove video",
+                key=_scene_widget_key("scene_remove_video_", selected),
+                help="Unlink the video from this scene (the file is not deleted).",
+            ):
+                selected.video_path = None
+                selected.video_url = None
+                st.rerun()
+        else:
+            st.caption("No AI video assigned to this scene.")
+
+        # Picker: load from saved project videos
+        project_id = active_project_id()
+        saved_vids = _saved_videos_for_project(project_id)
+        if saved_vids:
+            vid_names = [v.name for v in saved_vids]
+            pick_key = _scene_widget_key("scene_vid_pick_", selected)
+            assign_key = _scene_widget_key("scene_vid_assign_", selected)
+            picked = st.selectbox(
+                "Load saved video",
+                ["— choose —"] + vid_names,
+                key=pick_key,
+                help="Select a previously generated video to assign to this scene.",
+            )
+            if st.button("Assign video", key=assign_key, disabled=(picked == "— choose —")):
+                chosen_path = saved_vids[vid_names.index(picked)]
+                selected.video_path = str(chosen_path)
+                selected.video_url = None
+                st.toast(f"Video '{picked}' assigned to scene {selected.index}.")
+                st.rerun()
+        else:
+            st.caption("Use the **AI Video Generator** tab to create videos for this project.")
 
         caption_state_key = _timeline_state_key()
         captions = _captions_from_scenes(scenes)

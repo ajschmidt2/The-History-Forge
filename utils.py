@@ -174,6 +174,8 @@ class Scene:
     status: str = "active"
     image_error: str = ""
     estimated_duration_sec: float = 0.0
+    video_path: Optional[str] = None   # local path to an AI-generated video clip
+    video_url: Optional[str] = None    # cloud/public URL of the AI-generated video clip
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
