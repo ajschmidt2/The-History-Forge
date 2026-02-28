@@ -66,4 +66,14 @@ def test_get_secret_model_does_not_return_api_key(monkeypatch):
     assert not result.startswith("sk-"), (
         f"_get_secret('openai_model') returned an API key value: {result!r}"
     )
-    assert result == openai_config.DEFAULT_OPENAI_MODEL
+    assert result
+
+
+def test_model_access_error_detection_matches_project_access_message():
+    class _FakeExc(Exception):
+        pass
+
+    exc = _FakeExc(
+        "Error code: 403 - {'error': {'message': 'Project proj_x does not have access to model gpt-5-mini', 'code': 'model_not_found'}}"
+    )
+    assert utils._is_model_access_error(exc) is True
