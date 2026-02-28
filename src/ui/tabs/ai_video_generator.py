@@ -162,6 +162,20 @@ def tab_ai_video_generator() -> None:
     st.divider()
 
     # ------------------------------------------------------------------
+    # Duration
+    # ------------------------------------------------------------------
+    sora_seconds = 8
+    if provider_key == "sora":
+        sora_seconds = int(
+            st.selectbox(
+                "Clip length (seconds)",
+                options=[4, 8, 12],
+                index=1,
+                help="Sora currently supports 4, 8, or 12 seconds.",
+            )
+        )
+
+    # ------------------------------------------------------------------
     # Prompt input
     # ------------------------------------------------------------------
     prompt = st.text_area(
@@ -190,8 +204,10 @@ def tab_ai_video_generator() -> None:
         save_dir = _videos_dir(project_id)
 
         with st.spinner(
-            f"Generating video with {provider_label} ({aspect_ratio}) — "
+            f"Generating video with {provider_label} ({aspect_ratio}, {sora_seconds}s) — "
             "this can take 30 – 120 seconds…"
+            if provider_key == "sora"
+            else f"Generating video with {provider_label} ({aspect_ratio}) — this can take 30 – 120 seconds…"
         ):
             try:
                 url, local_path = generate_video(
@@ -200,6 +216,7 @@ def tab_ai_video_generator() -> None:
                     project_id=project_id,
                     aspect_ratio=aspect_ratio,
                     save_dir=save_dir,
+                    seconds=sora_seconds,
                 )
                 st.session_state[_KEY_RESULT_URL] = url
                 st.session_state[_KEY_RESULT_LOCAL] = local_path

@@ -44,7 +44,7 @@ def test_create_video_uses_official_endpoint_and_payload(monkeypatch):
     assert job["id"] == "vid_123"
     assert captured["url"] == "https://api.openai.com/v1/videos"
     assert captured["payload"]["model"] == "sora-2"
-    assert captured["payload"]["seconds"] == 4
+    assert captured["payload"]["seconds"] == "4"
     assert captured["payload"]["size"] == "1280x720"
 
 

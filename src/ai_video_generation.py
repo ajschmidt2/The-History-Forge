@@ -8,7 +8,7 @@ Both providers follow an async pattern:
 
 Public API
 ----------
-  generate_video(prompt, provider, project_id, aspect_ratio, save_dir) -> (str, str | None)
+  generate_video(prompt, provider, project_id, aspect_ratio, save_dir, seconds) -> (str, str | None)
       Returns a tuple of (public_url, local_path).  local_path is None when
       save_dir is not supplied or the write fails.
 
@@ -139,7 +139,7 @@ def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
 _OPENAI_API_BASE_URL = "https://api.openai.com"
 _SORA_CREATE_URL = f"{_OPENAI_API_BASE_URL}/v1/videos"
 _SORA_MODELS = {"sora-2", "sora-2-pro"}
-_SORA_SECONDS = {4, 8, 12}
+_SORA_SECONDS = {"4", "8", "12"}
 
 
 def _sora_headers() -> dict[str, str]:
@@ -186,7 +186,7 @@ def create_video(
     prompt: str,
     *,
     model: str = "sora-2",
-    seconds: int = 8,
+    seconds: int | str = 8,
     size: Optional[str] = None,
     input_reference: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -199,7 +199,8 @@ def create_video(
         raise ValueError("OpenAI API key is not configured. Set openai_api_key or OPENAI_API_KEY.")
     if model not in _SORA_MODELS:
         raise ValueError(f"Invalid Sora model '{model}'. Use 'sora-2' or 'sora-2-pro'.")
-    if seconds not in _SORA_SECONDS:
+    seconds_value = str(seconds).strip()
+    if seconds_value not in _SORA_SECONDS:
         raise ValueError(f"Invalid seconds={seconds}. Supported values are 4, 8, or 12.")
     if not prompt.strip():
         raise ValueError("Prompt cannot be empty.")
@@ -207,7 +208,7 @@ def create_video(
     payload: dict[str, Any] = {
         "model": model,
         "prompt": prompt.strip(),
-        "seconds": seconds,
+        "seconds": seconds_value,
     }
     if size:
         payload["size"] = size
@@ -329,10 +330,10 @@ def sora_diagnostic_check() -> tuple[bool, str]:
     )
 
 
-def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
+def _generate_sora(prompt: str, aspect_ratio: str = "16:9", seconds: int | str = 8) -> bytes:
     """Submit a Sora job and block until the first video asset is downloaded."""
     size = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
-    created = create_video(prompt, model="sora-2", seconds=8, size=size)
+    created = create_video(prompt, model="sora-2", seconds=seconds, size=size)
     job_id = str(created.get("id") or "")
     if not job_id:
         raise RuntimeError(f"Sora did not return a job ID. Response: {json.dumps(created)[:500]}")
@@ -353,6 +354,7 @@ def generate_video(
     project_id: str,
     aspect_ratio: str = "16:9",
     save_dir: Optional[Path | str] = None,
+    seconds: int | str = 8,
 ) -> tuple[str, Optional[str]]:
     """Generate a video from *prompt* using *provider* and return ``(url, local_path)``.
 
@@ -371,6 +373,9 @@ def generate_video(
     save_dir:
         Optional directory path.  When supplied the raw MP4 bytes are written to
         ``{save_dir}/{provider}_{short_id}.mp4`` before uploading to Supabase.
+    seconds:
+        Desired Sora clip length. Supported values are ``4``, ``8``, or ``12``.
+        Ignored for providers that do not use this field.
 
     Returns
     -------
@@ -391,7 +396,7 @@ def generate_video(
     if provider == "veo":
         video_bytes = _generate_veo(prompt, aspect_ratio=aspect_ratio)
     elif provider == "sora":
-        video_bytes = _generate_sora(prompt, aspect_ratio=aspect_ratio)
+        video_bytes = _generate_sora(prompt, aspect_ratio=aspect_ratio, seconds=seconds)
     else:
         raise ValueError(f"Unknown video provider '{provider}'.  Use 'veo' or 'sora'.")
 
