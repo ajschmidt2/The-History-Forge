@@ -22,10 +22,11 @@ Public API
 from __future__ import annotations
 
 import base64
+import json
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
@@ -135,11 +136,10 @@ def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
 # Internal: OpenAI Sora
 # ---------------------------------------------------------------------------
 
-_SORA_SUBMIT_URLS = (
-    "https://api.openai.com/v1/videos",
-    # Legacy endpoint path kept as a fallback for compatibility.
-    "https://api.openai.com/v1/video/generations",
-)
+_OPENAI_API_BASE_URL = "https://api.openai.com"
+_SORA_CREATE_URL = f"{_OPENAI_API_BASE_URL}/v1/videos"
+_SORA_MODELS = {"sora-2", "sora-2-pro"}
+_SORA_SECONDS = {4, 8, 12}
 
 
 def _sora_headers() -> dict[str, str]:
@@ -147,92 +147,191 @@ def _sora_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
 
-def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
-    """Submit a Sora job and block until the video is ready.  Returns MP4 bytes."""
-    key = get_secret("openai_api_key") or get_secret("OPENAI_API_KEY")
-    if not key:
-        raise ValueError(
-            "OpenAI API key is not configured.  "
-            "Set openai_api_key in secrets.toml."
+def _summarize_error(resp: requests.Response) -> str:
+    body = (resp.text or "").strip()
+    if len(body) > 500:
+        body = f"{body[:500]}..."
+    return f"HTTP {resp.status_code} from {resp.request.method} {resp.url}: {body or '<empty body>'}"
+
+
+def _raise_sora_http_error(resp: requests.Response, *, context: str) -> None:
+    details = _summarize_error(resp)
+    if resp.status_code == 401:
+        raise PermissionError(
+            "OpenAI returned 401 Unauthorized. The API key is invalid/revoked, or not being read correctly. "
+            f"{context}. {details}"
         )
-
-    # Map the shared aspect-ratio label to the Sora ``size`` parameter.
-    sora_size = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
-
-    # Submit the generation job
-    payload = {
-        "model": "sora",
-        "prompt": prompt,
-        "n": 1,
-        "size": sora_size,
-    }
-    resp = None
-    submit_url = None
-    for candidate_url in _SORA_SUBMIT_URLS:
-        candidate_resp = requests.post(
-            candidate_url, json=payload, headers=_sora_headers(), timeout=60
+    if resp.status_code == 403:
+        raise PermissionError(
+            "OpenAI returned 403 Forbidden. This key does not have permission to use Sora in the current org/project, "
+            "or policy restrictions block this request. Ensure the key belongs to the Sora-enabled project. "
+            f"{context}. {details}"
         )
-        if candidate_resp.status_code == 401:
-            raise PermissionError(
-                "OpenAI returned 401 Unauthorized.  Check your openai_api_key."
-            )
-        if candidate_resp.status_code != 404:
-            resp = candidate_resp
-            submit_url = candidate_url
-            break
-
-    if resp is None or submit_url is None:
+    if resp.status_code == 404:
         raise RuntimeError(
-            "OpenAI returned 404 from all known Sora endpoints.  "
-            "Your account may not have video access yet, or the endpoint may have changed.  "
-            "Verify API video access at platform.openai.com."
+            "OpenAI returned 404 Not Found. This usually means a wrong endpoint (/v1/videos is required), "
+            "wrong model name (must be sora-2 or sora-2-pro), or the key belongs to a different org/project that lacks Sora access. "
+            f"{context}. {details}"
         )
-
     resp.raise_for_status()
 
-    job = resp.json()
-    job_id = job.get("id")
-    if not job_id:
-        raise RuntimeError(f"Sora did not return a job ID.  Response: {resp.text[:500]}")
 
-    # Poll until complete
-    status_url = f"{submit_url}/{job_id}"
+def create_video(
+    prompt: str,
+    *,
+    model: str = "sora-2",
+    seconds: int = 8,
+    input_reference: Optional[str] = None,
+) -> dict[str, Any]:
+    """Create a Sora job and return the raw JSON response.
 
-    for attempt in range(_MAX_POLLS):
-        time.sleep(_POLL_INTERVAL_S)
-        status_resp = requests.get(status_url, headers=_sora_headers(), timeout=30)
-        status_resp.raise_for_status()
-        status_data = status_resp.json()
+    Uses the official create endpoint: POST https://api.openai.com/v1/videos.
+    """
+    key = get_secret("openai_api_key") or get_secret("OPENAI_API_KEY")
+    if not key:
+        raise ValueError("OpenAI API key is not configured. Set openai_api_key or OPENAI_API_KEY.")
+    if model not in _SORA_MODELS:
+        raise ValueError(f"Invalid Sora model '{model}'. Use 'sora-2' or 'sora-2-pro'.")
+    if seconds not in _SORA_SECONDS:
+        raise ValueError(f"Invalid seconds={seconds}. Supported values are 4, 8, or 12.")
+    if not prompt.strip():
+        raise ValueError("Prompt cannot be empty.")
 
-        status = status_data.get("status", "")
+    payload: dict[str, Any] = {
+        "model": model,
+        "prompt": prompt.strip(),
+        "seconds": seconds,
+    }
+    if input_reference:
+        payload["input_reference"] = input_reference
 
-        if status in {"failed", "cancelled"}:
-            err = status_data.get("error") or status_data.get("message", "Unknown error")
-            raise RuntimeError(f"Sora generation {status}: {err}")
+    resp = requests.post(_SORA_CREATE_URL, json=payload, headers=_sora_headers(), timeout=60)
+    if resp.status_code >= 400:
+        _raise_sora_http_error(resp, context="while creating a Sora video job")
+    return resp.json()
+
+
+def get_video(job_id: str) -> dict[str, Any]:
+    """Return a Sora job by ID via GET /v1/videos/{id}."""
+    if not job_id.strip():
+        raise ValueError("job_id cannot be empty")
+    url = f"{_SORA_CREATE_URL}/{job_id}"
+    resp = requests.get(url, headers=_sora_headers(), timeout=60)
+    if resp.status_code >= 400:
+        _raise_sora_http_error(resp, context=f"while fetching Sora job '{job_id}'")
+    return resp.json()
+
+
+def poll_video(job_id: str, *, timeout_s: int = 600, max_backoff_s: int = 10) -> dict[str, Any]:
+    """Poll a Sora job until completed/failed with exponential backoff."""
+    start = time.monotonic()
+    delay_s = 1
+    while True:
+        job = get_video(job_id)
+        status = str(job.get("status", "")).lower().strip()
 
         if status == "completed":
-            # Try to get the video URL from the response
-            data = status_data.get("data", [])
-            if data:
-                video_url = data[0].get("url") or data[0].get("video_url")
-                if video_url:
-                    dl = requests.get(video_url, timeout=120)
-                    dl.raise_for_status()
-                    return dl.content
+            return job
+        if status in {"failed", "cancelled"}:
+            err = job.get("error") or job.get("message") or "Unknown error"
+            raise RuntimeError(f"Sora generation {status} for job {job_id}: {err}")
 
-            # Fallback: try a content endpoint pattern
-            content_url = f"{status_url}/content/video.mp4"
-            dl = requests.get(content_url, headers=_sora_headers(), timeout=120)
-            if dl.status_code == 200 and dl.content:
-                return dl.content
+        elapsed = time.monotonic() - start
+        if elapsed >= timeout_s:
+            raise TimeoutError(f"Timed out after {timeout_s}s waiting for Sora job {job_id}.")
 
-            raise RuntimeError(
-                "Sora reported completed but no video URL was found in the response."
-            )
+        time.sleep(delay_s)
+        delay_s = min(delay_s * 2, max_backoff_s)
 
-    raise TimeoutError(
-        f"Sora generation did not complete within {_MAX_POLLS * _POLL_INTERVAL_S} seconds."
+
+def _asset_urls_from_job(job: dict[str, Any]) -> list[tuple[str, str]]:
+    urls: list[tuple[str, str]] = []
+    outputs = job.get("output") if isinstance(job.get("output"), dict) else {}
+    for key in ("video", "video_url", "audio", "audio_url"):
+        value = outputs.get(key)
+        if isinstance(value, str) and value.startswith("http"):
+            if "audio" in key:
+                urls.append(("audio", value))
+            else:
+                urls.append(("video", value))
+
+    data = job.get("data")
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            for key in ("url", "video_url", "audio_url"):
+                value = item.get(key)
+                if isinstance(value, str) and value.startswith("http"):
+                    kind = "audio" if "audio" in key else "video"
+                    urls.append((kind, value))
+
+    deduped: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for kind, url in urls:
+        if url not in seen:
+            seen.add(url)
+            deduped.append((kind, url))
+    return deduped
+
+
+def download_video_assets(job: dict[str, Any], dest_dir: Path | str) -> dict[str, list[str]]:
+    """Download completed job assets to disk and return local paths by type."""
+    job_id = str(job.get("id") or uuid.uuid4().hex)
+    assets = _asset_urls_from_job(job)
+    if not assets:
+        raise RuntimeError("Sora job completed but no downloadable asset URLs were found in the response.")
+
+    out_dir = Path(dest_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    saved: dict[str, list[str]] = {"video": [], "audio": []}
+
+    for idx, (kind, url) in enumerate(assets, start=1):
+        ext = ".mp4" if kind == "video" else ".mp3"
+        path = out_dir / f"sora_{job_id}_{kind}_{idx}{ext}"
+        dl = requests.get(url, timeout=180)
+        dl.raise_for_status()
+        path.write_bytes(dl.content)
+        saved[kind].append(str(path))
+
+    return saved
+
+
+def sora_diagnostic_check() -> tuple[bool, str]:
+    """Call GET /v1/models and verify sora models are visible for this key."""
+    url = f"{_OPENAI_API_BASE_URL}/v1/models"
+    resp = requests.get(url, headers=_sora_headers(), timeout=60)
+    if resp.status_code >= 400:
+        _raise_sora_http_error(resp, context="while listing models in diagnostic mode")
+
+    body = resp.json()
+    models: set[str] = set()
+    for item in body.get("data", []):
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            models.add(item["id"])
+
+    if "sora-2" in models or "sora-2-pro" in models:
+        return True, "Sora models detected for this key/project."
+    return (
+        False,
+        "Sora models were not returned by GET /v1/models for this key. "
+        "Your key is likely from a different org/project than the Sora-enabled one; "
+        "create a new key in the correct project and retry.",
     )
+
+
+def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
+    """Submit a Sora job and block until the first video asset is downloaded."""
+    _ = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
+    created = create_video(prompt, model="sora-2", seconds=8)
+    job_id = str(created.get("id") or "")
+    if not job_id:
+        raise RuntimeError(f"Sora did not return a job ID. Response: {json.dumps(created)[:500]}")
+    final_job = poll_video(job_id, timeout_s=_MAX_POLLS * _POLL_INTERVAL_S)
+    assets = download_video_assets(final_job, Path("/tmp") / "history_forge_sora_downloads")
+    if not assets["video"]:
+        raise RuntimeError("Sora completed but no video file was downloaded.")
+    return Path(assets["video"][0]).read_bytes()
 
 
 # ---------------------------------------------------------------------------
