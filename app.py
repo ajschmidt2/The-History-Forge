@@ -2,6 +2,11 @@ import streamlit as st
 import importlib
 import importlib.util
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from image_gen import validate_gemini_api_key
 from src.storage import upsert_project
