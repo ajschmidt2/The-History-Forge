@@ -1,0 +1,10 @@
+[api]
+enabled = true
+
+[functions.veo-generate]
+# Disable Supabase JWT verification so the Python backend can call the function
+# using the anon/service-role key without triggering a 401 from the API gateway.
+# Google Cloud authentication is handled inside the function itself via a
+# service-account JSON secret, so gateway-level JWT checks add no security
+# benefit here and are a common source of 401 errors.
+verify_jwt = false

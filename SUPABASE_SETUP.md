@@ -134,11 +134,24 @@ Veo must run server-side so the frontend does **not** hold a short-lived Google
 access token. This repository includes an Edge Function at
 `supabase/functions/veo-generate/index.ts`.
 
-Deploy it:
+Deploy it with JWT verification disabled (required so the Python backend can
+call the function without triggering a 401 from Supabase's API gateway):
 
 ```bash
-supabase functions deploy veo-generate
+supabase functions deploy veo-generate --no-verify-jwt
 ```
+
+> **Why `--no-verify-jwt`?**  By default Supabase Edge Functions verify the
+> caller's JWT before forwarding the request.  This app calls the function
+> from server-side Python using the project's anon key, which should pass
+> that check — but subtle mismatches (key regeneration, placeholder values,
+> etc.) produce a cryptic **401 Unauthorized**.  Passing `--no-verify-jwt`
+> removes the gateway-level check; security is still maintained because
+> all Google Cloud API calls inside the function use a service-account key
+> that you set via `supabase secrets set`.
+>
+> The repository also includes `supabase/config.toml` which persists this
+> setting, so re-deployments without the flag will still work correctly.
 
 Set function secrets (never commit these to `.env`):
 
@@ -182,3 +195,4 @@ sidebar.  All five checks should pass.
 | "Write test failed" with 403 | RLS policy missing — run step 4 |
 | Storage buckets not found | Buckets not created — complete step 5 |
 | Client creation fails | Wrong URL or key — double-check step 2 |
+| Veo generation: **401 Unauthorized** | Re-deploy the function with `--no-verify-jwt` (step 6a). Also confirm `SUPABASE_KEY` in `secrets.toml` is the real anon key, not a placeholder. |
