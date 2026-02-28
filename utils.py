@@ -14,6 +14,7 @@ import requests
 from PIL import Image
 
 from image_gen import generate_imagen_images
+from src.lib.openai_config import DEFAULT_OPENAI_MODEL, resolve_openai_config
 
 # ----------------------------
 # Secrets
@@ -151,49 +152,24 @@ def get_secret(name: str, default: str = "") -> str:
     return _get_secret(name, default)
 
 
-def get_openai_text_model(default: str = "gpt-4o-mini") -> str:
-    """Resolve the OpenAI text model from secrets/env with a safe default.
-
-    Users can override with `openai_model`/`OPENAI_MODEL` in Streamlit secrets
-    or environment variables.
-    """
-    model = _get_secret("openai_model", default).strip() or default
-
-    # Common misconfiguration: pasting an API key into openai_model.
-    # API keys usually begin with `sk-` and are never valid model IDs.
-    lowered = model.lower()
-    if lowered.startswith("sk-") or lowered.startswith("sess-"):
-        return default
-
-    # Some deployments configure experimental IDs that are not available to
-    # their project tier. Fall back to a broadly available model to keep the
-    # app functional.
-    inaccessible_model_fallbacks = {
-        "gpt-4.1-mini": "gpt-4o-mini",
-        "gpt-4.1-nano": "gpt-4o-mini",
-    }
-    return inaccessible_model_fallbacks.get(lowered, model)
+def get_openai_text_model(default: str = DEFAULT_OPENAI_MODEL) -> str:
+    """Resolve and validate the OpenAI model ID from config."""
+    cfg = resolve_openai_config(get_secret=_get_secret)
+    model = cfg.model.strip() or default
+    return model
 
 
 # ----------------------------
 # Clients
 # ----------------------------
 def _openai_client():
-    # Try st.secrets / env vars via _get_secret first.
-    key = _get_secret("openai_api_key", "").strip()
-    # Fallback: read the env var directly.  This covers cases where the key was
-    # set as a system environment variable (not via Streamlit secrets) or where
-    # _normalize_secret filtered it too aggressively.
-    if not key:
-        key = (
-            os.getenv("OPENAI_API_KEY", "").strip()
-            or os.getenv("openai_api_key", "").strip()
-        )
-    if not key:
-        return None
+    cfg = resolve_openai_config(get_secret=_get_secret)
+    key = cfg.api_key
 
     os.environ.setdefault("OPENAI_API_KEY", key)
     os.environ.setdefault("openai_api_key", key)
+    os.environ.setdefault("OPENAI_MODEL", cfg.model)
+    os.environ.setdefault("openai_model", cfg.model)
 
     from openai import OpenAI  # openai>=1.x
     return OpenAI(api_key=key)

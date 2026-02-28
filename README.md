@@ -87,7 +87,7 @@ openai_api_key = "sk-..."
 GEMINI_API_KEY = "AIza..."
 
 # Optional overrides
-openai_model = "gpt-4o-mini"
+openai_model = "gpt-5-mini"
 GOOGLE_AI_STUDIO_IMAGE_MODEL = "gemini-2.5-flash-image"
 ```
 
@@ -240,6 +240,19 @@ curl https://api.openai.com/v1/videos \
 ### Required env vars / secrets checklist
 
 - `OPENAI_API_KEY` (or `openai_api_key` in Streamlit secrets)
+- `OPENAI_MODEL` (or `openai_model` in Streamlit secrets), for example `gpt-5-mini`
 - Key must belong to the same org/project where Sora is enabled
 - Do **not** use `platform.openai.com` as an API base; use `https://api.openai.com`
 - Use model names exactly: `sora-2` or `sora-2-pro`
+- Never set `OPENAI_MODEL` to an API key (`sk-...`).
+
+### Environment variable examples (local + Vercel)
+
+Use the same variable names in local development and in Vercel Project Settings → Environment Variables:
+
+```bash
+OPENAI_API_KEY=sk-proj-...
+OPENAI_MODEL=gpt-5-mini
+```
+
+Remove incorrect variants such as `MODEL=...` or `OPENAI_MODEL=sk-proj-...`.
