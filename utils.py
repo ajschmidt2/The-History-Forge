@@ -165,7 +165,14 @@ def get_openai_text_model(default: str = "gpt-4o-mini") -> str:
     if lowered.startswith("sk-") or lowered.startswith("sess-"):
         return default
 
-    return model
+    # Some deployments configure experimental IDs that are not available to
+    # their project tier. Fall back to a broadly available model to keep the
+    # app functional.
+    inaccessible_model_fallbacks = {
+        "gpt-4.1-mini": "gpt-4o-mini",
+        "gpt-4.1-nano": "gpt-4o-mini",
+    }
+    return inaccessible_model_fallbacks.get(lowered, model)
 
 
 # ----------------------------
