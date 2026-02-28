@@ -256,14 +256,37 @@ def poll_video(job_id: str, *, timeout_s: int = 600, max_backoff_s: int = 10) ->
 
 def _asset_urls_from_job(job: dict[str, Any]) -> list[tuple[str, str]]:
     urls: list[tuple[str, str]] = []
+    url_like_keys = {
+        "url",
+        "video",
+        "video_url",
+        "audio",
+        "audio_url",
+        "download_url",
+        "asset_url",
+        "signed_url",
+    }
+
+    def add_url(key: str, value: Any) -> None:
+        if isinstance(value, str) and value.startswith("http"):
+            kind = "audio" if "audio" in key else "video"
+            urls.append((kind, value))
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in url_like_keys:
+                    add_url(key, value)
+                walk(value)
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+
     outputs = job.get("output") if isinstance(job.get("output"), dict) else {}
     for key in ("video", "video_url", "audio", "audio_url"):
         value = outputs.get(key)
-        if isinstance(value, str) and value.startswith("http"):
-            if "audio" in key:
-                urls.append(("audio", value))
-            else:
-                urls.append(("video", value))
+        add_url(key, value)
 
     data = job.get("data")
     if isinstance(data, list):
@@ -272,9 +295,9 @@ def _asset_urls_from_job(job: dict[str, Any]) -> list[tuple[str, str]]:
                 continue
             for key in ("url", "video_url", "audio_url"):
                 value = item.get(key)
-                if isinstance(value, str) and value.startswith("http"):
-                    kind = "audio" if "audio" in key else "video"
-                    urls.append((kind, value))
+                add_url(key, value)
+
+    walk(job)
 
     deduped: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -285,12 +308,55 @@ def _asset_urls_from_job(job: dict[str, Any]) -> list[tuple[str, str]]:
     return deduped
 
 
+def _asset_file_ids_from_job(job: dict[str, Any]) -> list[tuple[str, str]]:
+    ids: list[tuple[str, str]] = []
+
+    def add_id(kind_hint: str, file_id: Any) -> None:
+        if isinstance(file_id, str) and file_id.strip():
+            kind = "audio" if "audio" in kind_hint else "video"
+            ids.append((kind, file_id.strip()))
+
+    def walk(node: Any, *, kind_hint: str = "video") -> None:
+        if isinstance(node, dict):
+            node_kind = str(node.get("type") or node.get("mime_type") or kind_hint).lower()
+            for key in ("id", "file_id"):
+                if key in node:
+                    value = node[key]
+                    if key == "id" and not str(value).startswith("file-"):
+                        continue
+                    add_id(node_kind, value)
+            for key, value in node.items():
+                child_hint = node_kind
+                if key in {"audio", "audio_file", "audio_asset"}:
+                    child_hint = "audio"
+                elif key in {"video", "video_file", "video_asset"}:
+                    child_hint = "video"
+                walk(value, kind_hint=child_hint)
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item, kind_hint=kind_hint)
+
+    walk(job)
+
+    deduped: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for kind, file_id in ids:
+        if file_id not in seen:
+            seen.add(file_id)
+            deduped.append((kind, file_id))
+    return deduped
+
+
 def download_video_assets(job: dict[str, Any], dest_dir: Path | str) -> dict[str, list[str]]:
     """Download completed job assets to disk and return local paths by type."""
     job_id = str(job.get("id") or uuid.uuid4().hex)
     assets = _asset_urls_from_job(job)
     if not assets:
-        raise RuntimeError("Sora job completed but no downloadable asset URLs were found in the response.")
+        file_ids = _asset_file_ids_from_job(job)
+        if not file_ids:
+            raise RuntimeError("Sora job completed but no downloadable asset URLs were found in the response.")
+        assets = [(kind, f"{_OPENAI_API_BASE_URL}/v1/files/{file_id}/content") for kind, file_id in file_ids]
 
     out_dir = Path(dest_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -299,7 +365,7 @@ def download_video_assets(job: dict[str, Any], dest_dir: Path | str) -> dict[str
     for idx, (kind, url) in enumerate(assets, start=1):
         ext = ".mp4" if kind == "video" else ".mp3"
         path = out_dir / f"sora_{job_id}_{kind}_{idx}{ext}"
-        dl = requests.get(url, timeout=180)
+        dl = requests.get(url, headers=_sora_headers(), timeout=180)
         dl.raise_for_status()
         path.write_bytes(dl.content)
         saved[kind].append(str(path))
