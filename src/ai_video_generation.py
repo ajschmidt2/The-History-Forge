@@ -111,8 +111,12 @@ def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
     resp = requests.post(invoke_url, json=payload, headers=headers, timeout=300)
     if resp.status_code == 401:
         raise PermissionError(
-            "Supabase Edge Function returned 401 Unauthorized. Check your Supabase invoke key "
-            "(SUPABASE_KEY/SUPABASE_ANON_KEY) and function JWT settings."
+            "Supabase Edge Function returned 401 Unauthorized.\n\n"
+            "Most common fix: redeploy the function with JWT verification disabled:\n"
+            "  supabase functions deploy veo-generate --no-verify-jwt\n\n"
+            "Also confirm that SUPABASE_KEY in .streamlit/secrets.toml is set to "
+            "your real anon/public key (Project Settings → API in the Supabase "
+            "dashboard), not a placeholder value."
         )
     resp.raise_for_status()
 
