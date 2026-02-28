@@ -69,15 +69,23 @@ def _find_secret_in_mapping(mapping: Any, key_aliases: set[str]) -> str:
     return ""
 
 def _get_secret(name: str, default: str = "") -> str:
+    _name_lower = name.lower()
+    # Only add API-key aliases when specifically looking up an API key,
+    # not for unrelated OpenAI settings such as the model name.
+    _is_openai_key_lookup = (
+        "openai" in _name_lower
+        and ("key" in _name_lower or "token" in _name_lower)
+        and "model" not in _name_lower
+    )
     candidates = [
         name,
         name.lower(),
         name.upper(),
-        "OPENAI_API_KEY" if "openai" in name.lower() else "",
-        "openai_api_key" if "openai" in name.lower() else "",
-        "OPENAI_KEY" if "openai" in name.lower() else "",
-        "openai_key" if "openai" in name.lower() else "",
-        "api_key" if "openai" in name.lower() else "",
+        "OPENAI_API_KEY" if _is_openai_key_lookup else "",
+        "openai_api_key" if _is_openai_key_lookup else "",
+        "OPENAI_KEY" if _is_openai_key_lookup else "",
+        "openai_key" if _is_openai_key_lookup else "",
+        "api_key" if _is_openai_key_lookup else "",
     ]
     candidates = [c for c in candidates if c]
 
@@ -89,12 +97,12 @@ def _get_secret(name: str, default: str = "") -> str:
                 if key in st.secrets:
                     value = _normalize_secret(str(st.secrets[key]))
                     if value:
-                        if key.upper().startswith("OPENAI") or "openai" in key.lower() or key.lower() == "api_key":
+                        if key.lower() in {"openai_api_key", "openai_key", "api_key"}:
                             os.environ.setdefault("OPENAI_API_KEY", value)
                             os.environ.setdefault("openai_api_key", value)
                         return value
 
-            if "openai" in name.lower():
+            if _is_openai_key_lookup:
                 nested_paths = [
                     ("openai", "api_key"),
                     ("openai", "OPENAI_API_KEY"),
