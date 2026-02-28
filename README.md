@@ -87,7 +87,7 @@ openai_api_key = "sk-..."
 GEMINI_API_KEY = "AIza..."
 
 # Optional overrides
-openai_model = "gpt-4.1-mini"
+openai_model = "gpt-4o-mini"
 GOOGLE_AI_STUDIO_IMAGE_MODEL = "gemini-2.5-flash-image"
 ```
 
