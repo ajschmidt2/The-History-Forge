@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 import base64
 import os
 from io import BytesIO
 from typing import Any, List, Optional, Sequence
 
-from google import genai
 import streamlit as st
 
 
@@ -316,7 +317,7 @@ def _candidate_models(primary_model: str) -> list[str]:
     return ordered
 
 
-def _generate_images_with_model(client: genai.Client, model: str, prompt: str, config: dict[str, Any]) -> Any:
+def _generate_images_with_model(client: Any, model: str, prompt: str, config: dict[str, Any]) -> Any:
     if _is_gemini_image_model(model):
         generation_config: dict[str, Any] = {
             "response_modalities": ["IMAGE"],
@@ -349,6 +350,8 @@ def generate_imagen_images(
     number_of_images: int = 1,
     aspect_ratio: str = "16:9",
 ) -> List[bytes]:
+    from google import genai  # noqa: PLC0415 — lazy import to avoid top-level ImportError
+
     api_key = validate_gemini_api_key()
 
     client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
