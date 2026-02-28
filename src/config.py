@@ -13,16 +13,7 @@ def _normalize(value: str) -> str:
     v = str(value or "").strip()
     if len(v) >= 2 and v[0] == v[-1] and v[0] in {'"', "'"}:
         v = v[1:-1].strip()
-    low = v.lower()
-    if low in {"none", "null", ""}:
-        return ""
-    # Reject any value that looks like an unfilled template placeholder.
-    # Covers patterns like PASTE_KEY_HERE, YOUR_API_KEY_HERE, REPLACE_ME, etc.
-    if low.startswith(("paste_", "paste-", "your_", "your-", "replace_me", "changeme", "xxx")):
-        return ""
-    if low.endswith(("_here", "-here", "_key_here", "_token_here", "_id_here")):
-        return ""
-    if low in {"paste_key_here", "your_api_key_here", "replace_me"}:
+    if v.lower() in {"paste_key_here", "your_api_key_here", "replace_me", "none", "null", ""}:
         return ""
     return v
 

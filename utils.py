@@ -123,11 +123,16 @@ def get_secret(name: str, default: str = "") -> str:
 # Clients
 # ----------------------------
 def _openai_client():
-    # _get_secret normalises placeholder values (e.g. "PASTE_KEHERE") to "".
-    # Avoid a raw os.getenv fallback here: if the env var is already set to a
-    # placeholder, the raw read would bypass normalisation and send the literal
-    # placeholder string to OpenAI, causing a 401 AuthenticationError.
+    # Try st.secrets / env vars via _get_secret first.
     key = _get_secret("openai_api_key", "").strip()
+    # Fallback: read the env var directly.  This covers cases where the key was
+    # set as a system environment variable (not via Streamlit secrets) or where
+    # _normalize_secret filtered it too aggressively.
+    if not key:
+        key = (
+            os.getenv("OPENAI_API_KEY", "").strip()
+            or os.getenv("openai_api_key", "").strip()
+        )
     if not key:
         return None
 
