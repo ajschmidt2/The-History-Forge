@@ -157,7 +157,15 @@ def get_openai_text_model(default: str = "gpt-4o-mini") -> str:
     Users can override with `openai_model`/`OPENAI_MODEL` in Streamlit secrets
     or environment variables.
     """
-    return _get_secret("openai_model", default).strip() or default
+    model = _get_secret("openai_model", default).strip() or default
+
+    # Common misconfiguration: pasting an API key into openai_model.
+    # API keys usually begin with `sk-` and are never valid model IDs.
+    lowered = model.lower()
+    if lowered.startswith("sk-") or lowered.startswith("sess-"):
+        return default
+
+    return model
 
 
 # ----------------------------
