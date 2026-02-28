@@ -9,6 +9,15 @@ import streamlit as st
 from src.config import get_secret
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL
 
+PREFERRED_FALLBACK_MODELS = [
+    DEFAULT_OPENAI_MODEL,
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4o",
+    "gpt-4-turbo",
+    "gpt-3.5-turbo",
+]
+
 st.set_page_config(page_title="OpenAI Model Access Diagnostics", page_icon="🧪")
 st.title("🧪 OpenAI Model Access Diagnostics")
 st.caption(
@@ -21,6 +30,19 @@ def _mask_key(value: str) -> str:
     if len(value) < 10:
         return "(missing)"
     return f"{value[:7]}…{value[-4:]}"
+
+
+def _pick_fallback_model(configured_model: str, model_ids: list[str]) -> str:
+    """Pick the best fallback model from the account's accessible model list."""
+    if configured_model in model_ids:
+        return configured_model
+
+    for model_id in PREFERRED_FALLBACK_MODELS:
+        if model_id in model_ids:
+            return model_id
+
+    gpt_models = [model_id for model_id in model_ids if model_id.startswith("gpt-")]
+    return gpt_models[0] if gpt_models else DEFAULT_OPENAI_MODEL
 
 
 def run_diagnostics() -> None:
@@ -37,6 +59,7 @@ def run_diagnostics() -> None:
     results.append(("Configured model resolved", True, f"Configured `openai_model`: `{configured_model}`"))
 
     model_ids: list[str] = []
+    suggested_model = DEFAULT_OPENAI_MODEL
     if api_key:
         try:
             import requests
@@ -45,6 +68,7 @@ def run_diagnostics() -> None:
             model_resp = requests.get("https://api.openai.com/v1/models", headers=headers, timeout=20)
             if model_resp.status_code == 200:
                 model_ids = [m.get("id") for m in model_resp.json().get("data", []) if isinstance(m.get("id"), str)]
+                suggested_model = _pick_fallback_model(configured_model, model_ids)
                 results.append(
                     (
                         "List models endpoint works",
@@ -72,7 +96,7 @@ def run_diagnostics() -> None:
                             if has_configured_model
                             else (
                                 f"`{configured_model}` was not returned by `/v1/models`. "
-                                f"Try `openai_model = \"{DEFAULT_OPENAI_MODEL}\"` in `.streamlit/secrets.toml`."
+                                f"Try `openai_model = \"{suggested_model}\"` in `.streamlit/secrets.toml`."
                             )
                         ),
                     )
@@ -108,8 +132,8 @@ def run_diagnostics() -> None:
                     )
                 )
 
-                if configured_model != DEFAULT_OPENAI_MODEL:
-                    fallback_payload = {**tiny_payload, "model": DEFAULT_OPENAI_MODEL}
+                if suggested_model != configured_model:
+                    fallback_payload = {**tiny_payload, "model": suggested_model}
                     fallback_resp = requests.post(
                         "https://api.openai.com/v1/chat/completions",
                         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -118,7 +142,7 @@ def run_diagnostics() -> None:
                     )
                     results.append(
                         (
-                            f"Fallback model `{DEFAULT_OPENAI_MODEL}` accepts chat completion",
+                            f"Fallback model `{suggested_model}` accepts chat completion",
                             fallback_resp.status_code == 200,
                             (
                                 "HTTP 200. This model is a good immediate fallback."
@@ -147,12 +171,12 @@ def run_diagnostics() -> None:
         st.divider()
         st.subheader("Suggested fix")
         st.code(
-            '[default]\nopenai_api_key = "sk-..."\nopenai_model = "gpt-4o-mini"\n',
+            f'[default]\nopenai_api_key = "sk-..."\nopenai_model = "{suggested_model}"\n',
             language="toml",
         )
         st.markdown(
             "1. Open `.streamlit/secrets.toml`.\n"
-            "2. Set `openai_model` to `gpt-4o-mini` (or another model your project can access).\n"
+            f"2. Set `openai_model` to `{suggested_model}` (or another model your project can access).\n"
             "3. Restart Streamlit and re-run this diagnostic page."
         )
 
