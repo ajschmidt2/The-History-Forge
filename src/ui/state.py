@@ -574,7 +574,7 @@ def openai_error_message(exc: Exception) -> str:
         if "sk-" in detail:
             return (
                 "OpenAI model not found because an API key appears to be set as the model name. "
-                "Set `openai_model` to a real model ID (for example `gpt-5-mini`) and keep your "
+                "Set `openai_model` to a real model ID (for example `gpt-4o-mini`) and keep your "
                 "API key only in `openai_api_key` / `OPENAI_API_KEY`."
             )
         return (

@@ -29,23 +29,23 @@ def test_resolve_openai_config_uses_default_model():
     cfg = openai_config.resolve_openai_config(
         get_secret=_secret_reader({"openai_api_key": "sk-proj-real-key"})
     )
-    assert cfg.model == "gpt-5-mini"
+    assert cfg.model == "gpt-4o-mini"
 
 
 def test_get_openai_text_model_accepts_regular_model_id(monkeypatch):
     monkeypatch.setattr(utils, "_get_secret", lambda name, default="": {
         "openai_api_key": "sk-proj-real-key",
-        "openai_model": "gpt-5-mini",
+        "openai_model": "gpt-4o-mini",
     }.get(name, default))
     openai_config.resolve_openai_config.cache_clear()
 
-    assert utils.get_openai_text_model(default="gpt-5-mini") == "gpt-5-mini"
+    assert utils.get_openai_text_model(default="gpt-4o-mini") == "gpt-4o-mini"
 
 
 def test_resolve_openai_config_requires_api_key():
     openai_config.resolve_openai_config.cache_clear()
     with pytest.raises(ValueError, match="Missing OPENAI_API_KEY"):
-        openai_config.resolve_openai_config(get_secret=_secret_reader({"openai_model": "gpt-5-mini"}))
+        openai_config.resolve_openai_config(get_secret=_secret_reader({"openai_model": "gpt-4o-mini"}))
 
 
 def test_get_secret_model_does_not_return_api_key(monkeypatch):
