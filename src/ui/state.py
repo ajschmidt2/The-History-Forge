@@ -11,7 +11,17 @@ import streamlit as st
 from openai import APIConnectionError, APIError, AuthenticationError, NotFoundError, RateLimitError
 
 import src.supabase_storage as _sb_store
+from src.lib.openai_config import DEFAULT_OPENAI_MODEL
 from src.storage import delete_project_records
+
+OPENAI_MODEL_OPTIONS = [
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4-turbo",
+    "gpt-3.5-turbo",
+]
 
 
 def _load_forge_utils():
@@ -397,6 +407,8 @@ def init_state() -> None:
     st.session_state.setdefault("estimated_total_runtime_sec", 0.0)
     st.session_state.setdefault("scenes", [])
     st.session_state.setdefault("scene_transition_types", [])
+
+    st.session_state.setdefault("openai_model", DEFAULT_OPENAI_MODEL)
 
     st.session_state.setdefault("voice_id", _load_saved_voice_id())
     st.session_state.setdefault("voiceover_bytes", None)

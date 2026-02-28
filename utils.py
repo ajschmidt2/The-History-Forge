@@ -161,7 +161,18 @@ def get_secret(name: str, default: str = "") -> str:
 
 
 def get_openai_text_model(default: str = DEFAULT_OPENAI_MODEL) -> str:
-    """Resolve and validate the OpenAI model ID from config."""
+    """Resolve and validate the OpenAI model ID from config.
+
+    Checks Streamlit session state first (set via the sidebar model selector),
+    then falls back to the configured secret/environment value.
+    """
+    try:
+        import streamlit as st
+        session_model = st.session_state.get("openai_model", "").strip()
+        if session_model:
+            return session_model
+    except Exception:
+        pass
     cfg = resolve_openai_config(get_secret=_get_secret)
     model = cfg.model.strip() or default
     return model
