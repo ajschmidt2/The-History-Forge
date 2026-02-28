@@ -307,10 +307,11 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
         )
     except Exception as exc:
         _reraise_api_errors(exc)
+        exc_detail = f"{type(exc).__name__}: {exc}"
         return (
             f"# Research Brief: {topic}\n\n"
             "## Key Facts\n"
-            "- [OpenAI request failed] Unable to generate research brief — check your API key and quota.\n"
+            f"- [OpenAI request failed — {exc_detail}] Unable to generate research brief.\n"
             f"- Topic focus: {topic}.\n\n"
             "## Timeline\n"
             "- [Request failed — no timeline available]\n\n"
@@ -502,9 +503,10 @@ def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_lev
         )
     except Exception as exc:
         _reraise_api_errors(exc)
+        exc_detail = f"{type(exc).__name__}: {exc}"
         beat_titles = ", ".join([beat.get("title", "Beat") for beat in normalized_outline.get("beats", [])])
         return (
-            "[OpenAI request failed] Placeholder script from outline.\n\n"
+            f"[OpenAI request failed — {exc_detail}] Placeholder script from outline.\n\n"
             f"Hook: {normalized_outline['hook']}\n"
             f"Context: {normalized_outline['context']}\n"
             f"Beats: {beat_titles}\n"
@@ -584,9 +586,10 @@ def generate_script(
         )
     except Exception as exc:
         _reraise_api_errors(exc)
+        exc_detail = f"{type(exc).__name__}: {exc}"
         return (
-            f"[OpenAI request failed] Unable to generate script for: {topic}\n\n"
-            "Check your API key and quota, then try again."
+            f"[OpenAI request failed — {exc_detail}] Unable to generate script for: {topic}\n\n"
+            "Check the error detail above, then try again."
         )
     return resp.choices[0].message.content.strip()
 
@@ -713,8 +716,9 @@ def rewrite_description(script: str, description: str, mode: str = "refresh") ->
         )
     except Exception as exc:
         _reraise_api_errors(exc)
+        exc_detail = f"{type(exc).__name__}: {exc}"
         return (
-            "[OpenAI request failed] Unable to rewrite description — check your API key and quota."
+            f"[OpenAI request failed — {exc_detail}] Unable to rewrite description."
         )
 
     return resp.choices[0].message.content.strip()
