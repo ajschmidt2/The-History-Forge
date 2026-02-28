@@ -131,7 +131,11 @@ def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
 # Internal: OpenAI Sora
 # ---------------------------------------------------------------------------
 
-_SORA_SUBMIT_URL = "https://api.openai.com/v1/video/generations"
+_SORA_SUBMIT_URLS = (
+    "https://api.openai.com/v1/videos",
+    # Legacy endpoint path kept as a fallback for compatibility.
+    "https://api.openai.com/v1/video/generations",
+)
 
 
 def _sora_headers() -> dict[str, str]:
@@ -158,16 +162,28 @@ def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
         "n": 1,
         "size": sora_size,
     }
-    resp = requests.post(_SORA_SUBMIT_URL, json=payload, headers=_sora_headers(), timeout=60)
-    if resp.status_code == 401:
-        raise PermissionError(
-            "OpenAI returned 401 Unauthorized.  Check your openai_api_key."
+    resp = None
+    submit_url = None
+    for candidate_url in _SORA_SUBMIT_URLS:
+        candidate_resp = requests.post(
+            candidate_url, json=payload, headers=_sora_headers(), timeout=60
         )
-    if resp.status_code == 404:
+        if candidate_resp.status_code == 401:
+            raise PermissionError(
+                "OpenAI returned 401 Unauthorized.  Check your openai_api_key."
+            )
+        if candidate_resp.status_code != 404:
+            resp = candidate_resp
+            submit_url = candidate_url
+            break
+
+    if resp is None or submit_url is None:
         raise RuntimeError(
-            "OpenAI returned 404 — the Sora video generation endpoint may not be "
-            "available on your account tier yet.  Verify access at platform.openai.com."
+            "OpenAI returned 404 from all known Sora endpoints.  "
+            "Your account may not have video access yet, or the endpoint may have changed.  "
+            "Verify API video access at platform.openai.com."
         )
+
     resp.raise_for_status()
 
     job = resp.json()
@@ -176,7 +192,7 @@ def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
         raise RuntimeError(f"Sora did not return a job ID.  Response: {resp.text[:500]}")
 
     # Poll until complete
-    status_url = f"{_SORA_SUBMIT_URL}/{job_id}"
+    status_url = f"{submit_url}/{job_id}"
 
     for attempt in range(_MAX_POLLS):
         time.sleep(_POLL_INTERVAL_S)
