@@ -107,21 +107,35 @@ def tab_ai_video_generator() -> None:
     # ------------------------------------------------------------------
     available = _available_providers()
     if not available:
-        st.error(
+        st.warning(
             "**No video generation providers are configured.**\n\n"
-            "Configure providers before generating:\n"
-            "- **Google Veo**: deploy the Supabase Edge Function and set `SUPABASE_URL` plus `SUPABASE_KEY` (or `SUPABASE_ANON_KEY`) in app secrets.\n"
-            "- **OpenAI Sora**: set `openai_api_key`.\n\n"
-            "Veo credentials must be stored as **Supabase function secrets**, not in `.env` or frontend secrets.\n"
-            "See `SUPABASE_SETUP.md` → *Section 6* for details."
+            "Configure at least one provider in your app secrets (`.streamlit/secrets.toml` "
+            "or Streamlit Cloud → App secrets):\n\n"
+            "| Provider | Required secret(s) |\n"
+            "|---|---|\n"
+            "| **Google Veo** | `SUPABASE_URL` + `SUPABASE_KEY` (or `SUPABASE_ANON_KEY`) |\n"
+            "| **OpenAI Sora** | `openai_api_key` |\n\n"
+            "Google service-account credentials for Veo must be stored as **Supabase function "
+            "secrets** (not frontend secrets). See `SUPABASE_SETUP.md` → *Section 6*."
         )
 
-        with st.expander("Provider credential status"):
+        with st.expander("Credential status detail"):
+            from src.config import get_secret as _gs
             veo_ok = veo_configured()
             sora_ok = sora_configured()
+            has_sb_url = bool(_gs("SUPABASE_URL"))
+            has_sb_key = bool(
+                _gs("SUPABASE_KEY") or _gs("SUPABASE_ANON_KEY") or _gs("SUPABASE_SERVICE_ROLE_KEY")
+            )
+            has_oai_key = bool(_gs("openai_api_key") or _gs("OPENAI_API_KEY"))
             st.markdown(
-                f"- Google Veo: {'✅ configured' if veo_ok else '❌ missing credentials'}\n"
-                f"- OpenAI Sora: {'✅ configured' if sora_ok else '❌ missing credentials'}"
+                "**Google Veo** "
+                + ("✅ configured" if veo_ok else "❌ not configured") + "\n"
+                + (f"  - `SUPABASE_URL`: {'✅' if has_sb_url else '❌ missing or placeholder'}\n")
+                + (f"  - `SUPABASE_KEY`: {'✅' if has_sb_key else '❌ missing or placeholder'}\n\n")
+                + "**OpenAI Sora** "
+                + ("✅ configured" if sora_ok else "❌ not configured") + "\n"
+                + (f"  - `openai_api_key`: {'✅' if has_oai_key else '❌ missing or placeholder'}")
             )
         return
 
