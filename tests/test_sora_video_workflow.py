@@ -39,12 +39,13 @@ def test_create_video_uses_official_endpoint_and_payload(monkeypatch):
 
     monkeypatch.setattr(mod.requests, "post", fake_post)
 
-    job = mod.create_video("A short prompt", model="sora-2", seconds=4)
+    job = mod.create_video("A short prompt", model="sora-2", seconds=4, size="1280x720")
 
     assert job["id"] == "vid_123"
     assert captured["url"] == "https://api.openai.com/v1/videos"
     assert captured["payload"]["model"] == "sora-2"
     assert captured["payload"]["seconds"] == 4
+    assert captured["payload"]["size"] == "1280x720"
 
 
 def test_poll_video_completes(monkeypatch):

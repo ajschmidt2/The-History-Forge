@@ -156,6 +156,12 @@ def _summarize_error(resp: requests.Response) -> str:
 
 def _raise_sora_http_error(resp: requests.Response, *, context: str) -> None:
     details = _summarize_error(resp)
+    if resp.status_code == 400:
+        raise RuntimeError(
+            "OpenAI returned 400 Bad Request. The video payload is invalid for the current API; "
+            "confirm model/seconds values and include a supported size (16:9=1280x720, 9:16=720x1280, 1:1=1080x1080). "
+            f"{context}. {details}"
+        )
     if resp.status_code == 401:
         raise PermissionError(
             "OpenAI returned 401 Unauthorized. The API key is invalid/revoked, or not being read correctly. "
@@ -181,6 +187,7 @@ def create_video(
     *,
     model: str = "sora-2",
     seconds: int = 8,
+    size: Optional[str] = None,
     input_reference: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create a Sora job and return the raw JSON response.
@@ -202,6 +209,8 @@ def create_video(
         "prompt": prompt.strip(),
         "seconds": seconds,
     }
+    if size:
+        payload["size"] = size
     if input_reference:
         payload["input_reference"] = input_reference
 
@@ -322,8 +331,8 @@ def sora_diagnostic_check() -> tuple[bool, str]:
 
 def _generate_sora(prompt: str, aspect_ratio: str = "16:9") -> bytes:
     """Submit a Sora job and block until the first video asset is downloaded."""
-    _ = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
-    created = create_video(prompt, model="sora-2", seconds=8)
+    size = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
+    created = create_video(prompt, model="sora-2", seconds=8, size=size)
     job_id = str(created.get("id") or "")
     if not job_id:
         raise RuntimeError(f"Sora did not return a job ID. Response: {json.dumps(created)[:500]}")
