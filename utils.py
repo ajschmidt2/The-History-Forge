@@ -299,7 +299,7 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.2,
             messages=[
                 {"role": "system", "content": system},
@@ -436,7 +436,7 @@ def generate_outline(
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.4,
             messages=[
                 {"role": "system", "content": system},
@@ -495,7 +495,7 @@ def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_lev
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.6,
             messages=[
                 {"role": "system", "content": system},
@@ -578,7 +578,7 @@ def generate_script(
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.7,
             messages=[
                 {"role": "system", "content": system},
@@ -625,7 +625,7 @@ def edit_script_with_direction(script: str, direction: str) -> str:
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.7,
             messages=[
                 {"role": "system", "content": system},
@@ -660,7 +660,7 @@ def generate_lucky_topic() -> str:
     user = "Give me one unique historical story idea. Respond with only the title."
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=1.0,
             messages=[
                 {"role": "system", "content": system},
@@ -708,7 +708,7 @@ def rewrite_description(script: str, description: str, mode: str = "refresh") ->
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.6,
             messages=[
                 {"role": "system", "content": system},
@@ -752,7 +752,7 @@ def generate_video_titles(topic: str, script: str, count: int = 5) -> List[str]:
     )
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.7,
             messages=[
                 {"role": "system", "content": system},
@@ -819,7 +819,7 @@ def generate_video_description(
     )
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.7,
             messages=[
                 {"role": "system", "content": system},
@@ -861,7 +861,7 @@ def generate_thumbnail_prompt(topic: str, title: str, style: str) -> str:
     )
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.7,
             messages=[
                 {"role": "system", "content": system},
@@ -1468,7 +1468,7 @@ def generate_prompts_for_scenes(
     prompts: List[str] = []
     try:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.2-chat-latest",
             temperature=0.6,
             response_format={"type": "json_object"},
             messages=[
