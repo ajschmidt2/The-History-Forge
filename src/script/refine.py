@@ -55,7 +55,7 @@ def refine_for_clarity(script: str) -> str:
     )
     try:
         resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
             temperature=0.2,
             messages=[
                 {"role": "system", "content": "You are a script editor focused on clarity and internal consistency."},
@@ -86,7 +86,7 @@ def refine_for_retention(script: str) -> str:
     )
     try:
         resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
             temperature=0.4,
             messages=[
                 {"role": "system", "content": "You are a YouTube script retention editor."},
@@ -132,7 +132,7 @@ def flag_uncertain_claims(script: str, research_brief: str) -> str:
         )
         try:
             resp = client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model="gpt-4o-mini",
                 temperature=0.2,
                 messages=[
                     {"role": "system", "content": "You are a cautious historical fact-check editor. You apply softened language directly inline and return only the revised script text with no commentary."},
