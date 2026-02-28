@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable
 
-DEFAULT_OPENAI_MODEL = "gpt-5-mini"
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 _logger = logging.getLogger(__name__)
 
 
@@ -31,7 +31,7 @@ def resolve_openai_config(get_secret: Callable[[str, str], str] | None = None) -
     lowered_model = model.lower()
     if "sk-" in lowered_model:
         raise ValueError(
-            "Misconfiguration: OPENAI_MODEL is an API key. Set OPENAI_MODEL to a model id like gpt-5-mini."
+            "Misconfiguration: OPENAI_MODEL is an API key. Set OPENAI_MODEL to a model id like gpt-4o-mini."
         )
 
     _logger.info(
