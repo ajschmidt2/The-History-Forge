@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import List
 
-from utils import get_secret, _reraise_api_errors, get_openai_text_model
+from utils import get_secret, _reraise_api_errors, get_openai_text_model, openai_chat_completion
 
 
 def _openai_client():
@@ -54,7 +54,7 @@ def refine_for_clarity(script: str) -> str:
         f"{base}"
     )
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.2,
             messages=[
@@ -85,7 +85,7 @@ def refine_for_retention(script: str) -> str:
         f"{base}"
     )
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.4,
             messages=[
@@ -131,7 +131,7 @@ def flag_uncertain_claims(script: str, research_brief: str) -> str:
             f"Script:\n{base}"
         )
         try:
-            resp = client.chat.completions.create(
+            resp = openai_chat_completion(client, 
                 model=get_openai_text_model(),
                 temperature=0.2,
                 messages=[

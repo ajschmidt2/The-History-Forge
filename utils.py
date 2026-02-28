@@ -183,6 +183,32 @@ def _openai_client():
     return OpenAI(api_key=key)
 
 
+def _is_model_access_error(exc: Exception) -> bool:
+    detail = str(exc).lower()
+    return (
+        "does not have access to model" in detail
+        or "model_not_found" in detail
+        or "the model requested is not available" in detail
+    )
+
+
+def openai_chat_completion(client, **kwargs):
+    """Call OpenAI chat completions and retry once with the default model on access errors."""
+    requested_model = str(kwargs.get("model") or get_openai_text_model()).strip()
+    payload = {**kwargs, "model": requested_model}
+    try:
+        return client.chat.completions.create(**payload)
+    except Exception as exc:  # noqa: BLE001 - API surface differs by SDK versions
+        try:
+            from openai import APIError
+        except ImportError:
+            raise
+        if isinstance(exc, APIError) and _is_model_access_error(exc) and requested_model != DEFAULT_OPENAI_MODEL:
+            retry_payload = {**payload, "model": DEFAULT_OPENAI_MODEL}
+            return client.chat.completions.create(**retry_payload)
+        raise
+
+
 def _reraise_api_errors(exc: Exception) -> None:
     """Re-raise OpenAI API errors so the UI layer can surface them with actionable guidance.
 
@@ -306,7 +332,7 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
     )
 
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.2,
             messages=[
@@ -443,7 +469,7 @@ def generate_outline(
     )
 
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.4,
             messages=[
@@ -502,7 +528,7 @@ def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_lev
     )
 
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.6,
             messages=[
@@ -585,7 +611,7 @@ def generate_script(
     )
 
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.7,
             messages=[
@@ -632,7 +658,7 @@ def edit_script_with_direction(script: str, direction: str) -> str:
     )
 
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.7,
             messages=[
@@ -667,7 +693,7 @@ def generate_lucky_topic() -> str:
     )
     user = "Give me one unique historical story idea. Respond with only the title."
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=1.0,
             messages=[
@@ -715,7 +741,7 @@ def rewrite_description(script: str, description: str, mode: str = "refresh") ->
     )
 
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.6,
             messages=[
@@ -759,7 +785,7 @@ def generate_video_titles(topic: str, script: str, count: int = 5) -> List[str]:
         f"Return exactly {count} titles as a JSON array of strings."
     )
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.7,
             messages=[
@@ -826,7 +852,7 @@ def generate_video_description(
         "Return plain text only."
     )
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.7,
             messages=[
@@ -868,7 +894,7 @@ def generate_thumbnail_prompt(topic: str, title: str, style: str) -> str:
         "No text, no logos, no watermarks."
     )
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.7,
             messages=[
@@ -1475,7 +1501,7 @@ def generate_prompts_for_scenes(
 
     prompts: List[str] = []
     try:
-        resp = client.chat.completions.create(
+        resp = openai_chat_completion(client, 
             model=get_openai_text_model(),
             temperature=0.6,
             response_format={"type": "json_object"},

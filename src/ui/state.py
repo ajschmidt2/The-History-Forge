@@ -584,6 +584,15 @@ def openai_error_message(exc: Exception) -> str:
     if isinstance(exc, APIConnectionError):
         return "OpenAI connection failed. Please check your network and try again."
     if isinstance(exc, APIError):
+        detail = str(exc)
+        lowered = detail.lower()
+        if "does not have access to model" in lowered or "model_not_found" in lowered:
+            return (
+                "OpenAI model access denied for your current project. "
+                "Set `openai_model` to one your project can use (recommended: `gpt-4o-mini`) "
+                "or update project model access in the OpenAI dashboard. "
+                f"Detail: {detail}"
+            )
         return f"OpenAI API error: {exc}"
     return f"OpenAI request failed: {exc}"
 
