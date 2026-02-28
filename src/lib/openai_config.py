@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable
 
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+DEFAULT_OPENAI_MODEL = "gpt-4o"
+AVAILABLE_OPENAI_MODELS = ["gpt-4o", "gpt-4.1-mini"]
 _logger = logging.getLogger(__name__)
 
 

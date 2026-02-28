@@ -161,7 +161,19 @@ def get_secret(name: str, default: str = "") -> str:
 
 
 def get_openai_text_model(default: str = DEFAULT_OPENAI_MODEL) -> str:
-    """Resolve and validate the OpenAI model ID from config."""
+    """Resolve and validate the OpenAI model ID from config.
+
+    If the user has selected a model via the in-app dropdown it is stored in
+    ``st.session_state.openai_model_override`` and takes precedence over the
+    value in secrets / environment variables.
+    """
+    try:
+        import streamlit as st  # type: ignore
+        override = st.session_state.get("openai_model_override", "")
+        if override and isinstance(override, str) and override.strip():
+            return override.strip()
+    except Exception:
+        pass
     cfg = resolve_openai_config(get_secret=_get_secret)
     model = cfg.model.strip() or default
     return model

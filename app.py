@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 from image_gen import validate_gemini_api_key
+from src.lib.openai_config import AVAILABLE_OPENAI_MODELS, DEFAULT_OPENAI_MODEL
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.ui.tabs.ai_video_generator import tab_ai_video_generator
@@ -49,6 +50,17 @@ def main() -> None:
     init_state()
     st.title("The History Forge")
     st.caption("Generate scripts, scene lists, prompts, images, and voiceover from a single workflow.")
+
+    with st.sidebar:
+        current_model = st.session_state.get("openai_model_override", DEFAULT_OPENAI_MODEL)
+        default_index = AVAILABLE_OPENAI_MODELS.index(current_model) if current_model in AVAILABLE_OPENAI_MODELS else 0
+        selected_model = st.selectbox(
+            "OpenAI Model",
+            AVAILABLE_OPENAI_MODELS,
+            index=default_index,
+            help="Choose the OpenAI model used for script generation and research.",
+        )
+        st.session_state.openai_model_override = selected_model
 
     render_project_selector()
     upsert_project(active_project_id(), st.session_state.project_title)

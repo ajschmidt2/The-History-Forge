@@ -10,6 +10,8 @@ from uuid import uuid4
 import streamlit as st
 from openai import APIConnectionError, APIError, AuthenticationError, NotFoundError, RateLimitError
 
+from src.lib.openai_config import AVAILABLE_OPENAI_MODELS, DEFAULT_OPENAI_MODEL
+
 import src.supabase_storage as _sb_store
 from src.storage import delete_project_records
 
@@ -371,6 +373,8 @@ def init_state() -> None:
         st.session_state.script_text_input = st.session_state.script_text
     if st.session_state.script_text and not st.session_state.generated_script_text_input:
         st.session_state.generated_script_text_input = st.session_state.script_text
+
+    st.session_state.setdefault("openai_model_override", DEFAULT_OPENAI_MODEL)
 
     st.session_state.setdefault("tone", "Documentary")
     st.session_state.setdefault("length", "8–10 minutes")
