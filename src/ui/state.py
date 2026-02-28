@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import streamlit as st
-from openai import APIConnectionError, APIError, AuthenticationError, RateLimitError
+from openai import APIConnectionError, APIError, AuthenticationError, NotFoundError, RateLimitError
 
 import src.supabase_storage as _sb_store
 from src.storage import delete_project_records
@@ -568,6 +568,11 @@ def openai_error_message(exc: Exception) -> str:
     if isinstance(exc, RateLimitError):
         return (
             "OpenAI rate limit or quota exceeded. Verify your usage limits and billing status."
+        )
+    if isinstance(exc, NotFoundError):
+        return (
+            f"OpenAI model not found. The model requested is not available for your API "
+            f"subscription tier. Check your OpenAI account for available models. Detail: {exc}"
         )
     if isinstance(exc, APIConnectionError):
         return "OpenAI connection failed. Please check your network and try again."

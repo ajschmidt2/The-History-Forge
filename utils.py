@@ -176,17 +176,18 @@ def _openai_client():
 
 
 def _reraise_api_errors(exc: Exception) -> None:
-    """Re-raise OpenAI authentication and rate-limit errors so the UI layer can surface them.
+    """Re-raise OpenAI API errors so the UI layer can surface them with actionable guidance.
 
-    Generic network or parsing failures are intentionally swallowed here so callers can
-    return a graceful placeholder.  Auth and quota errors, however, require user action and
-    must reach the UI so openai_error_message() can display actionable guidance.
+    All HTTP-level API errors (auth, quota, model-not-found, bad-request) and connection
+    errors require user action and must reach the UI so openai_error_message() can display
+    helpful guidance.  Non-API failures (e.g. JSON parsing errors) are intentionally
+    swallowed so callers can return a graceful placeholder.
     """
     try:
-        from openai import AuthenticationError, RateLimitError
+        from openai import APIConnectionError, APIError
     except ImportError:
         return
-    if isinstance(exc, (AuthenticationError, RateLimitError)):
+    if isinstance(exc, (APIError, APIConnectionError)):
         raise exc from exc
 
 
