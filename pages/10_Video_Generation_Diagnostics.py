@@ -57,6 +57,93 @@ def _render_results(results: list[tuple[str, bool, str]], *, section: str) -> bo
     return all_passed
 
 
+def _veo_500_hint(error_msg: str) -> str:
+    """Return a targeted fix hint based on the 500 error message from the edge function."""
+    msg = error_msg.lower()
+
+    if "google_service_account_json" in msg or "missing supabase secret" in msg and "service_account" in msg:
+        return (
+            "**Root cause:** The `GOOGLE_SERVICE_ACCOUNT_JSON` secret is not set in your Supabase "
+            "Edge Function environment.\n\n"
+            "**Fix:** In the Supabase Dashboard → Edge Functions → veo-generate → Secrets, add:\n"
+            "- `GOOGLE_SERVICE_ACCOUNT_JSON` = *(paste the full JSON content of your GCP service account key)*"
+        )
+
+    if "not valid json" in msg or "invalid json" in msg or "json" in msg and "parse" in msg:
+        return (
+            "**Root cause:** The `GOOGLE_SERVICE_ACCOUNT_JSON` secret is not valid JSON.  "
+            "This often happens when the JSON is pasted with line-break issues or truncated.\n\n"
+            "**Fix:** Re-paste the complete service account JSON.  Make sure to copy the *entire* "
+            "file content, including the opening `{` and closing `}`.  You can verify it with:\n"
+            "```bash\npython3 -c \"import json, sys; json.load(open('service-account.json')); print('Valid JSON')\"\n```"
+        )
+
+    if "client_email" in msg or "private_key" in msg:
+        return (
+            "**Root cause:** The `GOOGLE_SERVICE_ACCOUNT_JSON` secret is missing required fields "
+            "(`client_email` or `private_key`).\n\n"
+            "**Fix:** Regenerate your service account key in GCP Console → IAM & Admin → Service Accounts, "
+            "download as JSON, and re-paste into the Supabase secret."
+        )
+
+    if "google_cloud_project_id" in msg:
+        return (
+            "**Root cause:** The `GOOGLE_CLOUD_PROJECT_ID` secret is not set.\n\n"
+            "**Fix:** Add it in Supabase Edge Function secrets:\n"
+            "- `GOOGLE_CLOUD_PROJECT_ID` = your GCP project ID (e.g. `my-project-123456`)\n\n"
+            "Find your project ID in the GCP Console top-left dropdown."
+        )
+
+    if "access token" in msg or "oauth" in msg or "jwt-bearer" in msg:
+        return (
+            "**Root cause:** Failed to obtain a Google OAuth access token.  The service account "
+            "key may be wrong, expired, or the key file belongs to a different project.\n\n"
+            "**Fix:**\n"
+            "1. Go to GCP Console → IAM & Admin → Service Accounts  \n"
+            "2. Select (or create) the service account  \n"
+            "3. Keys tab → Add Key → Create new key → JSON  \n"
+            "4. Update the `GOOGLE_SERVICE_ACCOUNT_JSON` Supabase secret with the new file  \n"
+        )
+
+    if "403" in msg or "permission" in msg or "forbidden" in msg:
+        return (
+            "**Root cause:** The Google service account does not have permission to call the Vertex AI / Veo API.\n\n"
+            "**Fix:** In GCP Console → IAM & Admin → IAM, grant the service account the role:\n"
+            "- `Vertex AI User` (`roles/aiplatform.user`)\n\n"
+            "Also ensure the **Vertex AI API** is enabled for your project: "
+            "GCP Console → APIs & Services → Enable APIs → search *Vertex AI API*."
+        )
+
+    if "404" in msg and ("veo" in msg or "model" in msg or "location" in msg):
+        return (
+            "**Root cause:** The Veo model endpoint returned 404.  The model name or location may be wrong, "
+            "or Veo is not available in the selected region.\n\n"
+            "**Fix:**\n"
+            "1. Set `GOOGLE_CLOUD_LOCATION` to a supported region (e.g. `us-central1`)  \n"
+            "2. Confirm that `veo-2.0-generate-001` is available in that region for your project  \n"
+            "3. Check GCP Console → Vertex AI → Model Garden for Veo availability  \n"
+        )
+
+    if "timeout" in msg or "timed out" in msg:
+        return (
+            "**Root cause:** The Veo generation timed out inside the Edge Function (max ~12 minutes).\n\n"
+            "This can mean:\n"
+            "- The Veo API is under heavy load  \n"
+            "- The prompt or parameters are unusually complex  \n\n"
+            "**Fix:** Try again, or try a shorter/simpler prompt."
+        )
+
+    # Generic fallback
+    return (
+        "**Possible causes:**\n"
+        "- `GOOGLE_SERVICE_ACCOUNT_JSON` not set or invalid in Supabase secrets  \n"
+        "- `GOOGLE_CLOUD_PROJECT_ID` not set  \n"
+        "- Service account lacks Vertex AI permissions  \n"
+        "- Veo API not enabled for the GCP project  \n\n"
+        "Check the Supabase Edge Function logs in the Dashboard for the full traceback."
+    )
+
+
 # ===========================================================================
 # SECTION 1 — Google Veo
 # ===========================================================================
@@ -341,93 +428,6 @@ if st.button("Run Veo Diagnostics", type="primary", key="veo_run"):
             st.code(traceback.format_exc())
 else:
     st.info("Click **Run Veo Diagnostics** to begin.")
-
-
-def _veo_500_hint(error_msg: str) -> str:
-    """Return a targeted fix hint based on the 500 error message from the edge function."""
-    msg = error_msg.lower()
-
-    if "google_service_account_json" in msg or "missing supabase secret" in msg and "service_account" in msg:
-        return (
-            "**Root cause:** The `GOOGLE_SERVICE_ACCOUNT_JSON` secret is not set in your Supabase "
-            "Edge Function environment.\n\n"
-            "**Fix:** In the Supabase Dashboard → Edge Functions → veo-generate → Secrets, add:\n"
-            "- `GOOGLE_SERVICE_ACCOUNT_JSON` = *(paste the full JSON content of your GCP service account key)*"
-        )
-
-    if "not valid json" in msg or "invalid json" in msg or "json" in msg and "parse" in msg:
-        return (
-            "**Root cause:** The `GOOGLE_SERVICE_ACCOUNT_JSON` secret is not valid JSON.  "
-            "This often happens when the JSON is pasted with line-break issues or truncated.\n\n"
-            "**Fix:** Re-paste the complete service account JSON.  Make sure to copy the *entire* "
-            "file content, including the opening `{` and closing `}`.  You can verify it with:\n"
-            "```bash\npython3 -c \"import json, sys; json.load(open('service-account.json')); print('Valid JSON')\"\n```"
-        )
-
-    if "client_email" in msg or "private_key" in msg:
-        return (
-            "**Root cause:** The `GOOGLE_SERVICE_ACCOUNT_JSON` secret is missing required fields "
-            "(`client_email` or `private_key`).\n\n"
-            "**Fix:** Regenerate your service account key in GCP Console → IAM & Admin → Service Accounts, "
-            "download as JSON, and re-paste into the Supabase secret."
-        )
-
-    if "google_cloud_project_id" in msg:
-        return (
-            "**Root cause:** The `GOOGLE_CLOUD_PROJECT_ID` secret is not set.\n\n"
-            "**Fix:** Add it in Supabase Edge Function secrets:\n"
-            "- `GOOGLE_CLOUD_PROJECT_ID` = your GCP project ID (e.g. `my-project-123456`)\n\n"
-            "Find your project ID in the GCP Console top-left dropdown."
-        )
-
-    if "access token" in msg or "oauth" in msg or "jwt-bearer" in msg:
-        return (
-            "**Root cause:** Failed to obtain a Google OAuth access token.  The service account "
-            "key may be wrong, expired, or the key file belongs to a different project.\n\n"
-            "**Fix:**\n"
-            "1. Go to GCP Console → IAM & Admin → Service Accounts  \n"
-            "2. Select (or create) the service account  \n"
-            "3. Keys tab → Add Key → Create new key → JSON  \n"
-            "4. Update the `GOOGLE_SERVICE_ACCOUNT_JSON` Supabase secret with the new file  \n"
-        )
-
-    if "403" in msg or "permission" in msg or "forbidden" in msg:
-        return (
-            "**Root cause:** The Google service account does not have permission to call the Vertex AI / Veo API.\n\n"
-            "**Fix:** In GCP Console → IAM & Admin → IAM, grant the service account the role:\n"
-            "- `Vertex AI User` (`roles/aiplatform.user`)\n\n"
-            "Also ensure the **Vertex AI API** is enabled for your project: "
-            "GCP Console → APIs & Services → Enable APIs → search *Vertex AI API*."
-        )
-
-    if "404" in msg and ("veo" in msg or "model" in msg or "location" in msg):
-        return (
-            "**Root cause:** The Veo model endpoint returned 404.  The model name or location may be wrong, "
-            "or Veo is not available in the selected region.\n\n"
-            "**Fix:**\n"
-            "1. Set `GOOGLE_CLOUD_LOCATION` to a supported region (e.g. `us-central1`)  \n"
-            "2. Confirm that `veo-2.0-generate-001` is available in that region for your project  \n"
-            "3. Check GCP Console → Vertex AI → Model Garden for Veo availability  \n"
-        )
-
-    if "timeout" in msg or "timed out" in msg:
-        return (
-            "**Root cause:** The Veo generation timed out inside the Edge Function (max ~12 minutes).\n\n"
-            "This can mean:\n"
-            "- The Veo API is under heavy load  \n"
-            "- The prompt or parameters are unusually complex  \n\n"
-            "**Fix:** Try again, or try a shorter/simpler prompt."
-        )
-
-    # Generic fallback
-    return (
-        "**Possible causes:**\n"
-        "- `GOOGLE_SERVICE_ACCOUNT_JSON` not set or invalid in Supabase secrets  \n"
-        "- `GOOGLE_CLOUD_PROJECT_ID` not set  \n"
-        "- Service account lacks Vertex AI permissions  \n"
-        "- Veo API not enabled for the GCP project  \n\n"
-        "Check the Supabase Edge Function logs in the Dashboard for the full traceback."
-    )
 
 
 # ===========================================================================
