@@ -205,3 +205,41 @@ ideas for enhancements you might consider:
 
 Contributions are welcome!  Feel free to fork this project and adapt it to your
 own creative workflow.
+
+## Sora video API workflow (create → poll → download)
+
+History Forge now uses the official OpenAI Sora Videos API endpoints on
+`https://api.openai.com`:
+
+- `POST /v1/videos` to create a video job
+- `GET /v1/videos/{id}` to check status
+- `GET /v1/models` in diagnostic mode to validate key scope
+
+### Diagnostic CLI
+
+```bash
+python scripts/sora_health_check.py
+```
+
+If the script reports that `sora-2` / `sora-2-pro` are missing, your API key is
+likely from a different org/project than the Sora-enabled one.
+
+### Known-good curl example
+
+```bash
+curl https://api.openai.com/v1/videos \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sora-2",
+    "prompt": "A cinematic aerial shot of a snowy mountain village at sunrise, drifting fog, ultra realistic.",
+    "seconds": 4
+  }'
+```
+
+### Required env vars / secrets checklist
+
+- `OPENAI_API_KEY` (or `openai_api_key` in Streamlit secrets)
+- Key must belong to the same org/project where Sora is enabled
+- Do **not** use `platform.openai.com` as an API base; use `https://api.openai.com`
+- Use model names exactly: `sora-2` or `sora-2-pro`
