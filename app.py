@@ -6,7 +6,7 @@ from pathlib import Path
 from image_gen import validate_gemini_api_key
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
-from src.lib.openai_config import DEFAULT_OPENAI_MODEL
+from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.ui.tabs.ai_video_generator import tab_ai_video_generator
 from src.ui.tabs.export import tab_export
 from src.ui.tabs.generate_script import tab_generate_script
@@ -17,7 +17,6 @@ from src.ui.tabs.scenes import tab_create_scenes
 from src.ui.tabs.thumbnail import tab_thumbnail_title
 from src.ui.tabs.video_studio import tab_video_compile
 from src.ui.tabs.voiceover import tab_voiceover
-from src.ui.state import OPENAI_MODEL_OPTIONS
 
 
 def _load_ui_state_module():

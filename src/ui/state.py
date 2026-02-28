@@ -11,17 +11,8 @@ import streamlit as st
 from openai import APIConnectionError, APIError, AuthenticationError, NotFoundError, RateLimitError
 
 import src.supabase_storage as _sb_store
-from src.lib.openai_config import DEFAULT_OPENAI_MODEL
+from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.storage import delete_project_records
-
-OPENAI_MODEL_OPTIONS = [
-    "gpt-4o-mini",
-    "gpt-4o",
-    "gpt-4.1-mini",
-    "gpt-4.1",
-    "gpt-4-turbo",
-    "gpt-3.5-turbo",
-]
 
 
 def _load_forge_utils():
