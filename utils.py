@@ -52,6 +52,21 @@ def _secret_from_mapping(mapping: Any, path: tuple[str, ...]) -> str:
         current = current[key]
     return _normalize_secret(str(current))
 
+
+def _find_secret_in_mapping(mapping: Any, key_aliases: set[str]) -> str:
+    """Depth-first search for a non-placeholder secret under any matching alias."""
+    if isinstance(mapping, Mapping):
+        for key, value in mapping.items():
+            key_name = str(key).strip().lower()
+            if key_name in key_aliases and not isinstance(value, Mapping):
+                normalized = _normalize_secret(str(value))
+                if normalized:
+                    return normalized
+            nested = _find_secret_in_mapping(value, key_aliases)
+            if nested:
+                return nested
+    return ""
+
 def _get_secret(name: str, default: str = "") -> str:
     candidates = [
         name,
@@ -92,6 +107,23 @@ def _get_secret(name: str, default: str = "") -> str:
                         os.environ.setdefault("OPENAI_API_KEY", value)
                         os.environ.setdefault("openai_api_key", value)
                         return value
+
+                recursive_value = _find_secret_in_mapping(
+                    st.secrets,
+                    {
+                        "openai_api_key",
+                        "openai_key",
+                        "openai",
+                        "api_key",
+                        "apikey",
+                        "openaiapikey",
+                        "openai-api-key",
+                    },
+                )
+                if recursive_value:
+                    os.environ.setdefault("OPENAI_API_KEY", recursive_value)
+                    os.environ.setdefault("openai_api_key", recursive_value)
+                    return recursive_value
 
             if "elevenlabs" in name.lower():
                 nested_paths = [
