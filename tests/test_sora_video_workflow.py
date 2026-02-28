@@ -126,6 +126,48 @@ def test_asset_urls_from_nested_signed_url():
     assert urls == [("video", "https://example.com/download/video.mp4?token=abc")]
 
 
+
+
+def test_download_video_assets_from_file_id_with_underscore(tmp_path: Path, monkeypatch):
+    job = {
+        "id": "vid_12",
+        "status": "completed",
+        "output": {
+            "video_output": {
+                "asset": {
+                    "id": "file_underscore_video"
+                }
+            }
+        },
+    }
+
+    monkeypatch.setattr(mod, "get_secret", lambda *args, **kwargs: "sk-test")
+
+    def fake_get(url, headers, timeout):
+        assert "file_underscore_video" in url
+        return DummyResp(200, content=b"video-underscore")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    saved = mod.download_video_assets(job, tmp_path)
+
+    assert Path(saved["video"][0]).read_bytes() == b"video-underscore"
+
+
+def test_asset_urls_from_relative_path():
+    job = {
+        "id": "vid_13",
+        "status": "completed",
+        "output": {
+            "video_url": "/v1/files/file-123/content"
+        },
+    }
+
+    urls = mod._asset_urls_from_job(job)
+
+    assert urls == [("video", "https://api.openai.com/v1/files/file-123/content")]
+
+
 def test_sora_diagnostic_missing_models(monkeypatch):
     monkeypatch.setattr(mod, "get_secret", lambda *args, **kwargs: "sk-test")
     monkeypatch.setattr(

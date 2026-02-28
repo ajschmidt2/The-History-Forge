@@ -268,9 +268,14 @@ def _asset_urls_from_job(job: dict[str, Any]) -> list[tuple[str, str]]:
     }
 
     def add_url(key: str, value: Any) -> None:
-        if isinstance(value, str) and value.startswith("http"):
+        if not isinstance(value, str):
+            return
+        candidate = value.strip()
+        if candidate.startswith("/"):
+            candidate = f"{_OPENAI_API_BASE_URL}{candidate}"
+        if candidate.startswith("http"):
             kind = "audio" if "audio" in key else "video"
-            urls.append((kind, value))
+            urls.append((kind, candidate))
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
@@ -310,26 +315,38 @@ def _asset_urls_from_job(job: dict[str, Any]) -> list[tuple[str, str]]:
 
 def _asset_file_ids_from_job(job: dict[str, Any]) -> list[tuple[str, str]]:
     ids: list[tuple[str, str]] = []
+    file_id_keys = {
+        "file_id",
+        "asset_id",
+        "video_file_id",
+        "audio_file_id",
+        "output_file_id",
+        "result_file_id",
+    }
+
+    def looks_like_file_id(value: str) -> bool:
+        normalized = value.strip().lower()
+        return normalized.startswith(("file-", "file_", "fil_"))
 
     def add_id(kind_hint: str, file_id: Any) -> None:
-        if isinstance(file_id, str) and file_id.strip():
+        if isinstance(file_id, str) and file_id.strip() and looks_like_file_id(file_id):
             kind = "audio" if "audio" in kind_hint else "video"
             ids.append((kind, file_id.strip()))
 
     def walk(node: Any, *, kind_hint: str = "video") -> None:
         if isinstance(node, dict):
             node_kind = str(node.get("type") or node.get("mime_type") or kind_hint).lower()
-            for key in ("id", "file_id"):
-                if key in node:
-                    value = node[key]
-                    if key == "id" and not str(value).startswith("file-"):
-                        continue
-                    add_id(node_kind, value)
             for key, value in node.items():
+                key_lower = str(key).lower()
+                if key_lower in file_id_keys or ("file" in key_lower and "id" in key_lower):
+                    add_id(node_kind, value)
+                if key_lower == "id":
+                    add_id(node_kind, value)
+
                 child_hint = node_kind
-                if key in {"audio", "audio_file", "audio_asset"}:
+                if key_lower in {"audio", "audio_file", "audio_asset", "audio_output"}:
                     child_hint = "audio"
-                elif key in {"video", "video_file", "video_asset"}:
+                elif key_lower in {"video", "video_file", "video_asset", "video_output"}:
                     child_hint = "video"
                 walk(value, kind_hint=child_hint)
             return
