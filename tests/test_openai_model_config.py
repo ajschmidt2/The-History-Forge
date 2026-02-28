@@ -1,19 +1,48 @@
+import pytest
+
 import utils
+from src.lib import openai_config
 
 
-def test_get_openai_text_model_ignores_api_key_like_value(monkeypatch):
-    monkeypatch.setattr(utils, "_get_secret", lambda name, default="": "sk-proj-abc123")
+def _secret_reader(mapping):
+    def _reader(name, default=""):
+        return mapping.get(name, mapping.get(name.upper(), default))
 
-    assert utils.get_openai_text_model(default="gpt-4o-mini") == "gpt-4o-mini"
+    return _reader
+
+
+def test_resolve_openai_config_rejects_api_key_like_model():
+    openai_config.resolve_openai_config.cache_clear()
+    with pytest.raises(ValueError, match="OPENAI_MODEL is an API key"):
+        openai_config.resolve_openai_config(
+            get_secret=_secret_reader(
+                {
+                    "openai_api_key": "sk-proj-real-key",
+                    "openai_model": "sk-proj-abc123",
+                }
+            )
+        )
+
+
+def test_resolve_openai_config_uses_default_model():
+    openai_config.resolve_openai_config.cache_clear()
+    cfg = openai_config.resolve_openai_config(
+        get_secret=_secret_reader({"openai_api_key": "sk-proj-real-key"})
+    )
+    assert cfg.model == "gpt-5-mini"
 
 
 def test_get_openai_text_model_accepts_regular_model_id(monkeypatch):
-    monkeypatch.setattr(utils, "_get_secret", lambda name, default="": "gpt-4o-mini")
+    monkeypatch.setattr(utils, "_get_secret", lambda name, default="": {
+        "openai_api_key": "sk-proj-real-key",
+        "openai_model": "gpt-5-mini",
+    }.get(name, default))
+    openai_config.resolve_openai_config.cache_clear()
 
-    assert utils.get_openai_text_model(default="gpt-4o-mini") == "gpt-4o-mini"
+    assert utils.get_openai_text_model(default="gpt-5-mini") == "gpt-5-mini"
 
 
-def test_get_openai_text_model_falls_back_from_unavailable_model(monkeypatch):
-    monkeypatch.setattr(utils, "_get_secret", lambda name, default="": "gpt-4.1-mini")
-
-    assert utils.get_openai_text_model(default="gpt-4o-mini") == "gpt-4o-mini"
+def test_resolve_openai_config_requires_api_key():
+    openai_config.resolve_openai_config.cache_clear()
+    with pytest.raises(ValueError, match="Missing OPENAI_API_KEY"):
+        openai_config.resolve_openai_config(get_secret=_secret_reader({"openai_model": "gpt-5-mini"}))
