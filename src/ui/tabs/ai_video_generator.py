@@ -127,7 +127,7 @@ def tab_ai_video_generator() -> None:
             has_sb_key = bool(
                 _gs("SUPABASE_KEY") or _gs("SUPABASE_ANON_KEY") or _gs("SUPABASE_SERVICE_ROLE_KEY")
             )
-            has_oai_key = bool(_gs("openai_api_key") or _gs("OPENAI_API_KEY"))
+            has_oai_key = bool(_gs("openai_api_key"))
             st.markdown(
                 "**Google Veo** "
                 + ("✅ configured" if veo_ok else "❌ not configured") + "\n"

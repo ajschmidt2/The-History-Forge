@@ -76,7 +76,7 @@ def veo_configured() -> bool:
 
 def sora_configured() -> bool:
     """Return True when an OpenAI API key is available."""
-    key = get_secret("openai_api_key") or get_secret("OPENAI_API_KEY")
+    key = get_secret("openai_api_key")
     return bool(key) and not key.startswith("PASTE")
 
 
@@ -143,7 +143,7 @@ _SORA_SECONDS = {"4", "8", "12"}
 
 
 def _sora_headers() -> dict[str, str]:
-    key = get_secret("openai_api_key") or get_secret("OPENAI_API_KEY")
+    key = get_secret("openai_api_key")
     return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
 
@@ -194,9 +194,9 @@ def create_video(
 
     Uses the official create endpoint: POST https://api.openai.com/v1/videos.
     """
-    key = get_secret("openai_api_key") or get_secret("OPENAI_API_KEY")
+    key = get_secret("openai_api_key")
     if not key:
-        raise ValueError("OpenAI API key is not configured. Set openai_api_key or OPENAI_API_KEY.")
+        raise ValueError("OpenAI API key is not configured. Set openai_api_key in .streamlit/secrets.toml.")
     if model not in _SORA_MODELS:
         raise ValueError(f"Invalid Sora model '{model}'. Use 'sora-2' or 'sora-2-pro'.")
     seconds_value = str(seconds).strip()
