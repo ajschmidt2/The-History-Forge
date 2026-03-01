@@ -315,7 +315,7 @@ def poll_sora_video_job_status(job_id: str) -> dict[str, Any]:
 
 
 def finalize_sora_video_job(job_id: str) -> dict[str, str]:
-    """Verify completion, download /content, upload MP4 to Supabase, and persist URL."""
+    """Verify completion, download /content MP4 bytes, upload to Supabase, and persist metadata."""
     db_job = _sb_store.get_video_job(job_id)
     if not db_job:
         raise ValueError(f"video_jobs row not found for jobId={job_id}")
@@ -332,8 +332,21 @@ def finalize_sora_video_job(job_id: str) -> dict[str, str]:
             raise RuntimeError(str(err))
         raise RuntimeError(f"Video {openai_video_id} is not complete yet (status={status or 'unknown'}).")
 
-    if db_job.get("storage_path") and db_job.get("public_url"):
-        return {"storagePath": str(db_job["storage_path"]), "url": str(db_job["public_url"])}
+    existing_path = str(db_job.get("storage_path") or "").strip()
+    if existing_path:
+        existing_url = str(db_job.get("public_url") or "").strip()
+        if not existing_url:
+            existing_url = str(
+                _sb_store.get_public_storage_url(
+                    str(db_job.get("bucket") or "videos"),
+                    existing_path,
+                )
+                or ""
+            ).strip()
+            if existing_url:
+                _sb_store.update_video_job(job_id, {"public_url": existing_url})
+        if existing_url:
+            return {"storagePath": existing_path, "url": existing_url}
 
     video_bytes = get_video_content(openai_video_id)
     owner_prefix = "anon"
@@ -341,7 +354,12 @@ def finalize_sora_video_job(job_id: str) -> dict[str, str]:
         owner_prefix = str(db_job["user_id"])
     storage_path = f"{owner_prefix}/{job_id}.mp4"
     bucket = str(db_job.get("bucket") or "videos")
-    url = _sb_store.upload_video_bytes(bucket=bucket, storage_path=storage_path, video_bytes=video_bytes)
+    url = _sb_store.upload_video_bytes(
+        bucket=bucket,
+        storage_path=storage_path,
+        video_bytes=video_bytes,
+        content_type="video/mp4",
+    )
     if not url:
         raise RuntimeError("Failed to upload finalized MP4 to Supabase Storage.")
 
