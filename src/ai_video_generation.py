@@ -140,6 +140,20 @@ _OPENAI_API_BASE_URL = "https://api.openai.com"
 _SORA_CREATE_URL = f"{_OPENAI_API_BASE_URL}/v1/videos"
 _SORA_MODELS = {"sora-2", "sora-2-pro"}
 _SORA_SECONDS = {"4", "8", "12"}
+_SORA_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "canceled"}
+
+
+def _normalize_job_status(raw_status: str) -> str:
+    status = str(raw_status or "").lower().strip()
+    if status in {"queued", "pending"}:
+        return "queued"
+    if status in {"in_progress", "processing", "running"}:
+        return "in_progress"
+    if status == "completed":
+        return "completed"
+    if status in {"failed", "cancelled", "canceled"}:
+        return "failed"
+    return "queued"
 
 
 def _sora_headers() -> dict[str, str]:
@@ -230,6 +244,118 @@ def get_video(job_id: str) -> dict[str, Any]:
     if resp.status_code >= 400:
         _raise_sora_http_error(resp, context=f"while fetching Sora job '{job_id}'")
     return resp.json()
+
+
+def get_video_content(video_id: str) -> bytes:
+    """Download MP4 bytes from GET /v1/videos/{video_id}/content."""
+    if not video_id.strip():
+        raise ValueError("video_id cannot be empty")
+    url = f"{_SORA_CREATE_URL}/{video_id}/content"
+    resp = requests.get(url, headers=_sora_headers(), timeout=300)
+    if resp.status_code >= 400:
+        _raise_sora_http_error(resp, context=f"while downloading Sora content for '{video_id}'")
+    return resp.content
+
+
+def start_sora_video_job(
+    prompt: str,
+    *,
+    model: str = "sora-2",
+    seconds: int | str = 8,
+    size: str = "1280x720",
+    user_id: Optional[str] = None,
+) -> dict[str, str]:
+    """Create OpenAI video job and persist it in Supabase ``video_jobs``."""
+    created = create_video(prompt, model=model, seconds=seconds, size=size)
+    openai_video_id = str(created.get("id") or "").strip()
+    if not openai_video_id:
+        raise RuntimeError(f"Sora create returned no video ID: {json.dumps(created)[:500]}")
+
+    inserted = _sb_store.create_video_job(
+        openai_video_id=openai_video_id,
+        prompt=prompt.strip(),
+        status="queued",
+        user_id=user_id,
+        bucket="videos",
+    )
+    if not inserted or not inserted.get("id"):
+        raise RuntimeError(
+            "OpenAI job was created but the row could not be inserted into Supabase table 'video_jobs'."
+        )
+    return {"jobId": str(inserted["id"]), "openaiVideoId": openai_video_id}
+
+
+def poll_sora_video_job_status(job_id: str) -> dict[str, Any]:
+    """Refresh one job from OpenAI and persist status/progress/error to DB."""
+    db_job = _sb_store.get_video_job(job_id)
+    if not db_job:
+        raise ValueError(f"video_jobs row not found for jobId={job_id}")
+
+    remote = get_video(str(db_job["openai_video_id"]))
+    status = _normalize_job_status(str(remote.get("status") or db_job.get("status") or "queued"))
+    progress = remote.get("progress")
+    error_payload = remote.get("error") or remote.get("last_error")
+    error_text = None
+    if isinstance(error_payload, dict):
+        error_text = str(error_payload.get("message") or json.dumps(error_payload))
+    elif error_payload:
+        error_text = str(error_payload)
+
+    updates: dict[str, Any] = {"status": status}
+    if progress is not None:
+        updates["progress"] = progress
+    if status == "failed" and error_text:
+        updates["error"] = error_text
+
+    _sb_store.update_video_job(job_id, updates)
+    response = {"status": status, "progress": progress}
+    if error_text:
+        response["error"] = error_text
+    return response
+
+
+def finalize_sora_video_job(job_id: str) -> dict[str, str]:
+    """Verify completion, download /content, upload MP4 to Supabase, and persist URL."""
+    db_job = _sb_store.get_video_job(job_id)
+    if not db_job:
+        raise ValueError(f"video_jobs row not found for jobId={job_id}")
+    openai_video_id = str(db_job.get("openai_video_id") or "").strip()
+    if not openai_video_id:
+        raise RuntimeError("video_jobs row is missing openai_video_id")
+
+    remote = get_video(openai_video_id)
+    status = _normalize_job_status(str(remote.get("status") or ""))
+    if status != "completed":
+        if status == "failed":
+            err = remote.get("error") or remote.get("message") or "Video generation failed"
+            _sb_store.update_video_job(job_id, {"status": "failed", "error": str(err)})
+            raise RuntimeError(str(err))
+        raise RuntimeError(f"Video {openai_video_id} is not complete yet (status={status or 'unknown'}).")
+
+    if db_job.get("storage_path") and db_job.get("public_url"):
+        return {"storagePath": str(db_job["storage_path"]), "url": str(db_job["public_url"])}
+
+    video_bytes = get_video_content(openai_video_id)
+    owner_prefix = "anon"
+    if db_job.get("user_id"):
+        owner_prefix = str(db_job["user_id"])
+    storage_path = f"{owner_prefix}/{job_id}.mp4"
+    bucket = str(db_job.get("bucket") or "videos")
+    url = _sb_store.upload_video_bytes(bucket=bucket, storage_path=storage_path, video_bytes=video_bytes)
+    if not url:
+        raise RuntimeError("Failed to upload finalized MP4 to Supabase Storage.")
+
+    _sb_store.update_video_job(
+        job_id,
+        {
+            "status": "completed",
+            "storage_path": storage_path,
+            "public_url": url,
+            "progress": 100,
+            "error": None,
+        },
+    )
+    return {"storagePath": storage_path, "url": url}
 
 
 def poll_video(job_id: str, *, timeout_s: int = 600, max_backoff_s: int = 10) -> dict[str, Any]:
@@ -421,10 +547,9 @@ def _generate_sora(prompt: str, aspect_ratio: str = "16:9", seconds: int | str =
     if not job_id:
         raise RuntimeError(f"Sora did not return a job ID. Response: {json.dumps(created)[:500]}")
     final_job = poll_video(job_id, timeout_s=_MAX_POLLS * _POLL_INTERVAL_S)
-    assets = download_video_assets(final_job, Path("/tmp") / "history_forge_sora_downloads")
-    if not assets["video"]:
-        raise RuntimeError("Sora completed but no video file was downloaded.")
-    return Path(assets["video"][0]).read_bytes()
+    if str(final_job.get("status") or "").lower().strip() != "completed":
+        raise RuntimeError(f"Sora job did not complete successfully: {json.dumps(final_job)[:500]}")
+    return get_video_content(job_id)
 
 
 # ---------------------------------------------------------------------------
