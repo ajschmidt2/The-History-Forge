@@ -5,7 +5,7 @@ import streamlit as st
 from utils import Scene, generate_voiceover
 from src.storage import record_asset
 import src.supabase_storage as _sb_store
-from src.ui.state import active_project_id, save_voice_id, script_ready
+from src.ui.state import DEFAULT_VOICE_ID, active_project_id, save_voice_id, script_ready
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.timeline_builder import compute_scene_durations
 from src.video.utils import get_media_duration
@@ -76,11 +76,45 @@ def tab_voiceover() -> None:
         st.warning("Paste or generate a script first.")
         return
 
-    st.session_state.voice_id = st.text_input(
+    voice_ids = [str(v or "").strip() for v in st.session_state.get("voice_ids", []) if str(v or "").strip()]
+    if DEFAULT_VOICE_ID not in voice_ids:
+        voice_ids.insert(0, DEFAULT_VOICE_ID)
+    st.session_state.voice_ids = voice_ids
+
+    current_voice_id = str(st.session_state.get("voice_id", "") or "").strip() or DEFAULT_VOICE_ID
+    if current_voice_id not in st.session_state.voice_ids:
+        st.session_state.voice_ids.append(current_voice_id)
+
+    selected_voice_id = st.selectbox(
         "ElevenLabs Voice ID",
-        value=st.session_state.voice_id,
-        placeholder="Paste your ElevenLabs voice_id here",
+        options=st.session_state.voice_ids,
+        index=st.session_state.voice_ids.index(current_voice_id),
+        help="Default ID is hard-coded, and you can add more IDs below.",
     )
+    st.session_state.voice_id = selected_voice_id
+
+    new_voice_id = st.text_input(
+        "Add new Voice ID",
+        value="",
+        placeholder="Paste another ElevenLabs voice_id and click Add",
+    )
+    if st.button("Add voice ID", width="stretch"):
+        candidate = str(new_voice_id or "").strip()
+        if not candidate:
+            st.warning("Enter a voice ID first.")
+        elif candidate in st.session_state.voice_ids:
+            st.info("That voice ID already exists.")
+            st.session_state.voice_id = candidate
+        else:
+            st.session_state.voice_ids.append(candidate)
+            st.session_state.voice_id = candidate
+            try:
+                save_voice_id(candidate)
+            except OSError as exc:
+                st.error(f"Could not save voice ID: {exc}")
+            else:
+                st.toast("Voice ID added.")
+            st.rerun()
 
     controls_left, controls_right = st.columns([1, 1])
     with controls_left:

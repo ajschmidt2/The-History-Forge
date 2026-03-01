@@ -42,6 +42,29 @@ Scene = forge_utils.Scene
 PREFERENCES_PATH = Path("data/user_preferences.json")
 PROJECTS_ROOT = Path("data/projects")
 PROJECT_STATE_FILENAME = "project_state.json"
+DEFAULT_VOICE_ID = "r6YelDxIe1A40lDuW365"
+
+
+def _normalize_voice_ids(raw_voice_ids: object) -> list[str]:
+    normalized: list[str] = []
+    if isinstance(raw_voice_ids, list):
+        for raw in raw_voice_ids:
+            voice_id = str(raw or "").strip()
+            if voice_id and voice_id not in normalized:
+                normalized.append(voice_id)
+    if DEFAULT_VOICE_ID not in normalized:
+        normalized.insert(0, DEFAULT_VOICE_ID)
+    return normalized
+
+
+def _load_user_preferences() -> dict[str, object]:
+    if not PREFERENCES_PATH.exists():
+        return {}
+    try:
+        data = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def require_passcode() -> None:
@@ -66,20 +89,30 @@ def require_passcode() -> None:
 
 
 def _load_saved_voice_id() -> str:
-    if not PREFERENCES_PATH.exists():
-        return ""
-    try:
-        data = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ""
-    voice_id = data.get("voice_id", "") if isinstance(data, dict) else ""
-    return str(voice_id).strip()
+    data = _load_user_preferences()
+    voice_id = str(data.get("voice_id", "") or "").strip()
+    return voice_id or DEFAULT_VOICE_ID
+
+
+def _load_saved_voice_ids() -> list[str]:
+    data = _load_user_preferences()
+    voice_ids = _normalize_voice_ids(data.get("voice_ids", []))
+    fallback_voice_id = str(data.get("voice_id", "") or "").strip()
+    if fallback_voice_id and fallback_voice_id not in voice_ids:
+        voice_ids.append(fallback_voice_id)
+    return voice_ids
 
 
 def save_voice_id(voice_id: str) -> None:
     sanitized = (voice_id or "").strip()
+    saved_voice_ids = _load_saved_voice_ids()
+    if sanitized and sanitized not in saved_voice_ids:
+        saved_voice_ids.append(sanitized)
     PREFERENCES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"voice_id": sanitized}
+    payload = {
+        "voice_id": sanitized or DEFAULT_VOICE_ID,
+        "voice_ids": saved_voice_ids,
+    }
     PREFERENCES_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -402,6 +435,7 @@ def init_state() -> None:
     st.session_state.setdefault("openai_model", DEFAULT_OPENAI_MODEL)
 
     st.session_state.setdefault("voice_id", _load_saved_voice_id())
+    st.session_state.setdefault("voice_ids", _load_saved_voice_ids())
     st.session_state.setdefault("voiceover_bytes", None)
     st.session_state.setdefault("voiceover_error", None)
     st.session_state.setdefault("voiceover_saved_path", "")
