@@ -1,5 +1,7 @@
 from pathlib import Path
 from typing import Any
+from urllib.request import urlopen
+import time
 
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
 from src.video.timeline_schema import CaptionStyle, Timeline
@@ -32,6 +34,21 @@ def _media_sort_key(path: Path) -> tuple[int, int, str]:
     return (1, 10**9, path.name.lower())
 
 
+
+
+def _persist_scene_video_url(project_path: Path, scene_index: int, video_url: str) -> Path | None:
+    if not str(video_url or "").startswith(("http://", "https://")):
+        return None
+    videos_dir = project_path / "assets/videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    destination = videos_dir / f"s{scene_index:02d}_{int(time.time())}.mp4"
+    try:
+        with urlopen(video_url) as response:
+            destination.write_bytes(response.read())
+    except Exception:
+        return None
+    return destination
+
 def _media_files_from_session_scenes(project_path: Path, session_scenes: list[Any]) -> list[Path]:
     images_dir = project_path / "assets/images"
     image_candidates = {p.stem.lower(): p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}}
@@ -46,6 +63,16 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
             if candidate.exists() and candidate.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
                 media_files.append(candidate)
                 continue
+
+        video_url = str(getattr(scene, "video_url", "") or "").strip()
+        if video_url:
+            downloaded = _persist_scene_video_url(project_path, idx, video_url)
+            if downloaded and downloaded.exists():
+                scene.video_path = str(downloaded)
+                scene.video_url = None
+                media_files.append(downloaded)
+                continue
+
         preferred_stem = f"s{idx:02d}".lower()
         if preferred_stem in image_candidates:
             media_files.append(image_candidates[preferred_stem])

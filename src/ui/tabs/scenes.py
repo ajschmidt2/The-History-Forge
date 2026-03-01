@@ -35,6 +35,15 @@ def _project_path() -> Path:
     return Path("data/projects") / active_project_id()
 
 
+def _remove_scene_image_asset(scene: Scene) -> None:
+    """Clear in-memory and on-disk image assets when a video is selected."""
+    scene.image_bytes = None
+    scene.image_variations = []
+    image_path = _project_path() / "assets/images" / f"s{scene.index:02d}.png"
+    if image_path.exists():
+        image_path.unlink(missing_ok=True)
+
+
 def _timeline_state_key() -> str:
     return f"video_scene_captions::{_project_path() / 'timeline.json'}"
 
@@ -476,6 +485,7 @@ def tab_create_scenes() -> None:
                 selected.video_loop = bool(getattr(selected, "video_loop", False))
                 selected.video_muted = True
                 selected.video_volume = 0.0
+                _remove_scene_image_asset(selected)
                 st.toast(f"Video '{picked}' assigned to scene {selected.index}.")
                 st.rerun()
         else:

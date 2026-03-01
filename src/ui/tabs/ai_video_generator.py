@@ -90,6 +90,26 @@ def _saved_videos(project_id: str) -> list[Path]:
     return sorted(d.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
+def _clear_scene_image_asset(scene) -> None:
+    """Ensure a scene uses either video or image media, never both."""
+    scene.image_bytes = None
+    scene.image_variations = []
+    project_id = active_project_id()
+    image_path = Path("data/projects") / project_id / "assets/images" / f"s{int(scene.index):02d}.png"
+    if image_path.exists():
+        image_path.unlink(missing_ok=True)
+
+
+def _assign_video_to_scene(scene, *, local_path: str | None, url: str | None) -> None:
+    """Assign a video clip to a scene and remove any existing image asset."""
+    scene.video_path = local_path if local_path and Path(local_path).exists() else None
+    scene.video_url = None if scene.video_path else (url if str(url or "").startswith(("http://", "https://")) else None)
+    scene.video_loop = False
+    scene.video_muted = True
+    scene.video_volume = 0.0
+    _clear_scene_image_asset(scene)
+
+
 # ---------------------------------------------------------------------------
 # Session-state keys used by this tab
 # ---------------------------------------------------------------------------
@@ -368,14 +388,10 @@ def tab_ai_video_generator() -> None:
                 if st.button("Assign to scene", type="secondary", width="stretch"):
                     chosen_idx = scene_labels.index(chosen_label)
                     chosen_scene = scenes[chosen_idx]
-                    chosen_scene.video_path = result_local if result_local and Path(result_local).exists() else None
-                    chosen_scene.video_url = None if chosen_scene.video_path else (result_url if str(result_url).startswith(("http://", "https://")) else None)
-                    chosen_scene.video_loop = False
-                    chosen_scene.video_muted = True
-                    chosen_scene.video_volume = 0.0
+                    _assign_video_to_scene(chosen_scene, local_path=result_local, url=result_url)
                     st.toast(
                         f"Video assigned to {chosen_label}. "
-                        "Open the Scene Editor tab to review it."
+                        "Scene image removed so this scene now uses video only."
                     )
                     st.rerun()
         else:
@@ -437,12 +453,8 @@ def _render_saved_videos() -> None:
                     if st.button("Assign", key=btn_key, width="stretch"):
                         chosen_idx = scene_labels.index(chosen)
                         chosen_scene = scenes[chosen_idx]
-                        chosen_scene.video_path = str(vid_path)
-                        chosen_scene.video_url = None  # local-only
-                        chosen_scene.video_loop = False
-                        chosen_scene.video_muted = True
-                        chosen_scene.video_volume = 0.0
-                        st.toast(f"Video assigned to {chosen}.")
+                        _assign_video_to_scene(chosen_scene, local_path=str(vid_path), url=None)
+                        st.toast(f"Video assigned to {chosen}. Scene image removed.")
                         st.rerun()
             else:
                 st.caption("Create scenes first to assign videos to them.")
@@ -512,10 +524,10 @@ def _render_history() -> None:
                         if st.button("Assign", key=btn_key, width="stretch"):
                             chosen_idx = scene_labels.index(chosen)
                             chosen_scene = scenes[chosen_idx]
-                            chosen_scene.video_url = url
-                            chosen_scene.video_path = None
-                            chosen_scene.video_loop = False
-                            chosen_scene.video_muted = True
-                            chosen_scene.video_volume = 0.0
-                            st.toast(f"Video assigned to {chosen}.")
+                            local_path = _persist_video_from_url(project_id, url, stem_hint=f"scene_{chosen_scene.index:02d}") if url else None
+                            _assign_video_to_scene(chosen_scene, local_path=local_path, url=url)
+                            if local_path:
+                                st.toast(f"Video assigned to {chosen}. Scene image removed.")
+                            else:
+                                st.toast(f"Video assigned to {chosen} via URL. Scene image removed.")
                             st.rerun()

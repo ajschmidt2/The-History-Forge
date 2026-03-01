@@ -85,17 +85,22 @@ def _render_scene(
     source_path = Path(scene.image_path)
     is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
     if is_video:
-        source_duration = max(0.0, float(get_media_duration(source_path))) if source_path.exists() else 0.0
+        try:
+            source_duration = max(0.0, float(get_media_duration(source_path))) if source_path.exists() else 0.0
+        except Exception:
+            source_duration = 0.0
         pad_seconds = max(0.0, float(scene.duration) - source_duration)
         vf_parts = [
             f"scale={width}:{height}:force_original_aspect_ratio=decrease",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black",
+            f"fps={fps}",
+            "setpts=PTS-STARTPTS",
         ]
         if not bool(getattr(scene, "video_loop", False)) and pad_seconds > 0.01:
             vf_parts.append(f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}")
         vf_parts.append("format=yuv420p")
         filter_chain = ",".join(vf_parts)
-        cmd = ["ffmpeg", "-y"]
+        cmd = ["ffmpeg", "-y", "-fflags", "+genpts"]
         if bool(getattr(scene, "video_loop", False)):
             cmd.extend(["-stream_loop", "-1"])
         cmd.extend([
@@ -105,8 +110,6 @@ def _render_scene(
             f"{scene.duration}",
             "-vf",
             filter_chain,
-            "-r",
-            str(fps),
             "-an",
             "-c:v",
             "libx264",
@@ -118,31 +121,63 @@ def _render_scene(
             "yuv420p",
             str(output_path),
         ])
-    else:
-        filter_chain = _zoompan_filter(scene, fps, width, height)
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-loop",
-            "1",
-            "-i",
-            scene.image_path,
-            "-t",
-            f"{scene.duration}",
-            "-vf",
-            filter_chain,
-            "-r",
-            str(fps),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "24",
-            "-pix_fmt",
-            "yuv420p",
-            str(output_path),
-        ]
+        ffmpeg_commands.append(cmd)
+        primary_result = run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, check=False)
+        if not primary_result["ok"]:
+            fallback_cmd = [
+                "ffmpeg",
+                "-y",
+                "-fflags",
+                "+genpts",
+                "-err_detect",
+                "ignore_err",
+                "-i",
+                scene.image_path,
+                "-an",
+                "-vf",
+                filter_chain,
+                "-t",
+                f"{scene.duration}",
+                "-vsync",
+                "cfr",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "24",
+                "-pix_fmt",
+                "yuv420p",
+                str(output_path),
+            ]
+            ffmpeg_commands.append(fallback_cmd)
+            run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec)
+        return
+
+    filter_chain = _zoompan_filter(scene, fps, width, height)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loop",
+        "1",
+        "-i",
+        scene.image_path,
+        "-t",
+        f"{scene.duration}",
+        "-vf",
+        filter_chain,
+        "-r",
+        str(fps),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
     ffmpeg_commands.append(cmd)
     run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec)
 
