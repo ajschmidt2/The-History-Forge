@@ -85,16 +85,20 @@ def _render_scene(
     source_path = Path(scene.image_path)
     is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
     if is_video:
-        filter_chain = (
-            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-            "format=yuv420p"
-        )
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-stream_loop",
-            "-1",
+        source_duration = max(0.0, float(get_media_duration(source_path))) if source_path.exists() else 0.0
+        pad_seconds = max(0.0, float(scene.duration) - source_duration)
+        vf_parts = [
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease",
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black",
+        ]
+        if not bool(getattr(scene, "video_loop", False)) and pad_seconds > 0.01:
+            vf_parts.append(f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}")
+        vf_parts.append("format=yuv420p")
+        filter_chain = ",".join(vf_parts)
+        cmd = ["ffmpeg", "-y"]
+        if bool(getattr(scene, "video_loop", False)):
+            cmd.extend(["-stream_loop", "-1"])
+        cmd.extend([
             "-i",
             scene.image_path,
             "-t",
@@ -113,7 +117,7 @@ def _render_scene(
             "-pix_fmt",
             "yuv420p",
             str(output_path),
-        ]
+        ])
     else:
         filter_chain = _zoompan_filter(scene, fps, width, height)
         cmd = [

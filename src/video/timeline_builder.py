@@ -92,6 +92,7 @@ def build_default_timeline(
     narration_wpm: float = 160,
     narration_min_sec: float = 1.5,
     narration_max_sec: float = 12.0,
+    scene_video_options: dict[int, dict[str, float | bool]] | None = None,
 ) -> Timeline:
     image_list = sorted(list(images), key=_image_sort_key)
     if not image_list:
@@ -132,6 +133,7 @@ def build_default_timeline(
 
     for idx, image_path in enumerate(image_list, start=1):
         duration = scene_durations[idx - 1] if idx - 1 < len(scene_durations) else float(scene_duration or 3.0)
+        video_options = (scene_video_options or {}).get(idx, {})
         scenes.append(
             Scene(
                 id=f"s{idx:02d}",
@@ -140,6 +142,9 @@ def build_default_timeline(
                 duration=round(duration, 3),
                 motion=_build_motion(idx) if enable_motion else None,
                 caption=None,
+                video_loop=bool(video_options.get("video_loop", False)),
+                video_muted=bool(video_options.get("video_muted", True)),
+                video_volume=float(video_options.get("video_volume", 0.0) or 0.0),
             )
         )
         current_start += duration

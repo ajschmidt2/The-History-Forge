@@ -347,8 +347,11 @@ def tab_ai_video_generator() -> None:
                 if st.button("Assign to scene", type="secondary", width="stretch"):
                     chosen_idx = scene_labels.index(chosen_label)
                     chosen_scene = scenes[chosen_idx]
-                    chosen_scene.video_url = result_url
-                    chosen_scene.video_path = result_local
+                    chosen_scene.video_path = result_local if result_local and Path(result_local).exists() else None
+                    chosen_scene.video_url = None if chosen_scene.video_path else (result_url if str(result_url).startswith(("http://", "https://")) else None)
+                    chosen_scene.video_loop = False
+                    chosen_scene.video_muted = True
+                    chosen_scene.video_volume = 0.0
                     st.toast(
                         f"Video assigned to {chosen_label}. "
                         "Open the Scene Editor tab to review it."
@@ -415,6 +418,9 @@ def _render_saved_videos() -> None:
                         chosen_scene = scenes[chosen_idx]
                         chosen_scene.video_path = str(vid_path)
                         chosen_scene.video_url = None  # local-only
+                        chosen_scene.video_loop = False
+                        chosen_scene.video_muted = True
+                        chosen_scene.video_volume = 0.0
                         st.toast(f"Video assigned to {chosen}.")
                         st.rerun()
             else:
@@ -487,5 +493,8 @@ def _render_history() -> None:
                             chosen_scene = scenes[chosen_idx]
                             chosen_scene.video_url = url
                             chosen_scene.video_path = None
+                            chosen_scene.video_loop = False
+                            chosen_scene.video_muted = True
+                            chosen_scene.video_volume = 0.0
                             st.toast(f"Video assigned to {chosen}.")
                             st.rerun()
