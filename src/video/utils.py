@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -81,18 +82,30 @@ def ensure_ffmpeg_exists() -> None:
         ) from exc
 
 
-def run_ffmpeg(cmd: list[str], timeout_sec: float | None = None) -> dict[str, Any]:
+def run_ffmpeg(
+    cmd: list[str],
+    timeout_sec: float | None = None,
+    workdir: str | Path | None = None,
+    on_progress=None,
+) -> dict[str, Any]:
     """Run ffmpeg/ffprobe command safely without bubbling process exceptions."""
     if not cmd or not cmd[0]:
         raise ValueError(f"Invalid ffmpeg/ffprobe command: {cmd!r}")
     try:
         resolved_cmd = list(cmd)
-        if resolved_cmd:
-            first = Path(str(resolved_cmd[0])).name
-            if first == "ffmpeg":
-                resolved_cmd = [resolve_ffmpeg_exe(), *resolved_cmd[1:]]
-            elif first == "ffprobe":
-                resolved_cmd = [resolve_ffprobe_exe(), *resolved_cmd[1:]]
+        first = Path(str(resolved_cmd[0])).name
+        if first in {"ffmpeg", "ffprobe"}:
+            from .ffmpeg_runner import run_ffmpeg_streaming
+
+            exec_workdir = Path(workdir) if workdir is not None else Path(tempfile.mkdtemp(prefix="ffmpeg_run_"))
+            return run_ffmpeg_streaming(
+                resolved_cmd,
+                workdir=exec_workdir,
+                timeout_sec=timeout_sec,
+                on_progress=on_progress,
+                debug_verbose=os.getenv("DEBUG_FFMPEG") == "1",
+            )
+
         result = subprocess.run(
             resolved_cmd,
             timeout=timeout_sec,
@@ -135,27 +148,38 @@ def run_cmd(
     log_path: str | Path | None = None,
     check: bool = True,
     timeout_sec: float | None = None,
+    on_progress=None,
+    workdir: str | Path | None = None,
 ) -> dict[str, Any]:
-    result = run_ffmpeg(cmd, timeout_sec=timeout_sec)
+    result = run_ffmpeg(cmd, timeout_sec=timeout_sec, on_progress=on_progress, workdir=workdir)
     if log_path:
         log_file = Path(log_path)
         log_file.parent.mkdir(parents=True, exist_ok=True)
         with log_file.open("a", encoding="utf-8") as handle:
             handle.write("$ " + " ".join(cmd) + "\n")
             handle.write("cmd_json=" + json.dumps(cmd, ensure_ascii=False) + "\n")
+            if result.get("stdout_path"):
+                handle.write(f"stdout_log_path={result['stdout_path']}\n")
+            if result.get("stderr_path"):
+                handle.write(f"stderr_log_path={result['stderr_path']}\n")
+            if result.get("report_path"):
+                handle.write(f"ffreport_path={result['report_path']}\n")
             if "-filter_complex" in cmd:
                 filter_idx = cmd.index("-filter_complex") + 1
                 if filter_idx < len(cmd):
                     handle.write(f"filter_complex_repr={cmd[filter_idx]!r}\n")
-            if result["stdout"]:
-                handle.write(result["stdout"] + "\n")
             if result["stderr"]:
                 handle.write(result["stderr"] + "\n")
             if result["timed_out"]:
                 handle.write(f"Command timed out after {timeout_sec}s\n")
     if check and not result["ok"]:
         if result["timed_out"]:
-            raise RuntimeError(f"Command timed out after {timeout_sec}s: {' '.join(cmd)}")
+            timeout_details = [f"Command timed out after {timeout_sec}s: {' '.join(cmd)}"]
+            if result.get("workdir"):
+                timeout_details.append(f"workdir={result['workdir']}")
+            if result.get("stderr_path"):
+                timeout_details.append(f"stderr_log={result['stderr_path']}")
+            raise RuntimeError("; ".join(timeout_details))
         raise subprocess.CalledProcessError(
             returncode=int(result["returncode"] or 1),
             cmd=cmd,
