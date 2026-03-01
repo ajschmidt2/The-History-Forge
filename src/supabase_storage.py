@@ -194,6 +194,17 @@ def upload_video_bytes(
     return _upload_bytes(bucket, storage_path, video_bytes, content_type)
 
 
+def get_public_storage_url(bucket: str, storage_path: str) -> Optional[str]:
+    """Return the public URL for a storage object path when available."""
+    sb = get_client()
+    if sb is None:
+        return None
+    try:
+        return sb.storage.from_(bucket).get_public_url(storage_path)
+    except Exception:
+        return None
+
+
 def list_projects() -> list[dict]:
     """Return all projects from Supabase, newest first."""
     sb = get_client()

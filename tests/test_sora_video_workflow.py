@@ -210,11 +210,13 @@ def test_finalize_sora_video_job_downloads_content_and_uploads(monkeypatch):
     )
     monkeypatch.setattr(mod, "get_video", lambda _video_id: {"id": "vid_done", "status": "completed"})
     monkeypatch.setattr(mod, "get_video_content", lambda _video_id: b"mp4-bytes")
-    monkeypatch.setattr(
-        mod._sb_store,
-        "upload_video_bytes",
-        lambda **kwargs: f"https://example.supabase.co/storage/v1/object/public/{kwargs['bucket']}/{kwargs['storage_path']}",
-    )
+    upload_kwargs = {}
+
+    def fake_upload(**kwargs):
+        upload_kwargs.update(kwargs)
+        return f"https://example.supabase.co/storage/v1/object/public/{kwargs['bucket']}/{kwargs['storage_path']}"
+
+    monkeypatch.setattr(mod._sb_store, "upload_video_bytes", fake_upload)
 
     updates = {}
     monkeypatch.setattr(mod._sb_store, "update_video_job", lambda job_id, payload: updates.update(payload) or payload)
@@ -223,4 +225,34 @@ def test_finalize_sora_video_job_downloads_content_and_uploads(monkeypatch):
 
     assert out["storagePath"] == "anon/job_2.mp4"
     assert out["url"].endswith("anon/job_2.mp4")
+    assert upload_kwargs["content_type"] == "video/mp4"
     assert updates["status"] == "completed"
+
+
+def test_finalize_sora_video_job_reuses_existing_storage_path(monkeypatch):
+    monkeypatch.setattr(
+        mod._sb_store,
+        "get_video_job",
+        lambda _job_id: {
+            "id": "job_3",
+            "openai_video_id": "vid_done",
+            "bucket": "videos",
+            "user_id": "user_1",
+            "storage_path": "user_1/job_3.mp4",
+            "public_url": None,
+        },
+    )
+    monkeypatch.setattr(mod, "get_video", lambda _video_id: {"id": "vid_done", "status": "completed", "data": [{"url": "https://ignored.example/video.mp4"}]})
+
+    captured = {"downloaded": False, "updated": {}}
+
+    monkeypatch.setattr(mod, "get_video_content", lambda _video_id: captured.__setitem__("downloaded", True) or b"bytes")
+    monkeypatch.setattr(mod._sb_store, "get_public_storage_url", lambda bucket, storage_path: f"https://example.supabase.co/storage/v1/object/public/{bucket}/{storage_path}")
+    monkeypatch.setattr(mod._sb_store, "update_video_job", lambda job_id, payload: captured["updated"].update(payload) or payload)
+
+    out = mod.finalize_sora_video_job("job_3")
+
+    assert out["storagePath"] == "user_1/job_3.mp4"
+    assert out["url"].endswith("user_1/job_3.mp4")
+    assert not captured["downloaded"]
+    assert captured["updated"]["public_url"].endswith("user_1/job_3.mp4")
