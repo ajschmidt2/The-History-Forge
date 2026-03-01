@@ -4,7 +4,7 @@ Both providers follow an async pattern:
   • Veo is proxied through a Supabase Edge Function (server-side Vertex AI call).
   • Sora is called directly from this backend module.
   • The resulting video bytes are optionally saved locally, uploaded to the
-    ``generated-videos`` Supabase bucket, and recorded in the ``assets`` table.
+    configured Supabase video bucket, and recorded in the ``assets`` table.
 
 Public API
 ----------
@@ -32,6 +32,7 @@ import requests
 
 import src.supabase_storage as _sb_store
 from src.config import get_secret
+from src.constants import SUPABASE_VIDEO_BUCKET
 
 # ---------------------------------------------------------------------------
 # Aspect-ratio constants exposed to the UI
@@ -276,7 +277,7 @@ def start_sora_video_job(
         prompt=prompt.strip(),
         status="queued",
         user_id=user_id,
-        bucket="videos",
+        bucket=SUPABASE_VIDEO_BUCKET,
     )
     if not inserted or not inserted.get("id"):
         raise RuntimeError(
@@ -338,7 +339,7 @@ def finalize_sora_video_job(job_id: str) -> dict[str, str]:
         if not existing_url:
             existing_url = str(
                 _sb_store.get_public_storage_url(
-                    str(db_job.get("bucket") or "videos"),
+                    str(db_job.get("bucket") or SUPABASE_VIDEO_BUCKET),
                     existing_path,
                 )
                 or ""
@@ -353,7 +354,7 @@ def finalize_sora_video_job(job_id: str) -> dict[str, str]:
     if db_job.get("user_id"):
         owner_prefix = str(db_job["user_id"])
     storage_path = f"{owner_prefix}/{job_id}.mp4"
-    bucket = str(db_job.get("bucket") or "videos")
+    bucket = str(db_job.get("bucket") or SUPABASE_VIDEO_BUCKET)
     url = _sb_store.upload_video_bytes(
         bucket=bucket,
         storage_path=storage_path,

@@ -16,6 +16,7 @@ import requests
 import streamlit as st
 
 from src.config import get_secret
+from src.constants import SUPABASE_VIDEO_BUCKET
 
 st.set_page_config(page_title="Video Generation Diagnostics", page_icon="🎬")
 st.title("🎬 Video Generation Diagnostics")
@@ -740,18 +741,18 @@ else:
 
 
 # ===========================================================================
-# SECTION 3 — Shared: generated-videos Supabase bucket
+# SECTION 3 — Shared: Supabase video bucket
 # ===========================================================================
 
 st.divider()
-st.header("🗄️ Supabase Storage — `generated-videos` Bucket")
+st.header(f"🗄️ Supabase Storage — `{SUPABASE_VIDEO_BUCKET}` Bucket")
 st.markdown(
-    "Both Veo and Sora upload their results to the `generated-videos` Supabase "
+    f"Both Veo and Sora upload their results to the `{SUPABASE_VIDEO_BUCKET}` Supabase "
     "storage bucket.  If the bucket is missing the video bytes are returned as a "
     "data URL instead, which may cause issues with large files."
 )
 
-if st.button("Check generated-videos Bucket", key="bucket_run"):
+if st.button(f"Check {SUPABASE_VIDEO_BUCKET} Bucket", key="bucket_run"):
     with st.spinner("Checking bucket…"):
         try:
             supabase_url = get_secret("SUPABASE_URL", "").strip()
@@ -770,25 +771,25 @@ if st.button("Check generated-videos Bucket", key="bucket_run"):
 
                 sb = create_client(supabase_url, supabase_key)
                 try:
-                    sb.storage.from_("generated-videos").list()
+                    sb.storage.from_(SUPABASE_VIDEO_BUCKET).list()
                     st.success(
-                        "Bucket `generated-videos` exists and is accessible.  "
+                        f"Bucket `{SUPABASE_VIDEO_BUCKET}` exists and is accessible.  "
                         "Video uploads will work correctly."
                     )
                 except Exception as exc:
-                    st.error(f"Bucket `generated-videos` is **not accessible**: `{exc}`")
+                    st.error(f"Bucket `{SUPABASE_VIDEO_BUCKET}` is **not accessible**: `{exc}`")
                     st.warning(
                         "**Fix:** Create the bucket in your Supabase Dashboard:\n\n"
                         "1. Go to **Storage** in the left sidebar  \n"
                         "2. Click **New Bucket**  \n"
-                        "3. Name it `generated-videos`  \n"
+                        f"3. Name it `{SUPABASE_VIDEO_BUCKET}`  \n"
                         "4. Set it to **Public** if you want direct URL access, or **Private** for signed URLs  \n"
                         "5. Click **Create Bucket**  \n\n"
                         "Or with the CLI:\n"
-                        "```bash\nsupabase storage create-bucket generated-videos --public\n```"
+                        f"```bash\nsupabase storage create-bucket {SUPABASE_VIDEO_BUCKET} --public\n```"
                     )
         except Exception:
             st.error("Unexpected error:")
             st.code(traceback.format_exc())
 else:
-    st.info("Click **Check generated-videos Bucket** to verify storage.")
+    st.info(f"Click **Check {SUPABASE_VIDEO_BUCKET} Bucket** to verify storage.")
