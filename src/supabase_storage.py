@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 from src.config import get_secret
 
@@ -113,6 +114,84 @@ def record_asset(
         return True
     except Exception:
         return False
+
+
+def create_video_job(
+    *,
+    openai_video_id: str,
+    prompt: str,
+    status: str,
+    user_id: Optional[str] = None,
+    bucket: str = "videos",
+) -> Optional[dict[str, Any]]:
+    """Insert a row into ``video_jobs`` and return the inserted row.
+
+    Returns ``None`` when Supabase is not configured or insertion fails.
+    """
+    sb = get_client()
+    if sb is None:
+        return None
+
+    payload: dict[str, Any] = {
+        "openai_video_id": openai_video_id,
+        "prompt": prompt,
+        "status": status,
+        "bucket": bucket,
+    }
+    if user_id:
+        payload["user_id"] = user_id
+
+    try:
+        resp = sb.table("video_jobs").insert(payload).execute()
+        rows = resp.data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def get_video_job(job_id: str) -> Optional[dict[str, Any]]:
+    """Return a ``video_jobs`` row by UUID string."""
+    sb = get_client()
+    if sb is None:
+        return None
+    try:
+        resp = sb.table("video_jobs").select("*").eq("id", job_id).limit(1).execute()
+        rows = resp.data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def update_video_job(job_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Update ``video_jobs`` row and return the updated payload."""
+    sb = get_client()
+    if sb is None:
+        return None
+    if not updates:
+        return get_video_job(job_id)
+    updates = dict(updates)
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        resp = sb.table("video_jobs").update(updates).eq("id", job_id).execute()
+        rows = resp.data or []
+        if rows:
+            return rows[0]
+    except Exception:
+        return None
+    return get_video_job(job_id)
+
+
+def upload_video_bytes(
+    *,
+    bucket: str,
+    storage_path: str,
+    video_bytes: bytes,
+    content_type: str = "video/mp4",
+) -> Optional[str]:
+    """Upload MP4 bytes to Supabase Storage and return public URL if available."""
+    if not video_bytes:
+        return None
+    return _upload_bytes(bucket, storage_path, video_bytes, content_type)
 
 
 def list_projects() -> list[dict]:

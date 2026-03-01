@@ -14,14 +14,18 @@ The generated video is automatically:
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import streamlit as st
 
 from src.ai_video_generation import (
     SORA_ASPECT_RATIOS,
     VEO_ASPECT_RATIOS,
+    finalize_sora_video_job,
     generate_video,
+    poll_sora_video_job_status,
     sora_configured,
+    start_sora_video_job,
     veo_configured,
 )
 from src.ui.state import active_project_id, ensure_project_exists
@@ -76,6 +80,10 @@ _KEY_RESULT_PROMPT = "ai_video_result_prompt"
 _KEY_RESULT_PROVIDER = "ai_video_result_provider"
 _KEY_RESULT_RATIO = "ai_video_result_aspect_ratio"
 _KEY_ERROR = "ai_video_error"
+
+_SORA_MAX_POLLS = 120
+_SORA_INITIAL_DELAY_S = 3.0
+_SORA_MAX_BACKOFF_S = 12.0
 
 
 def _reset_result() -> None:
@@ -224,14 +232,55 @@ def tab_ai_video_generator() -> None:
             else f"Generating video with {provider_label} ({aspect_ratio}) — this can take 30 – 120 seconds…"
         ):
             try:
-                url, local_path = generate_video(
-                    prompt=prompt.strip(),
-                    provider=provider_key,
-                    project_id=project_id,
-                    aspect_ratio=aspect_ratio,
-                    save_dir=save_dir,
-                    seconds=sora_seconds,
-                )
+                if provider_key == "sora":
+                    start_payload = start_sora_video_job(
+                        prompt=prompt.strip(),
+                        seconds=sora_seconds,
+                        size={"16:9": "1280x720", "9:16": "720x1280", "1:1": "1080x1080"}.get(aspect_ratio, "1280x720"),
+                        model="sora-2",
+                    )
+                    terminal = {"completed", "failed"}
+                    delay_s = _SORA_INITIAL_DELAY_S
+                    status_payload: dict | None = None
+                    for _attempt in range(1, _SORA_MAX_POLLS + 1):
+                        try:
+                            status_payload = poll_sora_video_job_status(start_payload["jobId"])
+                        except Exception as exc:  # noqa: BLE001
+                            if "HTTP 429" in str(exc):
+                                time.sleep(delay_s)
+                                delay_s = min(delay_s * 1.5, _SORA_MAX_BACKOFF_S)
+                                continue
+                            raise
+
+                        status = str(status_payload.get("status") or "").lower().strip()
+                        if status in terminal:
+                            break
+                        time.sleep(delay_s)
+
+                    if not status_payload:
+                        raise RuntimeError("Sora job status could not be read.")
+
+                    final_status = str(status_payload.get("status") or "").lower().strip()
+                    if final_status == "completed":
+                        finalized = finalize_sora_video_job(start_payload["jobId"])
+                        url = str(finalized["url"])
+                        local_path = None
+                    elif final_status == "failed":
+                        raise RuntimeError(str(status_payload.get("error") or "Sora video generation failed."))
+                    else:
+                        raise TimeoutError(
+                            "Sora is still processing after the maximum polling window. "
+                            "Refresh to continue checking this job."
+                        )
+                else:
+                    url, local_path = generate_video(
+                        prompt=prompt.strip(),
+                        provider=provider_key,
+                        project_id=project_id,
+                        aspect_ratio=aspect_ratio,
+                        save_dir=save_dir,
+                        seconds=sora_seconds,
+                    )
                 st.session_state[_KEY_RESULT_URL] = url
                 st.session_state[_KEY_RESULT_LOCAL] = local_path
                 st.session_state[_KEY_RESULT_PROMPT] = prompt.strip()

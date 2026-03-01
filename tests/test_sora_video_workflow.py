@@ -180,3 +180,47 @@ def test_sora_diagnostic_missing_models(monkeypatch):
 
     assert not ok
     assert "not returned" in message.lower()
+
+
+def test_poll_sora_video_job_status_normalizes_and_persists(monkeypatch):
+    monkeypatch.setattr(mod._sb_store, "get_video_job", lambda _job_id: {"id": "job_1", "openai_video_id": "vid_abc", "status": "queued"})
+    monkeypatch.setattr(mod, "get_video", lambda _video_id: {"id": "vid_abc", "status": "processing", "progress": 42})
+
+    captured = {}
+
+    def fake_update(job_id, updates):
+        captured["job_id"] = job_id
+        captured["updates"] = updates
+        return updates
+
+    monkeypatch.setattr(mod._sb_store, "update_video_job", fake_update)
+
+    payload = mod.poll_sora_video_job_status("job_1")
+
+    assert payload["status"] == "in_progress"
+    assert captured["updates"]["status"] == "in_progress"
+    assert captured["updates"]["progress"] == 42
+
+
+def test_finalize_sora_video_job_downloads_content_and_uploads(monkeypatch):
+    monkeypatch.setattr(
+        mod._sb_store,
+        "get_video_job",
+        lambda _job_id: {"id": "job_2", "openai_video_id": "vid_done", "bucket": "videos", "user_id": None},
+    )
+    monkeypatch.setattr(mod, "get_video", lambda _video_id: {"id": "vid_done", "status": "completed"})
+    monkeypatch.setattr(mod, "get_video_content", lambda _video_id: b"mp4-bytes")
+    monkeypatch.setattr(
+        mod._sb_store,
+        "upload_video_bytes",
+        lambda **kwargs: f"https://example.supabase.co/storage/v1/object/public/{kwargs['bucket']}/{kwargs['storage_path']}",
+    )
+
+    updates = {}
+    monkeypatch.setattr(mod._sb_store, "update_video_job", lambda job_id, payload: updates.update(payload) or payload)
+
+    out = mod.finalize_sora_video_job("job_2")
+
+    assert out["storagePath"] == "anon/job_2.mp4"
+    assert out["url"].endswith("anon/job_2.mp4")
+    assert updates["status"] == "completed"
