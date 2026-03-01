@@ -3,8 +3,10 @@ from __future__ import annotations
 import math
 import hashlib
 import json
+import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -198,7 +200,26 @@ def _render_scene(
         str(output_path),
     ]
     ffmpeg_commands.append(cmd)
-    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec)
+    primary_result = run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, check=False)
+    if not primary_result["ok"]:
+        # Fallback: simpler scale/crop without zoompan (handles unusual image formats/sizes)
+        simple_filter = (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            "format=yuv420p"
+        )
+        fallback_cmd = [
+            "ffmpeg", "-y", "-loop", "1",
+            "-i", scene.image_path,
+            "-t", f"{normalized_duration:.6f}",
+            "-vf", simple_filter,
+            "-r", str(fps),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+            "-pix_fmt", "yuv420p",
+            str(output_path),
+        ]
+        ffmpeg_commands.append(fallback_cmd)
+        run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec)
 
 
 def _concat_scenes(
@@ -318,10 +339,11 @@ def _assert_filter_complex_arg(cmd: list[str]) -> None:
     if "-filter_complex" not in cmd:
         return
     idx = cmd.index("-filter_complex")
-    assert idx + 1 < len(cmd), "-filter_complex must be followed by a filtergraph argument"
+    if idx + 1 >= len(cmd):
+        raise ValueError("-filter_complex must be followed by a filtergraph argument")
     filter_graph = cmd[idx + 1]
-    assert isinstance(filter_graph, str), "filtergraph argument must be a string"
-    assert filter_graph.strip(), "filtergraph argument must not be empty"
+    if not isinstance(filter_graph, str) or not filter_graph.strip():
+        raise ValueError(f"filtergraph argument must be a non-empty string, got {filter_graph!r}")
 
 def _ffmpeg_version() -> str:
     try:
@@ -340,6 +362,45 @@ def _tail_log_lines(log_path: Path | None, lines: int = 50) -> list[str]:
     with log_path.open("r", encoding="utf-8", errors="ignore") as handle:
         content = handle.readlines()
     return [line.rstrip("\n") for line in content[-lines:]]
+
+
+def _diagnostic_env() -> dict:
+    """Gather environment info for the diagnostic report."""
+    info: dict = {
+        "ffmpeg_version": _ffmpeg_version(),
+        "python_version": sys.version,
+        "platform": platform.platform(),
+    }
+    try:
+        total, _used, free = shutil.disk_usage("/")
+        info["disk_free_gb"] = round(free / (1024 ** 3), 2)
+        info["disk_total_gb"] = round(total / (1024 ** 3), 2)
+    except Exception:
+        pass
+    return info
+
+
+def _file_stat(path: str | None) -> dict:
+    """Return existence and size info for a single file path."""
+    if not path:
+        return {"path": None, "exists": False, "size_bytes": 0}
+    p = Path(path)
+    try:
+        stat = p.stat()
+        return {"path": str(p), "exists": True, "size_bytes": stat.st_size}
+    except OSError:
+        return {"path": str(p), "exists": False, "size_bytes": 0}
+
+
+def _scene_media_info(timeline: Timeline) -> list[dict]:
+    """Return per-scene file metadata for the diagnostic report."""
+    result = []
+    for scene in timeline.scenes:
+        info = _file_stat(scene.image_path)
+        info["scene_id"] = scene.id
+        info["duration"] = scene.duration
+        result.append(info)
+    return result
 
 
 
@@ -383,6 +444,10 @@ def _resolve_scene_clip(
         return True
 
     _render_scene(scene, scene_out, fps, width, height, log_path, ffmpeg_commands, command_timeout_sec)
+    if not scene_out.exists() or scene_out.stat().st_size == 0:
+        raise RuntimeError(
+            f"Scene render produced no output for scene {scene.id!r}: {scene_out}"
+        )
     shutil.copy2(scene_out, cached_scene)
     return False
 
@@ -523,10 +588,10 @@ def render_video_from_timeline(
                 mux_cmd = ["ffmpeg", "-y", "-i", str(stitched_path), "-i", str(mixed_audio_path)]
                 stitched_duration = get_media_duration(stitched_path)
                 vf_filters: list[str] = []
-                if voiceover_duration is not None and voiceover_duration > stitched_duration:
+                if voiceover_duration is not None and stitched_duration > 0 and voiceover_duration > stitched_duration:
                     pad_seconds = max(0.0, voiceover_duration - stitched_duration)
                     vf_filters.append(f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}")
-                if timeline.meta.burn_captions:
+                if timeline.meta.burn_captions and ass_path.exists():
                     vf_filters.append(_subtitle_filter(ass_path))
                 if vf_filters:
                     mux_cmd.extend(["-vf", ",".join(vf_filters)])
@@ -557,7 +622,7 @@ def render_video_from_timeline(
                 run_cmd(mux_cmd, log_path=log_file, timeout_sec=command_timeout_sec)
             else:
                 cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
-                if timeline.meta.burn_captions:
+                if timeline.meta.burn_captions and ass_path.exists():
                     cmd.extend(["-vf", _subtitle_filter(ass_path)])
                 cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-movflags", "+faststart", str(tmp_output_path)])
                 ffmpeg_commands.append(cmd)
@@ -579,20 +644,34 @@ def render_video_from_timeline(
         render_error = str(exc)
         raise
     finally:
-        report = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "ffmpeg_commands": [" ".join(cmd) for cmd in ffmpeg_commands],
-            "timeline_hash": timeline_hash,
-            "environment": {"ffmpeg_version": _ffmpeg_version()},
-            "command_timeout_sec": command_timeout_sec,
-            "status": "failure" if render_error else "success",
-            "success": render_error is None,
-            "error_excerpt": render_error,
-            "scene_cache": {"directory": str(cache_dir), "hits": cache_hits, "total_scenes": len(timeline.scenes)},
-            "tmp_output_path": str(tmp_output_path),
-            "log_tail": _tail_log_lines(log_file, lines=50),
-        }
-        report_file.parent.mkdir(parents=True, exist_ok=True)
-        report_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        try:
+            meta = timeline.meta
+            report = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "failure" if render_error else "success",
+                "success": render_error is None,
+                "error_excerpt": render_error,
+                "timeline_hash": timeline_hash,
+                "command_timeout_sec": command_timeout_sec,
+                "environment": _diagnostic_env(),
+                "input_media": _scene_media_info(timeline),
+                "audio": {
+                    "voiceover": _file_stat(meta.voiceover.path if meta.voiceover else None),
+                    "music": _file_stat(meta.music.path if meta.music else None),
+                },
+                "scene_cache": {
+                    "directory": str(cache_dir),
+                    "hits": cache_hits,
+                    "total_scenes": len(timeline.scenes),
+                },
+                "ffmpeg_commands": [" ".join(cmd) for cmd in ffmpeg_commands],
+                "tmp_output_path": str(tmp_output_path),
+                "log_tail": _tail_log_lines(log_file, lines=50),
+            }
+            report_file.parent.mkdir(parents=True, exist_ok=True)
+            report_file.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        except Exception:
+            # Never let report writing mask the original render exception
+            pass
 
     return output_path
