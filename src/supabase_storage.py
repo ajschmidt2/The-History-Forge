@@ -11,7 +11,7 @@ Buckets expected in Supabase Storage
   history-forge-images   — generated scene images
   history-forge-audio    — voiceover / music files
   history-forge-videos   — rendered video exports
-  generated-videos       — AI-generated videos (Veo / Sora)
+  SUPABASE_VIDEO_BUCKET  — AI-generated videos (Veo / Sora)
 
 Tables expected in Supabase Database
 --------------------------------------
@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.config import get_secret
+from src.constants import SUPABASE_VIDEO_BUCKET
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -122,7 +123,7 @@ def create_video_job(
     prompt: str,
     status: str,
     user_id: Optional[str] = None,
-    bucket: str = "videos",
+    bucket: str = SUPABASE_VIDEO_BUCKET,
 ) -> Optional[dict[str, Any]]:
     """Insert a row into ``video_jobs`` and return the inserted row.
 
@@ -344,7 +345,7 @@ def upload_generated_video(
     prompt: str = "",
     provider: str = "",
 ) -> Optional[str]:
-    """Upload an AI-generated video to ``generated-videos`` and return the public URL.
+    """Upload an AI-generated video to the configured video bucket and return the public URL.
 
     Also records the asset in the ``assets`` table with asset_type
     ``generated_video`` and stores *prompt* / *provider* in the filename
@@ -354,11 +355,26 @@ def upload_generated_video(
     """
     if not video_bytes:
         return None
-    storage_path = f"{project_id}/generated-videos/{filename}"
-    url = _upload_bytes("generated-videos", storage_path, video_bytes, "video/mp4")
-    if url:
-        record_asset(project_id, "generated_video", filename, url)
-    return url
+    bucket = SUPABASE_VIDEO_BUCKET
+    storage_path = f"{project_id}/{bucket}/{filename}"
+
+    sb = get_client()
+    if sb is None:
+        return None
+
+    try:
+        sb.storage.from_(bucket).upload(
+            storage_path,
+            video_bytes,
+            {"content-type": "video/mp4", "upsert": True},
+        )
+        public_url = sb.storage.from_(bucket).get_public_url(storage_path)
+    except Exception:
+        return None
+
+    if public_url:
+        record_asset(project_id, "generated_video", filename, public_url)
+    return public_url
 
 
 def sync_project_assets(project_id: str, project_dir: Path) -> dict[str, list[str]]:

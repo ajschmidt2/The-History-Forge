@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 import src.ai_video_generation as mod
+from src.constants import SUPABASE_VIDEO_BUCKET
 
 
 class DummyRequest:
@@ -206,7 +207,7 @@ def test_finalize_sora_video_job_downloads_content_and_uploads(monkeypatch):
     monkeypatch.setattr(
         mod._sb_store,
         "get_video_job",
-        lambda _job_id: {"id": "job_2", "openai_video_id": "vid_done", "bucket": "videos", "user_id": None},
+        lambda _job_id: {"id": "job_2", "openai_video_id": "vid_done", "bucket": SUPABASE_VIDEO_BUCKET, "user_id": None},
     )
     monkeypatch.setattr(mod, "get_video", lambda _video_id: {"id": "vid_done", "status": "completed"})
     monkeypatch.setattr(mod, "get_video_content", lambda _video_id: b"mp4-bytes")
@@ -236,7 +237,7 @@ def test_finalize_sora_video_job_reuses_existing_storage_path(monkeypatch):
         lambda _job_id: {
             "id": "job_3",
             "openai_video_id": "vid_done",
-            "bucket": "videos",
+            "bucket": SUPABASE_VIDEO_BUCKET,
             "user_id": "user_1",
             "storage_path": "user_1/job_3.mp4",
             "public_url": None,

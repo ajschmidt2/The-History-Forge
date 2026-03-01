@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS public.video_jobs (
     status text NOT NULL CHECK (status IN ('queued', 'in_progress', 'completed', 'failed')),
     progress numeric NULL,
     error text NULL,
-    bucket text NOT NULL DEFAULT 'videos',
+    bucket text NOT NULL DEFAULT 'generated-videos',
     storage_path text NULL,
     public_url text NULL,
     created_at timestamptz NOT NULL DEFAULT now(),

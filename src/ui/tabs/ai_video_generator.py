@@ -8,7 +8,7 @@ Allows the user to:
 
 The generated video is automatically:
   • Saved locally to ``data/projects/{project_id}/assets/videos/``.
-  • Uploaded to the ``generated-videos`` Supabase bucket (when configured).
+  • Uploaded to the configured Supabase video bucket (when configured).
   • Recorded in the ``assets`` table with the project ID, prompt, and provider.
 """
 from __future__ import annotations
