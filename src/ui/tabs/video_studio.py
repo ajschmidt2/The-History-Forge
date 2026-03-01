@@ -263,6 +263,35 @@ def _media_sort_key(path: Path) -> tuple[int, int, str]:
     return (1, 10**9, path.name.lower())
 
 
+def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: Path) -> list[Path]:
+    scenes = st.session_state.get("scenes", [])
+    if scenes:
+        images_by_index = {
+            _scene_number_from_path(path): path
+            for path in images_dir.glob("*.*")
+            if path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+        }
+        selected: list[Path] = []
+        for scene in scenes:
+            idx = getattr(scene, "index", None)
+            if not isinstance(idx, int) or idx <= 0:
+                continue
+            video_path = str(getattr(scene, "video_path", "") or "")
+            if video_path:
+                candidate = Path(video_path)
+                if candidate.exists() and candidate.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
+                    selected.append(candidate)
+                    continue
+            fallback = images_by_index.get(idx)
+            if fallback and fallback.exists():
+                selected.append(fallback)
+        if selected:
+            return sorted(selected, key=_media_sort_key)
+    images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
+    videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}])
+    return sorted(images + videos, key=_media_sort_key)
+
+
 def _normalize_caption_list(captions: list[str], expected_count: int) -> list[str]:
     normalized = [str(caption or "") for caption in captions[:expected_count]]
     if len(normalized) < expected_count:
@@ -493,7 +522,7 @@ def tab_video_compile() -> None:
 
     images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
     videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}])
-    media_files = sorted(images + videos, key=_media_sort_key)
+    media_files = _media_files_for_compile(project_path, images_dir, videos_dir)
     audio_files = sorted([p for p in audio_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
     music_files = sorted([p for p in music_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
     if images:

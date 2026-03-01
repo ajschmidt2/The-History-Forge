@@ -187,6 +187,9 @@ def _scene_to_serializable(scene: Scene) -> dict[str, object]:
         "estimated_duration_sec": float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0),
         "video_path": str(getattr(scene, "video_path", "") or ""),
         "video_url": str(getattr(scene, "video_url", "") or ""),
+        "video_loop": bool(getattr(scene, "video_loop", False)),
+        "video_muted": bool(getattr(scene, "video_muted", True)),
+        "video_volume": float(getattr(scene, "video_volume", 0.0) or 0.0),
     }
 
 
@@ -214,6 +217,12 @@ def _scene_from_serializable(raw: object, project_id: str) -> Scene | None:
         scene.estimated_duration_sec = 0.0
     scene.video_path = str(raw.get("video_path", "") or "") or None
     scene.video_url = str(raw.get("video_url", "") or "") or None
+    scene.video_loop = bool(raw.get("video_loop", False))
+    scene.video_muted = bool(raw.get("video_muted", True))
+    try:
+        scene.video_volume = float(raw.get("video_volume", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        scene.video_volume = 0.0
     saved_image_path = PROJECTS_ROOT / slugify_project_id(project_id) / "assets/images" / f"s{scene.index:02d}.png"
     if saved_image_path.exists():
         try:

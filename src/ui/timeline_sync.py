@@ -32,6 +32,26 @@ def _media_sort_key(path: Path) -> tuple[int, int, str]:
     return (1, 10**9, path.name.lower())
 
 
+def _media_files_from_session_scenes(project_path: Path, session_scenes: list[Any]) -> list[Path]:
+    images_dir = project_path / "assets/images"
+    image_candidates = {p.stem.lower(): p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}}
+    media_files: list[Path] = []
+    for scene in session_scenes:
+        idx = getattr(scene, "index", None)
+        if not isinstance(idx, int) or idx <= 0:
+            continue
+        video_path = str(getattr(scene, "video_path", "") or "").strip()
+        if video_path:
+            candidate = Path(video_path)
+            if candidate.exists() and candidate.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
+                media_files.append(candidate)
+                continue
+        preferred_stem = f"s{idx:02d}".lower()
+        if preferred_stem in image_candidates:
+            media_files.append(image_candidates[preferred_stem])
+    return media_files
+
+
 def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: int) -> list[str]:
     captions = [str(caption or "") for caption in (scene_captions or [])[:expected_count]]
     if len(captions) < expected_count:
@@ -120,7 +140,10 @@ def sync_timeline_for_project(
     music_dir = project_path / "assets/music"
 
     if media_files is None:
-        media_files = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}], key=_media_sort_key)
+        if session_scenes:
+            media_files = _media_files_from_session_scenes(project_path, session_scenes)
+        if not media_files:
+            media_files = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}], key=_media_sort_key)
     media_files = sorted(media_files, key=_media_sort_key)
     if not media_files:
         return None
@@ -170,9 +193,17 @@ def sync_timeline_for_project(
 
 
     scene_excerpts: list[str] = []
+    scene_video_options: dict[int, dict[str, float | bool]] = {}
     if session_scenes:
         for scene in session_scenes:
+            idx = getattr(scene, "index", None)
             scene_excerpts.append(str(getattr(scene, "script_excerpt", "") or ""))
+            if isinstance(idx, int) and idx > 0:
+                scene_video_options[idx] = {
+                    "video_loop": bool(getattr(scene, "video_loop", False)),
+                    "video_muted": bool(getattr(scene, "video_muted", True)),
+                    "video_volume": float(getattr(scene, "video_volume", 0.0) or 0.0),
+                }
 
     timeline = build_default_timeline(
         project_id=project_id,
@@ -196,6 +227,7 @@ def sync_timeline_for_project(
         narration_wpm=narration_wpm,
         narration_min_sec=narration_min_sec,
         narration_max_sec=narration_max_sec,
+        scene_video_options=scene_video_options,
     )
 
     _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
@@ -224,6 +256,7 @@ def sync_timeline_for_project(
             narration_wpm=narration_wpm,
             narration_min_sec=narration_min_sec,
             narration_max_sec=narration_max_sec,
+            scene_video_options=scene_video_options,
         )
         _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
     if len(timeline.scenes) != len(normalized_captions):

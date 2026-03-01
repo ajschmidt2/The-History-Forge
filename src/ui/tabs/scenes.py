@@ -413,11 +413,36 @@ def tab_create_scenes() -> None:
         _video_src = None
         if scene_video_path and Path(scene_video_path).exists():
             _video_src = scene_video_path
-        elif scene_video_url:
+        elif scene_video_url and str(scene_video_url).startswith(("http://", "https://")):
             _video_src = scene_video_url
 
         if _video_src:
             st.video(_video_src)
+            selected.video_loop = bool(
+                st.checkbox(
+                    "Loop video to fill scene duration",
+                    value=bool(getattr(selected, "video_loop", False)),
+                    key=_scene_widget_key("scene_video_loop_", selected),
+                )
+            )
+            selected.video_muted = bool(
+                st.checkbox(
+                    "Mute video audio",
+                    value=bool(getattr(selected, "video_muted", True)),
+                    key=_scene_widget_key("scene_video_muted_", selected),
+                    help="Default is muted so narration/music remain clear.",
+                )
+            )
+            selected.video_volume = float(
+                st.slider(
+                    "Video audio volume",
+                    min_value=0,
+                    max_value=100,
+                    value=int(max(0.0, min(100.0, float(getattr(selected, "video_volume", 0.0) or 0.0)))),
+                    key=_scene_widget_key("scene_video_volume_", selected),
+                    disabled=bool(getattr(selected, "video_muted", True)),
+                )
+            )
             if scene_video_path:
                 st.caption(f"`{Path(scene_video_path).name}`")
             if st.button(
@@ -448,6 +473,9 @@ def tab_create_scenes() -> None:
                 chosen_path = saved_vids[vid_names.index(picked)]
                 selected.video_path = str(chosen_path)
                 selected.video_url = None
+                selected.video_loop = bool(getattr(selected, "video_loop", False))
+                selected.video_muted = True
+                selected.video_volume = 0.0
                 st.toast(f"Video '{picked}' assigned to scene {selected.index}.")
                 st.rerun()
         else:

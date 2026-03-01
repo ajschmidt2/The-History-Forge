@@ -60,6 +60,9 @@ class Scene(BaseModel):
     duration: float
     motion: Optional[Motion] = None
     caption: Optional[str] = None
+    video_loop: bool = False
+    video_muted: bool = True
+    video_volume: float = 0.0
 
     @property
     def end(self) -> float:
