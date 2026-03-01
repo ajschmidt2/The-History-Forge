@@ -15,9 +15,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+from urllib.request import urlopen
 
 import streamlit as st
 
+from src.storage import record_asset
 from src.ai_video_generation import (
     SORA_ASPECT_RATIOS,
     VEO_ASPECT_RATIOS,
@@ -61,6 +63,23 @@ def _aspect_ratios_for(provider_key: str) -> list[str]:
 
 def _videos_dir(project_id: str) -> Path:
     return Path("data/projects") / project_id / "assets/videos"
+
+
+def _persist_video_from_url(project_id: str, source_url: str, stem_hint: str = "video") -> str | None:
+    """Download a remote video URL into project assets/videos and return the local path."""
+    if not source_url.startswith(("http://", "https://")):
+        return None
+    videos_dir = _videos_dir(project_id)
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stem_hint) or "video"
+    destination = videos_dir / f"{safe_stem}_{int(time.time())}.mp4"
+    try:
+        with urlopen(source_url) as response:
+            destination.write_bytes(response.read())
+    except Exception:  # noqa: BLE001 - non-fatal fallback if remote download fails
+        return None
+    record_asset(project_id, "generated_video", destination)
+    return str(destination.resolve())
 
 
 def _saved_videos(project_id: str) -> list[Path]:
@@ -264,7 +283,7 @@ def tab_ai_video_generator() -> None:
                     if final_status == "completed":
                         finalized = finalize_sora_video_job(start_payload["jobId"])
                         url = str(finalized["url"])
-                        local_path = None
+                        local_path = _persist_video_from_url(project_id, url, stem_hint="sora")
                     elif final_status == "failed":
                         raise RuntimeError(str(status_payload.get("error") or "Sora video generation failed."))
                     else:
@@ -286,6 +305,8 @@ def tab_ai_video_generator() -> None:
                 st.session_state[_KEY_RESULT_PROMPT] = prompt.strip()
                 st.session_state[_KEY_RESULT_PROVIDER] = provider_label
                 st.session_state[_KEY_RESULT_RATIO] = aspect_ratio
+                if local_path and Path(local_path).exists():
+                    record_asset(project_id, "generated_video", Path(local_path))
                 st.session_state.pop(_KEY_ERROR, None)
             except (ValueError, PermissionError) as exc:
                 st.session_state[_KEY_ERROR] = ("warning", str(exc))

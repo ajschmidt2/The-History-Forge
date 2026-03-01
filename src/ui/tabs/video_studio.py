@@ -22,6 +22,27 @@ from src.ui.state import active_project_id
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.ui.caption_format import format_caption
 
+MUSIC_LIBRARY_ROOT = Path("data/music_library")
+
+
+def _list_music_tracks(directory: Path) -> list[Path]:
+    if not directory.exists():
+        return []
+    return sorted([p for p in directory.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}], key=lambda p: p.name.lower())
+
+
+def _save_music_file(destination_dir: Path, filename: str, music_bytes: bytes) -> Path:
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / filename
+    destination.write_bytes(music_bytes)
+    return destination
+
+
+def _copy_track_to_project(track_path: Path, project_music_dir: Path, project_id: str) -> Path:
+    destination = _save_music_file(project_music_dir, track_path.name, track_path.read_bytes())
+    record_asset(project_id, "music", destination)
+    return destination
+
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
         return ""
@@ -524,7 +545,8 @@ def tab_video_compile() -> None:
     videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}])
     media_files = _media_files_for_compile(project_path, images_dir, videos_dir)
     audio_files = sorted([p for p in audio_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
-    music_files = sorted([p for p in music_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
+    music_files = _list_music_tracks(music_dir)
+    library_music_files = _list_music_tracks(MUSIC_LIBRARY_ROOT)
     if images:
         record_assets(project_name, "image", images)
     if videos:
@@ -562,6 +584,8 @@ def tab_video_compile() -> None:
         st.caption(f"Using voiceover: {audio_files[0].name}")
     if music_files:
         st.caption(f"Using music bed: {music_files[0].name}")
+    elif library_music_files:
+        st.caption(f"Music library available: {len(library_music_files)} track(s)")
 
     st.info(
         "Tip: timeline.json is kept in sync with the current media and settings. Use Generate timeline.json to force a manual refresh."
@@ -617,7 +641,27 @@ def tab_video_compile() -> None:
         ]
         st.dataframe(music_rows, width="stretch", hide_index=True)
     else:
-        st.info("No background music files found yet.")
+        st.info("No project-specific background music files found yet.")
+
+    st.markdown("#### Shared music library")
+    if library_music_files:
+        library_rows = [
+            {"Track": track.name, "Size (MB)": f"{track.stat().st_size / (1024 * 1024):.2f}"}
+            for track in library_music_files
+        ]
+        st.dataframe(library_rows, width="stretch", hide_index=True)
+        selected_library_track = st.selectbox(
+            "Apply a saved library track to this project",
+            options=[track.name for track in library_music_files],
+            key="video_music_library_pick",
+        )
+        if st.button("Add selected track to this project", width="stretch", key="video_music_library_apply"):
+            selected_track_path = MUSIC_LIBRARY_ROOT / selected_library_track
+            destination = _copy_track_to_project(selected_track_path, music_dir, project_name)
+            st.success(f"Added {destination.name} to assets/music for this project.")
+            st.rerun()
+    else:
+        st.caption("No shared tracks yet. Upload one below to build your reusable music library.")
 
     upload_cols = st.columns([2, 1])
     with upload_cols[0]:
@@ -629,12 +673,14 @@ def tab_video_compile() -> None:
         if uploaded_music is not None:
             music_signature = (uploaded_music.name, int(uploaded_music.size or 0))
             if st.session_state.get("video_music_upload_signature") != music_signature:
-                music_dir.mkdir(parents=True, exist_ok=True)
-                destination = music_dir / uploaded_music.name
-                destination.write_bytes(uploaded_music.getbuffer())
-                record_asset(project_name, "music", destination)
+                uploaded_bytes = uploaded_music.getbuffer()
+                lib_destination = _save_music_file(MUSIC_LIBRARY_ROOT, uploaded_music.name, uploaded_bytes)
+                project_destination = _save_music_file(music_dir, uploaded_music.name, uploaded_bytes)
+                record_asset(project_name, "music", project_destination)
                 st.session_state.video_music_upload_signature = music_signature
-                st.success(f"Saved {uploaded_music.name} to assets/music.")
+                st.success(
+                    f"Saved {project_destination.name} to this project and your shared library ({lib_destination})."
+                )
                 st.rerun()
         else:
             st.session_state.pop("video_music_upload_signature", None)
@@ -657,11 +703,12 @@ def tab_video_compile() -> None:
                     except Exception as exc:  # noqa: BLE001 - surface download errors to user
                         st.error(f"Failed to download music: {exc}")
                     else:
-                        music_dir.mkdir(parents=True, exist_ok=True)
-                        destination = music_dir / filename
-                        destination.write_bytes(music_bytes)
-                        record_asset(project_name, "music", destination)
-                        st.success(f"Downloaded {filename} to assets/music.")
+                        lib_destination = _save_music_file(MUSIC_LIBRARY_ROOT, filename, music_bytes)
+                        project_destination = _save_music_file(music_dir, filename, music_bytes)
+                        record_asset(project_name, "music", project_destination)
+                        st.success(
+                            f"Downloaded {project_destination.name} to this project and shared library ({lib_destination})."
+                        )
                         st.rerun()
 
     timeline_path = project_path / "timeline.json"

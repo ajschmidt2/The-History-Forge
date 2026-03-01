@@ -166,6 +166,7 @@ def ensure_project_exists(project_id: str) -> Path:
     project_dir = PROJECTS_ROOT / normalized
     (project_dir / "assets/images").mkdir(parents=True, exist_ok=True)
     (project_dir / "assets/audio").mkdir(parents=True, exist_ok=True)
+    (project_dir / "assets/music").mkdir(parents=True, exist_ok=True)
     (project_dir / "assets/thumbnails").mkdir(parents=True, exist_ok=True)
     (project_dir / "assets/videos").mkdir(parents=True, exist_ok=True)
     return project_dir
