@@ -42,6 +42,26 @@ def _apply_max_width(width: int, height: int, max_width: int) -> tuple[int, int]
         scaled_height += 1
     return max_width, max(2, scaled_height)
 
+
+def _normalize_scene_duration(duration: float, fps: int, scene_id: str) -> float:
+    min_duration = 1.0 / max(1, fps)
+    if not math.isfinite(duration):
+        raise ValueError(f"Scene '{scene_id}' has non-finite duration {duration!r}.")
+    if duration <= 0:
+        raise ValueError(f"Scene '{scene_id}' has invalid duration {duration}s (must be > 0).")
+    return max(duration, min_duration)
+
+
+def _safe_crossfade_duration(durations: list[float], requested: float, fps: int) -> float:
+    if not durations or len(durations) < 2:
+        return 0.0
+    if not math.isfinite(requested) or requested <= 0:
+        return 0.0
+    min_frame = 1.0 / max(1, fps)
+    shortest_scene = min(durations)
+    max_crossfade = max(0.0, shortest_scene - min_frame)
+    return min(requested, max_crossfade)
+
 def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     motion = scene.motion
     if motion is None:
@@ -80,8 +100,7 @@ def _render_scene(
     ffmpeg_commands: list[list[str]],
     command_timeout_sec: float | None,
 ) -> None:
-    if scene.duration <= 0:
-        raise ValueError(f"Scene '{scene.id}' has invalid duration {scene.duration}s (must be > 0).")
+    normalized_duration = _normalize_scene_duration(float(scene.duration), fps, scene.id)
     source_path = Path(scene.image_path)
     is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
     if is_video:
@@ -89,7 +108,7 @@ def _render_scene(
             source_duration = max(0.0, float(get_media_duration(source_path))) if source_path.exists() else 0.0
         except Exception:
             source_duration = 0.0
-        pad_seconds = max(0.0, float(scene.duration) - source_duration)
+        pad_seconds = max(0.0, normalized_duration - source_duration)
         vf_parts = [
             f"scale={width}:{height}:force_original_aspect_ratio=decrease",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black",
@@ -107,7 +126,7 @@ def _render_scene(
             "-i",
             scene.image_path,
             "-t",
-            f"{scene.duration}",
+            f"{normalized_duration:.6f}",
             "-vf",
             filter_chain,
             "-an",
@@ -137,7 +156,7 @@ def _render_scene(
                 "-vf",
                 filter_chain,
                 "-t",
-                f"{scene.duration}",
+                f"{normalized_duration:.6f}",
                 "-vsync",
                 "cfr",
                 "-c:v",
@@ -163,7 +182,7 @@ def _render_scene(
         "-i",
         scene.image_path,
         "-t",
-        f"{scene.duration}",
+        f"{normalized_duration:.6f}",
         "-vf",
         filter_chain,
         "-r",
@@ -412,26 +431,36 @@ def render_video_from_timeline(
             for scene in timeline.scenes:
                 if not Path(scene.image_path).exists():
                     raise FileNotFoundError(f"Scene image not found: {scene.image_path}")
+                normalized_duration = _normalize_scene_duration(float(scene.duration), fps, scene.id)
                 scene_out = scenes_dir / f"{scene.id}.mp4"
                 if _resolve_scene_clip(scene, scene_out, fps, width, height, cache_dir, log_file, ffmpeg_commands, command_timeout_sec):
                     cache_hits += 1
                 scene_paths.append(scene_out)
-                durations.append(scene.duration)
+                durations.append(normalized_duration)
 
             stitched_path = tmp_path / "stitched.mp4"
             if timeline.meta.crossfade and len(scene_paths) > 1:
+                effective_crossfade = _safe_crossfade_duration(durations, float(timeline.meta.crossfade_duration), fps)
                 try:
-                    _crossfade_scenes(
-                        scene_paths,
-                        stitched_path,
-                        durations,
-                        fps,
-                        timeline.meta.crossfade_duration,
-                        log_file,
-                        ffmpeg_commands,
-                        transition_types=getattr(timeline.meta, "transition_types", []),
-                        command_timeout_sec=command_timeout_sec,
-                    )
+                    if effective_crossfade > 0:
+                        _crossfade_scenes(
+                            scene_paths,
+                            stitched_path,
+                            durations,
+                            fps,
+                            effective_crossfade,
+                            log_file,
+                            ffmpeg_commands,
+                            transition_types=getattr(timeline.meta, "transition_types", []),
+                            command_timeout_sec=command_timeout_sec,
+                        )
+                    else:
+                        if log_file:
+                            with log_file.open("a", encoding="utf-8") as handle:
+                                handle.write(
+                                    "Crossfade disabled because crossfade_duration is too large for one or more scene durations.\n"
+                                )
+                        _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec)
                 except (RuntimeError, subprocess.CalledProcessError):
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
