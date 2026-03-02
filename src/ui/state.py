@@ -11,6 +11,7 @@ import streamlit as st
 from openai import APIConnectionError, APIError, AuthenticationError, NotFoundError, RateLimitError
 
 import src.supabase_storage as _sb_store
+from src.config import get_secret
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.storage import delete_project_records
 
@@ -68,8 +69,7 @@ def _load_user_preferences() -> dict[str, object]:
 
 
 def require_passcode() -> None:
-    secret_key = "APP_PASSCODE" if "APP_PASSCODE" in st.secrets else "password"
-    expected = st.secrets.get(secret_key, "")
+    expected = str(get_secret("APP_PASSCODE") or get_secret("password") or "")
 
     if not expected:
         return

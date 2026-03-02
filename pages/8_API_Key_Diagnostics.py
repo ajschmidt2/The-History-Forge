@@ -3,10 +3,11 @@
 Run this page to pinpoint exactly where the openai_api_key lookup is
 failing and whether the key itself is valid.
 """
-import os
 import traceback
 
 import streamlit as st
+
+from src.config import get_secret, streamlit_secrets_detected
 
 st.set_page_config(page_title="API Key Diagnostics", page_icon="🔑")
 st.title("🔑 OpenAI API Key Diagnostics")
@@ -22,58 +23,31 @@ def run_diagnostics() -> None:
     # ------------------------------------------------------------------
     # 1. Streamlit secrets presence
     # ------------------------------------------------------------------
-    secrets_available = False
-    secrets_keys: list[str] = []
-    try:
-        if hasattr(st, "secrets"):
-            secrets_keys = list(st.secrets.keys())
-            secrets_available = True
-    except Exception as exc:
-        results.append(("Streamlit secrets accessible", False, str(exc)))
-    else:
-        results.append(
-            (
-                "Streamlit secrets accessible",
-                secrets_available,
-                f"Keys present: {secrets_keys}" if secrets_keys else "Secrets object exists but is empty.",
-            )
+    secrets_available = streamlit_secrets_detected()
+    results.append(
+        (
+            "Streamlit secrets accessible",
+            secrets_available,
+            "Detected via central config loader." if secrets_available else "No populated Streamlit secrets detected.",
         )
+    )
 
     # ------------------------------------------------------------------
     # 2. openai_api_key in Streamlit secrets (exact key name)
     # ------------------------------------------------------------------
-    key_in_secrets = False
-    raw_secret_value = ""
-    if secrets_available:
-        if "openai_api_key" in st.secrets:
-            raw_secret_value = str(st.secrets["openai_api_key"])
-            key_in_secrets = True
-            results.append(
-                (
-                    "`openai_api_key` found in st.secrets",
-                    True,
-                    f"Value length: {len(raw_secret_value)} chars, "
-                    f"starts with: `{raw_secret_value[:7]}…`",
-                )
-            )
-        else:
-            # Check if OPENAI_API_KEY (uppercase) is there as a fallback hint
-            uppercase_present = "OPENAI_API_KEY" in st.secrets
-            results.append(
-                (
-                    "`openai_api_key` found in st.secrets",
-                    False,
-                    (
-                        "Key not found. "
-                        + (
-                            "However `OPENAI_API_KEY` (uppercase) IS present — rename it to "
-                            "`openai_api_key` in .streamlit/secrets.toml to fix."
-                            if uppercase_present
-                            else "Neither `openai_api_key` nor `OPENAI_API_KEY` found in secrets."
-                        )
-                    ),
-                )
-            )
+    raw_secret_value = get_secret("openai_api_key", "")
+    key_in_secrets = bool(raw_secret_value and secrets_available)
+    results.append(
+        (
+            "OpenAI key resolved by loader",
+            bool(raw_secret_value),
+            (
+                f"Value length: {len(raw_secret_value)} chars, starts with: `{raw_secret_value[:7]}…`"
+                if raw_secret_value
+                else "Loader did not find a configured OpenAI key."
+            ),
+        )
+    )
 
     # ------------------------------------------------------------------
     # 3. Placeholder / empty check on raw secret
@@ -111,7 +85,6 @@ def run_diagnostics() -> None:
     # ------------------------------------------------------------------
     resolved_key = ""
     try:
-        from src.config import get_secret
         resolved_key = get_secret("openai_api_key", "").strip()
         if resolved_key:
             results.append(
@@ -142,7 +115,7 @@ def run_diagnostics() -> None:
     # ------------------------------------------------------------------
     # 5. Environment variable fallback
     # ------------------------------------------------------------------
-    env_key = os.getenv("openai_api_key", "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
+    env_key = get_secret("OPENAI_API_KEY", "").strip()
     if env_key:
         results.append(
             (

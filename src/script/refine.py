@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 from typing import List
 
-from utils import get_secret, _reraise_api_errors, get_openai_text_model, openai_chat_completion
+from src.config import get_openai_config
+from utils import _reraise_api_errors, get_openai_text_model, openai_chat_completion
 
 
 def _openai_client():
@@ -12,7 +13,7 @@ def _openai_client():
     # get_secret normalises placeholder values (e.g. "PASTE_KEY_HERE") to "".
     # Avoid raw os.getenv fallbacks here: they bypass normalisation and would
     # send placeholder strings to OpenAI, causing a 401 AuthenticationError.
-    key = get_secret("openai_api_key", "").strip()
+    key = str(get_openai_config().get("api_key") or "").strip()
     if not key:
         return None
 

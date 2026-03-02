@@ -11,6 +11,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from image_gen import validate_gemini_api_key
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
+from src.config import streamlit_secrets_detected
+from src.config.validate import validate_runtime_config
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.ui.tabs.ai_video_generator import tab_ai_video_generator
 from src.ui.tabs.export import tab_export
@@ -48,6 +50,12 @@ save_project_state = _state.save_project_state
 
 def main() -> None:
     st.set_page_config(page_title="The History Forge", layout="wide")
+    try:
+        runtime_diag = validate_runtime_config()
+    except RuntimeError as exc:
+        st.error(str(exc))
+        st.stop()
+
     # Allow the app shell to load even when image generation credentials
     # are missing; image generation paths still validate strictly when used.
     validate_gemini_api_key(required=False)
@@ -55,6 +63,17 @@ def main() -> None:
     init_state()
     st.title("The History Forge")
     st.caption("Generate scripts, scene lists, prompts, images, and voiceover from a single workflow.")
+
+    with st.expander("Config diagnostics"):
+        st.write({
+            "streamlit_secrets_detected": streamlit_secrets_detected(),
+            "required_keys_present": runtime_diag["required"],
+            "resolved_buckets": {
+                "images_bucket": runtime_diag["buckets"]["images_bucket"],
+                "audio_bucket": runtime_diag["buckets"]["audio_bucket"],
+                "videos_bucket": runtime_diag["buckets"]["videos_bucket"],
+            },
+        })
 
     with st.sidebar:
         st.header("OpenAI Settings")

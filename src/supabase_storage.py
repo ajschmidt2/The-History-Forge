@@ -25,7 +25,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from src.config import get_secret
+from src.config import get_secret, get_supabase_config
 from src.constants import SUPABASE_VIDEO_BUCKET
 
 # ---------------------------------------------------------------------------
@@ -40,8 +40,9 @@ _client = None
 
 
 def _get_credentials() -> tuple[str, str]:
-    url = get_secret("SUPABASE_URL").strip()
-    key = get_secret("SUPABASE_KEY").strip()
+    cfg = get_supabase_config()
+    url = str(cfg.get("url") or "").strip()
+    key = str(cfg.get("key") or "").strip()
     return url, key
 
 

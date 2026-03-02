@@ -256,3 +256,6 @@ OPENAI_MODEL=gpt-4o-mini
 ```
 
 Remove incorrect variants such as `MODEL=...` or `OPENAI_MODEL=sk-proj-...`.
+
+
+For canonical secrets setup examples, see `docs/SECRETS.md`.
