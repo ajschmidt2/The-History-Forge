@@ -13,6 +13,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.config import get_secret
 from src.storage.supabase_assets import stage_timeline_assets
 
 from .audio_mix import build_audio_mix_cmd
@@ -536,7 +537,7 @@ def render_video_from_timeline(
     project_slug = (getattr(timeline.meta, "project_id", "") or "").strip() or Path(timeline_path).resolve().parent.name
     storage_buckets = {
         "images": "images",
-        "audio": (None if os.getenv("SUPABASE_AUDIO_SAME_BUCKET", "0") == "1" else os.getenv("SUPABASE_AUDIO_BUCKET", "audio")),
+        "audio": (None if str(get_secret("SUPABASE_AUDIO_SAME_BUCKET", "0") or "0") == "1" else str(get_secret("SUPABASE_AUDIO_BUCKET", "audio") or "audio")),
     }
     timeline = stage_timeline_assets(
         timeline,

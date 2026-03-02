@@ -14,146 +14,15 @@ import requests
 from PIL import Image
 
 from image_gen import generate_imagen_images
+from src.config import get_secret as config_get_secret
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, resolve_openai_config
 
 # ----------------------------
 # Secrets
 # ----------------------------
 
-# Regex to detect common API-key placeholder patterns beyond the exact-match set below.
-# Catches variants like PASTE_KEHERE (typo), PASTE_API_KEY, ADD_KEY_HERE, YOUR_API_KEY, etc.
-_PLACEHOLDER_RE = re.compile(
-    r"^paste"                  # PASTE_KEY_HERE, PASTE_KEHERE, PASTEKEHERE, PASTE_API_KEY …
-    r"|[_\-\s]here$"           # ADD_KEY_HERE, YOUR_TOKEN_HERE, INSERT_SECRET_HERE …
-    r"|^your[_\-\s]"           # YOUR_API_KEY, YOUR_KEY, YOUR_TOKEN …
-    r"|^(replace[\-_]?me|fixme|todo|changeme)$",
-    re.IGNORECASE,
-)
-
-
-def _normalize_secret(value: str) -> str:
-    cleaned = str(value or "").strip()
-    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"\"", "'"}:
-        cleaned = cleaned[1:-1].strip()
-    lowered = cleaned.lower()
-    if lowered in {"paste_key_here", "your_api_key_here", "replace_me", "none", "null"}:
-        return ""
-    if _PLACEHOLDER_RE.search(cleaned):
-        return ""
-    return cleaned
-
-
-
-
-def _secret_from_mapping(mapping: Any, path: tuple[str, ...]) -> str:
-    current = mapping
-    for key in path:
-        if not isinstance(current, Mapping) or key not in current:
-            return ""
-        current = current[key]
-    return _normalize_secret(str(current))
-
-
-def _find_secret_in_mapping(mapping: Any, key_aliases: set[str]) -> str:
-    """Depth-first search for a non-placeholder secret under any matching alias."""
-    if isinstance(mapping, Mapping):
-        for key, value in mapping.items():
-            key_name = str(key).strip().lower()
-            if key_name in key_aliases and not isinstance(value, Mapping):
-                normalized = _normalize_secret(str(value))
-                if normalized:
-                    return normalized
-            nested = _find_secret_in_mapping(value, key_aliases)
-            if nested:
-                return nested
-    return ""
-
 def _get_secret(name: str, default: str = "") -> str:
-    _name_lower = name.lower()
-    # Only add API-key aliases when specifically looking up an API key,
-    # not for unrelated OpenAI settings such as the model name.
-    _is_openai_key_lookup = (
-        "openai" in _name_lower
-        and ("key" in _name_lower or "token" in _name_lower)
-        and "model" not in _name_lower
-    )
-    candidates = [
-        name,
-        name.lower(),
-        name.upper(),
-        "OPENAI_API_KEY" if _is_openai_key_lookup else "",
-        "openai_api_key" if _is_openai_key_lookup else "",
-        "OPENAI_KEY" if _is_openai_key_lookup else "",
-        "openai_key" if _is_openai_key_lookup else "",
-        "api_key" if _is_openai_key_lookup else "",
-    ]
-    candidates = [c for c in candidates if c]
-
-    try:
-        import streamlit as st  # type: ignore
-
-        if hasattr(st, "secrets"):
-            for key in candidates:
-                if key in st.secrets:
-                    value = _normalize_secret(str(st.secrets[key]))
-                    if value:
-                        if key.lower() in {"openai_api_key", "openai_key", "api_key"}:
-                            os.environ.setdefault("OPENAI_API_KEY", value)
-                            os.environ.setdefault("openai_api_key", value)
-                        return value
-
-            if _is_openai_key_lookup:
-                nested_paths = [
-                    ("openai", "api_key"),
-                    ("openai", "OPENAI_API_KEY"),
-                    ("OPENAI", "api_key"),
-                    ("OPENAI", "API_KEY"),
-                    ("providers", "openai", "api_key"),
-                ]
-                for path in nested_paths:
-                    value = _secret_from_mapping(st.secrets, path)
-                    if value:
-                        os.environ.setdefault("OPENAI_API_KEY", value)
-                        os.environ.setdefault("openai_api_key", value)
-                        return value
-
-                recursive_value = _find_secret_in_mapping(
-                    st.secrets,
-                    {
-                        "openai_api_key",
-                        "openai_key",
-                        "openai",
-                        "api_key",
-                        "apikey",
-                        "openaiapikey",
-                        "openai-api-key",
-                    },
-                )
-                if recursive_value:
-                    os.environ.setdefault("OPENAI_API_KEY", recursive_value)
-                    os.environ.setdefault("openai_api_key", recursive_value)
-                    return recursive_value
-
-            if "elevenlabs" in name.lower():
-                nested_paths = [
-                    ("elevenlabs", "api_key"),
-                    ("elevenlabs", "ELEVENLABS_API_KEY"),
-                    ("ELEVENLABS", "api_key"),
-                    ("ELEVENLABS", "API_KEY"),
-                ]
-                for path in nested_paths:
-                    value = _secret_from_mapping(st.secrets, path)
-                    if value:
-                        return value
-    except Exception:
-        pass
-
-    for key in candidates:
-        value = _normalize_secret(os.getenv(key, ""))
-        if value:
-            return value
-
-    return _normalize_secret(default)
+    return str(config_get_secret(name, default) or "")
 
 
 def get_secret(name: str, default: str = "") -> str:

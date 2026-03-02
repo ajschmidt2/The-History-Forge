@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Callable
 
+from src.config import get_secret, get_supabase_config
 from src.video.timeline_schema import Timeline
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -11,10 +11,10 @@ AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 
 # Mapping rules between local-ish timeline paths and storage object paths.
 # Override via env vars when your bucket layout differs.
-LOCAL_PREFIX_IMAGES = os.getenv("LOCAL_PREFIX_IMAGES", "data/projects/{project}/assets/images/")
-LOCAL_PREFIX_AUDIO = os.getenv("LOCAL_PREFIX_AUDIO", "data/projects/{project}/assets/audio/")
-STORAGE_PREFIX_IMAGES = os.getenv("STORAGE_PREFIX_IMAGES", "{project}/")
-STORAGE_PREFIX_AUDIO = os.getenv("STORAGE_PREFIX_AUDIO", "{project}/")
+LOCAL_PREFIX_IMAGES = str(get_secret("LOCAL_PREFIX_IMAGES", "data/projects/{project}/assets/images/") or "data/projects/{project}/assets/images/")
+LOCAL_PREFIX_AUDIO = str(get_secret("LOCAL_PREFIX_AUDIO", "data/projects/{project}/assets/audio/") or "data/projects/{project}/assets/audio/")
+STORAGE_PREFIX_IMAGES = str(get_secret("STORAGE_PREFIX_IMAGES", "{project}/") or "{project}/")
+STORAGE_PREFIX_AUDIO = str(get_secret("STORAGE_PREFIX_AUDIO", "{project}/") or "{project}/")
 
 
 def _prefix(prefix_template: str, project_slug: str) -> str:
@@ -34,8 +34,9 @@ def _sanitize_storage_path(storage_path: str) -> str:
 
 
 def get_supabase_client():
-    url = (os.getenv("SUPABASE_URL") or "").strip()
-    key = (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY") or "").strip()
+    cfg = get_supabase_config()
+    url = str(cfg.get("url") or "").strip()
+    key = str(cfg.get("key") or "").strip()
     if not url or not key:
         raise RuntimeError("Supabase credentials are not configured (SUPABASE_URL + key required).")
 

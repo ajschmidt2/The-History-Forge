@@ -5,8 +5,6 @@ import os
 from io import BytesIO
 from typing import Any, List, Optional, Sequence
 
-import streamlit as st
-
 
 _PLACEHOLDER_VALUES = {
     "paste_key_here", "your_api_key_here", "replace_me", "none", "null", "",
@@ -23,10 +21,11 @@ def _normalize_secret(value: str) -> str:
     return cleaned
 
 
+from src.config import get_secret as _config_get_secret
+
+
 def _get_secret(name: str, default: str = "") -> str:
-    if hasattr(st, "secrets") and name in st.secrets:
-        return _normalize_secret(str(st.secrets.get(name, default)))
-    return _normalize_secret(os.getenv(name, default))
+    return _normalize_secret(_config_get_secret(name, default) or "")
 
 
 def _resolve_api_key() -> str:
@@ -39,7 +38,7 @@ def _resolve_api_key() -> str:
         "google_api_key",
     )
     for key_name in env_keys:
-        value = os.getenv(key_name, "")
+        value = _get_secret(key_name, "")
         if value:
             return _normalize_secret(str(value))
 

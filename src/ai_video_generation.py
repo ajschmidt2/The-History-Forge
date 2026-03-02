@@ -31,7 +31,7 @@ from typing import Any, Optional
 import requests
 
 import src.supabase_storage as _sb_store
-from src.config import get_secret
+from src.config import get_openai_config, get_secret, get_supabase_config
 from src.constants import SUPABASE_VIDEO_BUCKET
 
 # ---------------------------------------------------------------------------
@@ -61,11 +61,8 @@ _PLACEHOLDER_KEYS = {"", "your-anon-public-key", "your-anon-key-here"}
 
 def _supabase_invoke_key() -> str:
     """Return the best available Supabase key for invoking Edge Functions."""
-    return (
-        get_secret("SUPABASE_KEY")
-        or get_secret("SUPABASE_ANON_KEY")
-        or get_secret("SUPABASE_SERVICE_ROLE_KEY")
-    )
+    cfg = get_supabase_config()
+    return str(cfg.get("key") or "")
 
 
 def veo_configured() -> bool:
@@ -77,7 +74,7 @@ def veo_configured() -> bool:
 
 def sora_configured() -> bool:
     """Return True when an OpenAI API key is available."""
-    key = get_secret("openai_api_key")
+    key = str(get_openai_config().get("api_key") or "")
     return bool(key) and not key.startswith("PASTE")
 
 
@@ -158,7 +155,7 @@ def _normalize_job_status(raw_status: str) -> str:
 
 
 def _sora_headers() -> dict[str, str]:
-    key = get_secret("openai_api_key")
+    key = str(get_openai_config().get("api_key") or "")
     return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
 
@@ -209,7 +206,7 @@ def create_video(
 
     Uses the official create endpoint: POST https://api.openai.com/v1/videos.
     """
-    key = get_secret("openai_api_key")
+    key = str(get_openai_config().get("api_key") or "")
     if not key:
         raise ValueError("OpenAI API key is not configured. Set openai_api_key in .streamlit/secrets.toml.")
     if model not in _SORA_MODELS:

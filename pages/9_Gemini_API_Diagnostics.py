@@ -9,6 +9,8 @@ import traceback
 
 import streamlit as st
 
+from src.config import get_secret, streamlit_secrets_detected
+
 st.set_page_config(page_title="Gemini API Diagnostics", page_icon="🔮")
 st.title("🔮 Gemini / Google AI API Diagnostics")
 st.caption(
@@ -60,54 +62,36 @@ def run_diagnostics() -> None:
     # ------------------------------------------------------------------
     # 1. Streamlit secrets presence
     # ------------------------------------------------------------------
-    secrets_available = False
-    secrets_keys: list[str] = []
-    try:
-        if hasattr(st, "secrets"):
-            secrets_keys = list(st.secrets.keys())
-            secrets_available = True
-    except Exception as exc:
-        results.append(("Streamlit secrets accessible", False, str(exc)))
-    else:
-        results.append(
-            (
-                "Streamlit secrets accessible",
-                secrets_available,
-                f"Keys present: {secrets_keys}" if secrets_keys else "Secrets object exists but is empty.",
-            )
-        )
+    secrets_available = streamlit_secrets_detected()
+    results.append((
+        "Streamlit secrets accessible",
+        secrets_available,
+        "Detected via central config loader." if secrets_available else "No populated Streamlit secrets detected.",
+    ))
 
     # ------------------------------------------------------------------
     # 2. Scan all accepted key names in Streamlit secrets
     # ------------------------------------------------------------------
     raw_secret_value = ""
     found_secret_name = ""
-    if secrets_available:
-        for key_name in _KEY_NAMES:
-            if key_name in st.secrets:
-                raw_secret_value = str(st.secrets[key_name])
-                found_secret_name = key_name
-                break
+    for key_name in _KEY_NAMES:
+        value = get_secret(key_name, "")
+        if value:
+            raw_secret_value = value
+            found_secret_name = key_name
+            break
 
-        if found_secret_name:
-            results.append(
-                (
-                    "Gemini key found in st.secrets",
-                    True,
-                    f"Found under `{found_secret_name}`. "
-                    f"Value length: {len(raw_secret_value)} chars, "
-                    f"starts with: `{raw_secret_value[:8]}…`",
-                )
-            )
-        else:
-            results.append(
-                (
-                    "Gemini key found in st.secrets",
-                    False,
-                    f"None of the accepted key names were found in st.secrets. "
-                    f"Accepted names: {', '.join(f'`{k}`' for k in _KEY_NAMES[:3])} (and lowercase variants).",
-                )
-            )
+    results.append(
+        (
+            "Gemini key resolved by loader",
+            bool(found_secret_name),
+            (
+                f"Found under `{found_secret_name}`. Value length: {len(raw_secret_value)} chars, starts with: `{raw_secret_value[:8]}…`"
+                if found_secret_name
+                else f"No configured key found for aliases: {', '.join(f'`{k}`' for k in _KEY_NAMES[:3])}"
+            ),
+        )
+    )
 
     # ------------------------------------------------------------------
     # 3. Placeholder / empty check on raw secret

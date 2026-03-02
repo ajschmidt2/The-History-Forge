@@ -9,7 +9,6 @@ either provider on its own.
 """
 from __future__ import annotations
 
-import os
 import traceback
 
 import requests
@@ -451,20 +450,8 @@ if st.button("Run Sora Diagnostics", type="primary", key="sora_run"):
             # ------------------------------------------------------------------
             # 1. openai_api_key is set
             # ------------------------------------------------------------------
-            raw_key = ""
-            key_in_secrets = False
-            try:
-                if hasattr(st, "secrets") and "openai_api_key" in st.secrets:
-                    raw_key = str(st.secrets["openai_api_key"]).strip()
-                    key_in_secrets = True
-            except Exception:  # noqa: BLE001
-                pass
-
             resolved_key = get_secret("openai_api_key", "").strip()
-            env_key = (
-                os.getenv("openai_api_key", "").strip()
-                or os.getenv("OPENAI_API_KEY", "").strip()
-            )
+            env_key = get_secret("OPENAI_API_KEY", "").strip()
             final_key = resolved_key or env_key
 
             _result_row(
@@ -475,7 +462,7 @@ if st.button("Run Sora Diagnostics", type="primary", key="sora_run"):
                     f"Key resolved — `{final_key[:7]}…` ({len(final_key)} chars)"
                     if final_key
                     else (
-                        "No key found.  Checked: `st.secrets['openai_api_key']`, "
+                        "No key found. Checked: central loader `get_secret('openai_api_key')`, "
                         "`get_secret('openai_api_key')`, env vars `openai_api_key` / `OPENAI_API_KEY`.\n\n"
                         "**Fix:** Add to `.streamlit/secrets.toml`:\n"
                         "```toml\nopenai_api_key = \"sk-...\"\n```"
