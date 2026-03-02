@@ -475,7 +475,7 @@ def _default_scene_captions(media_files: list[Path], timeline_path: Path, *, asp
             continue
         fallback = script_chunks[i - 1] if i - 1 < len(script_chunks) else ""
         formatted = format_caption(fallback, max_lines=caption_max_lines, max_chars_per_line=caption_max_chars)
-        captions.append(formatted or f"Scene {i}")
+        captions.append(formatted or f"Scene {scene_number}")
     return captions
 
 
@@ -495,7 +495,8 @@ def _collect_scene_captions(
     captions: list[str] = _normalize_caption_list(st.session_state[state_key], len(media_files))
     st.session_state[state_key] = captions
     for idx, media_path in enumerate(media_files, start=1):
-        with st.expander(f"Scene {idx}: {media_path.name}"):
+        display_scene_number = _scene_number_from_path(media_path) or idx
+        with st.expander(f"Scene {display_scene_number}: {media_path.name}"):
             if media_path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
                 st.video(str(media_path))
                 st.caption(f"Subtitle preview: {captions[idx - 1] or '(No subtitle)'}")
@@ -515,7 +516,10 @@ def _collect_scene_captions(
                 height=90,
                 key=f"video_scene_caption_{idx}_{media_path.name}",
             )
-            captions[idx - 1] = format_caption(edited_caption, max_lines=caption_max_lines, max_chars_per_line=caption_max_chars) or f"Scene {idx}"
+            captions[idx - 1] = (
+                format_caption(edited_caption, max_lines=caption_max_lines, max_chars_per_line=caption_max_chars)
+                or f"Scene {display_scene_number}"
+            )
 
     captions = _normalize_caption_list(captions, len(media_files))
     st.session_state[state_key] = captions
