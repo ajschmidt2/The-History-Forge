@@ -48,7 +48,7 @@ def _pick_fallback_model(configured_model: str, model_ids: list[str]) -> str:
 def run_diagnostics() -> None:
     results: list[tuple[str, bool, str]] = []
 
-    api_key = get_secret("openai_api_key", "").strip()
+    api_key = get_secret("OPENAI_API_KEY", get_secret("openai_api_key", "")).strip()
     configured_model = get_secret("openai_model", DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
 
     if not api_key:
