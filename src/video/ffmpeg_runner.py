@@ -47,6 +47,7 @@ def run_ffmpeg_streaming(
     timeout_sec: float | None = None,
     on_progress: callable | None = None,
     debug_verbose: bool = False,
+    cwd: Path | None = None,
 ) -> dict[str, Any]:
     if not cmd or not cmd[0]:
         raise ValueError(f"Invalid ffmpeg/ffprobe command: {cmd!r}")
@@ -62,10 +63,12 @@ def run_ffmpeg_streaming(
     elif exe_name == "ffprobe":
         resolved_cmd[0] = resolve_ffprobe_exe()
 
+    workdir = workdir.resolve()
     workdir.mkdir(parents=True, exist_ok=True)
     stdout_path = workdir / "ffmpeg-stdout.log"
     stderr_path = workdir / "ffmpeg-stderr.log"
-    report_path = workdir / "ffmpeg-report.log"
+    report_path = (workdir / "ffmpeg-report.log").resolve()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
     env["FFREPORT"] = f"file={report_path}:level=32"
@@ -78,7 +81,7 @@ def run_ffmpeg_streaming(
             text=True,
             bufsize=1,
             env=env,
-            cwd=str(workdir),
+            cwd=str(cwd.resolve() if cwd is not None else workdir),
             shell=False,
         )
 
