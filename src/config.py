@@ -6,6 +6,7 @@ duplicating the lookup logic.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 
 
 def _normalize(value: str) -> str:
@@ -25,6 +26,24 @@ def get_secret(name: str, default: str = "") -> str:
     """
     candidates = list(dict.fromkeys([name, name.lower(), name.upper()]))
 
+    lowered_name = name.lower()
+    is_openai_key_lookup = (
+        "openai" in lowered_name
+        and ("key" in lowered_name or "token" in lowered_name)
+        and "model" not in lowered_name
+    )
+    if is_openai_key_lookup:
+        candidates.extend(["OPENAI_API_KEY", "openai_api_key", "OPENAI_KEY", "openai_key", "api_key"])
+        candidates = list(dict.fromkeys(candidates))
+
+    def _secret_from_mapping(mapping: Mapping[str, object], path: tuple[str, ...]) -> str:
+        current: object = mapping
+        for key in path:
+            if not isinstance(current, Mapping) or key not in current:
+                return ""
+            current = current[key]
+        return _normalize(str(current))
+
     try:
         import streamlit as st  # type: ignore
 
@@ -32,6 +51,19 @@ def get_secret(name: str, default: str = "") -> str:
             for key in candidates:
                 if key in st.secrets:
                     v = _normalize(str(st.secrets[key]))
+                    if v:
+                        return v
+
+            if is_openai_key_lookup:
+                nested_paths = [
+                    ("openai", "api_key"),
+                    ("openai", "OPENAI_API_KEY"),
+                    ("OPENAI", "api_key"),
+                    ("OPENAI", "API_KEY"),
+                    ("providers", "openai", "api_key"),
+                ]
+                for path in nested_paths:
+                    v = _secret_from_mapping(st.secrets, path)
                     if v:
                         return v
     except Exception:
