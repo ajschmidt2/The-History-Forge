@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from src.ui.tabs.video_studio import _render_subtitle_preview
+from src.ui.tabs.video_studio import _default_scene_captions, _render_subtitle_preview
 from src.video.timeline_schema import CaptionStyle
 
 
@@ -33,3 +33,12 @@ def test_render_subtitle_preview_no_burn_keeps_image_visible(tmp_path: Path) -> 
     )
 
     assert output[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_default_scene_captions_fallback_uses_media_scene_number(tmp_path: Path) -> None:
+    media_path = tmp_path / "s10.png"
+    Image.new("RGB", (320, 240), color=(1, 2, 3)).save(media_path)
+
+    captions = _default_scene_captions([media_path], tmp_path / "timeline.json", aspect_ratio="9:16", font_size=48)
+
+    assert captions == ["Scene 10"]
