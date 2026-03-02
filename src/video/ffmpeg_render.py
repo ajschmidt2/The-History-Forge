@@ -4,6 +4,7 @@ import math
 import hashlib
 import importlib
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -11,6 +12,8 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+from src.storage.supabase_assets import stage_timeline_assets
 
 from .audio_mix import build_audio_mix_cmd
 from .captions import write_ass_file, write_srt_file
@@ -514,9 +517,12 @@ def render_video_from_timeline(
     if not timeline.scenes:
         raise ValueError("Timeline has no scenes to render.")
     output_path = ensure_parent_dir(out_mp4_path)
+    staging_root = output_path.with_name(f"{output_path.stem}_staging").resolve()
+    staging_root.mkdir(parents=True, exist_ok=True)
     render_dir = output_path.with_name(f"{output_path.stem}_render_logs").resolve()
     render_dir.mkdir(parents=True, exist_ok=True)
     log_file = Path(log_path).resolve() if log_path else render_dir / "render.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     report_file = Path(report_path).resolve() if report_path else output_path.with_name("render_report.json").resolve()
     project_root = Path.cwd().resolve()
     cache_dir = output_path.with_name("scene_cache")
@@ -526,6 +532,20 @@ def render_video_from_timeline(
     tmp_output_path = output_path.with_name(f"{output_path.stem}_tmp{output_path.suffix}")
     if tmp_output_path.exists():
         tmp_output_path.unlink()
+
+    project_slug = (getattr(timeline.meta, "project_id", "") or "").strip() or Path(timeline_path).resolve().parent.name
+    storage_buckets = {
+        "images": "images",
+        "audio": (None if os.getenv("SUPABASE_AUDIO_SAME_BUCKET", "0") == "1" else os.getenv("SUPABASE_AUDIO_BUCKET", "audio")),
+    }
+    timeline = stage_timeline_assets(
+        timeline,
+        staging_root=staging_root,
+        project_slug=project_slug,
+        bucket_images=storage_buckets["images"],
+        bucket_audio=storage_buckets["audio"],
+    )
+    staged_files = sorted(str(path.resolve()) for path in staging_root.rglob("*") if path.is_file())
 
     try:
         with tempfile.TemporaryDirectory(prefix="history_forge_video_") as tmp_dir:
@@ -724,6 +744,18 @@ def render_video_from_timeline(
                 "log_file": str(log_file),
                 "render_dir": str(render_dir),
                 "report_file": str(report_file),
+                "staging": {
+                    "staging_root": str(staging_root),
+                    "file_count": len(staged_files),
+                    "files": staged_files,
+                    "buckets": storage_buckets,
+                    "mapping_strategy": {
+                        "local_prefix_images": os.getenv("LOCAL_PREFIX_IMAGES", "data/projects/{project}/assets/images/"),
+                        "local_prefix_audio": os.getenv("LOCAL_PREFIX_AUDIO", "data/projects/{project}/assets/audio/"),
+                        "storage_prefix_images": os.getenv("STORAGE_PREFIX_IMAGES", "{project}/"),
+                        "storage_prefix_audio": os.getenv("STORAGE_PREFIX_AUDIO", "{project}/"),
+                    },
+                },
                 "log_tail": _tail_log_lines(log_file, lines=50),
             }
             report_file.parent.mkdir(parents=True, exist_ok=True)
