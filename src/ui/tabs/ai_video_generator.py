@@ -476,6 +476,7 @@ def _render_history() -> None:
         return
 
     project_id = active_project_id()
+    rows: list[dict] = []
     try:
         resp = (
             sb.table("assets")
@@ -483,12 +484,27 @@ def _render_history() -> None:
             .eq("project_id", project_id)
             .eq("asset_type", "generated_video")
             .order("created_at", desc=True)
-            .limit(10)
+            .limit(25)
             .execute()
         )
-        rows = resp.data or []
+        rows.extend(resp.data or [])
     except Exception:
-        return
+        pass
+
+    try:
+        rows.extend(_sb_store.list_generated_videos(project_id, limit=25))
+    except Exception:
+        pass
+
+    deduped: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        key = (str(row.get("filename") or ""), str(row.get("url") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    rows = sorted(deduped, key=lambda item: str(item.get("created_at") or ""), reverse=True)[:25]
 
     if not rows:
         return

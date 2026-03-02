@@ -324,6 +324,32 @@ def upload_audio(project_id: str, filename: str, audio_path: Path) -> Optional[s
     return url
 
 
+
+
+def upload_music(project_id: str, filename: str, music_path: Path) -> Optional[str]:
+    """Upload a project music file and return the public URL."""
+    if not music_path.exists():
+        return None
+    data = music_path.read_bytes()
+    ext = music_path.suffix.lower()
+    content_type = "audio/mpeg" if ext == ".mp3" else "audio/wav"
+    storage_path = f"{project_id}/music/{filename}"
+    url = _upload_bytes("history-forge-audio", storage_path, data, content_type)
+    if url:
+        record_asset(project_id, "music", filename, url)
+    return url
+
+
+def upload_shared_music(filename: str, music_path: Path) -> Optional[str]:
+    """Upload a shared music-library track and return the public URL."""
+    if not music_path.exists():
+        return None
+    data = music_path.read_bytes()
+    ext = music_path.suffix.lower()
+    content_type = "audio/mpeg" if ext == ".mp3" else "audio/wav"
+    storage_path = f"music-library/{filename}"
+    return _upload_bytes("history-forge-audio", storage_path, data, content_type)
+
 def upload_video(project_id: str, filename: str, video_path: Path) -> Optional[str]:
     """Upload a rendered video to ``history-forge-videos`` and return the public URL.
 
@@ -416,11 +442,11 @@ def sync_project_assets(project_id: str, project_dir: Path) -> dict[str, list[st
 
 
 def pull_project_assets(project_id: str, project_dir: Path) -> dict[str, int]:
-    """Download image/audio/video assets for *project_id* from Supabase Storage.
+    """Download project assets from Supabase Storage.
 
     Returns counts of newly downloaded files keyed by asset type.
     """
-    results = {"image": 0, "audio": 0, "video": 0}
+    results = {"image": 0, "audio": 0, "video": 0, "music": 0, "generated_video": 0}
     if not project_id:
         return results
 
@@ -428,6 +454,9 @@ def pull_project_assets(project_id: str, project_dir: Path) -> dict[str, int]:
         ("image", "history-forge-images", f"{project_id}/images", project_dir / "assets" / "images"),
         ("audio", "history-forge-audio", f"{project_id}/audio", project_dir / "assets" / "audio"),
         ("video", "history-forge-videos", f"{project_id}/videos", project_dir / "assets" / "videos"),
+        ("music", "history-forge-audio", f"{project_id}/music", project_dir / "assets" / "music"),
+        ("generated_video", SUPABASE_VIDEO_BUCKET, f"{project_id}/{SUPABASE_VIDEO_BUCKET}", project_dir / "assets" / "videos"),
+        ("generated_video", SUPABASE_VIDEO_BUCKET, f"{project_id}", project_dir / "assets" / "videos"),
     ]
 
     for asset_type, bucket, prefix, local_dir in targets:
@@ -452,4 +481,50 @@ def pull_project_assets(project_id: str, project_dir: Path) -> dict[str, int]:
                 continue
             results[asset_type] += 1
 
+    shared_music_dir = project_dir.parent.parent / "music_library"
+    shared_prefix = "music-library"
+    objects = _list_storage_objects("history-forge-audio", shared_prefix)
+    if objects:
+        shared_music_dir.mkdir(parents=True, exist_ok=True)
+        for obj in objects:
+            name = str(obj.get("name") or "").strip()
+            if not name or "/" in name:
+                continue
+            destination = shared_music_dir / name
+            if destination.exists() and destination.stat().st_size > 0:
+                continue
+            payload = _download_storage_object("history-forge-audio", f"{shared_prefix}/{name}")
+            if not payload:
+                continue
+            try:
+                destination.write_bytes(payload)
+            except OSError:
+                continue
+
     return results
+
+
+def list_generated_videos(project_id: str, limit: int = 25) -> list[dict[str, str]]:
+    """List AI generated videos from the configured generated-videos bucket."""
+    if not project_id:
+        return []
+
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    prefixes = [f"{project_id}/{SUPABASE_VIDEO_BUCKET}", f"{project_id}"]
+    for prefix in prefixes:
+        for obj in _list_storage_objects(SUPABASE_VIDEO_BUCKET, prefix):
+            name = str(obj.get("name") or "").strip()
+            if not name or "/" in name:
+                continue
+            storage_path = f"{prefix}/{name}"
+            if storage_path in seen:
+                continue
+            seen.add(storage_path)
+            url = get_public_storage_url(SUPABASE_VIDEO_BUCKET, storage_path)
+            if not url:
+                continue
+            rows.append({"filename": name, "url": url, "created_at": str(obj.get("created_at") or "")})
+
+    rows.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return rows[: max(1, int(limit or 25))]
