@@ -102,6 +102,7 @@ def _render_scene(
     ffmpeg_commands: list[list[str]],
     command_timeout_sec: float | None,
     workdir: Path | None = None,
+    cwd: Path | None = None,
 ) -> None:
     normalized_duration = _normalize_scene_duration(float(scene.duration), fps, scene.id)
     source_path = Path(scene.image_path)
@@ -144,7 +145,7 @@ def _render_scene(
             str(output_path),
         ])
         ffmpeg_commands.append(cmd)
-        primary_result = run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, check=False, workdir=workdir)
+        primary_result = run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, check=False, workdir=workdir, cwd=cwd)
         if not primary_result["ok"]:
             fallback_cmd = [
                 "ffmpeg",
@@ -173,7 +174,7 @@ def _render_scene(
                 str(output_path),
             ]
             ffmpeg_commands.append(fallback_cmd)
-            run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir)
+            run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
         return
 
     filter_chain = _zoompan_filter(scene, fps, width, height)
@@ -201,7 +202,7 @@ def _render_scene(
         str(output_path),
     ]
     ffmpeg_commands.append(cmd)
-    primary_result = run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, check=False, workdir=workdir)
+    primary_result = run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, check=False, workdir=workdir, cwd=cwd)
     if not primary_result["ok"]:
         # Fallback: simpler scale/crop without zoompan (handles unusual image formats/sizes)
         simple_filter = (
@@ -220,7 +221,7 @@ def _render_scene(
             str(output_path),
         ]
         ffmpeg_commands.append(fallback_cmd)
-        run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir)
+        run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
 
 
 def _concat_scenes(
@@ -230,6 +231,7 @@ def _concat_scenes(
     ffmpeg_commands: list[list[str]],
     command_timeout_sec: float | None,
     workdir: Path | None = None,
+    cwd: Path | None = None,
 ) -> None:
     concat_list = stitched_path.with_suffix(".txt")
     concat_lines = [f"file '{path.as_posix()}'" for path in scene_paths]
@@ -250,7 +252,7 @@ def _concat_scenes(
     ]
     try:
         ffmpeg_commands.append(concat_cmd)
-        run_cmd(concat_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir)
+        run_cmd(concat_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
     except subprocess.CalledProcessError:
         fallback_cmd = [
             "ffmpeg",
@@ -272,7 +274,7 @@ def _concat_scenes(
             str(stitched_path),
         ]
         ffmpeg_commands.append(fallback_cmd)
-        run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir)
+        run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
 
 
 def _crossfade_scenes(
@@ -286,6 +288,7 @@ def _crossfade_scenes(
     transition_types: list[str] | None = None,
     command_timeout_sec: float | None = None,
     workdir: Path | None = None,
+    cwd: Path | None = None,
 ) -> None:
     input_args: list[str] = []
     for path in scene_paths:
@@ -328,7 +331,7 @@ def _crossfade_scenes(
         str(stitched_path),
     ]
     ffmpeg_commands.append(cmd)
-    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir)
+    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
 
 
 def _subtitle_filter(subtitle_path: Path) -> str:
@@ -437,6 +440,7 @@ def _resolve_scene_clip(
     ffmpeg_commands: list[list[str]],
     command_timeout_sec: float | None,
     workdir: Path | None = None,
+    cwd: Path | None = None,
 ) -> bool:
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached_scene = cache_dir / f"{_scene_cache_key(scene, fps, width, height)}.mp4"
@@ -447,7 +451,7 @@ def _resolve_scene_clip(
                 handle.write(f"Using cached scene clip for {scene.id}: {cached_scene}\n")
         return True
 
-    _render_scene(scene, scene_out, fps, width, height, log_path, ffmpeg_commands, command_timeout_sec, workdir=workdir)
+    _render_scene(scene, scene_out, fps, width, height, log_path, ffmpeg_commands, command_timeout_sec, workdir=workdir, cwd=cwd)
     if not scene_out.exists() or scene_out.stat().st_size == 0:
         raise RuntimeError(
             f"Scene render produced no output for scene {scene.id!r}: {scene_out}"
@@ -476,10 +480,11 @@ def render_video_from_timeline(
     if not timeline.scenes:
         raise ValueError("Timeline has no scenes to render.")
     output_path = ensure_parent_dir(out_mp4_path)
-    render_dir = output_path.with_name(f"{output_path.stem}_render_logs")
+    render_dir = output_path.with_name(f"{output_path.stem}_render_logs").resolve()
     render_dir.mkdir(parents=True, exist_ok=True)
-    log_file = Path(log_path) if log_path else render_dir / "render.log"
-    report_file = Path(report_path) if report_path else output_path.with_name("render_report.json")
+    log_file = Path(log_path).resolve() if log_path else render_dir / "render.log"
+    report_file = Path(report_path).resolve() if report_path else output_path.with_name("render_report.json").resolve()
+    project_root = Path.cwd().resolve()
     cache_dir = output_path.with_name("scene_cache")
     ffmpeg_commands: list[list[str]] = []
     render_error: str | None = None
@@ -501,11 +506,13 @@ def render_video_from_timeline(
             scene_paths: list[Path] = []
             durations: list[float] = []
             for scene in timeline.scenes:
-                if not Path(scene.image_path).exists():
+                scene_path = Path(scene.image_path).resolve()
+                if not scene_path.exists():
                     raise FileNotFoundError(f"Scene image not found: {scene.image_path}")
+                scene.image_path = str(scene_path)
                 normalized_duration = _normalize_scene_duration(float(scene.duration), fps, scene.id)
                 scene_out = scenes_dir / f"{scene.id}.mp4"
-                if _resolve_scene_clip(scene, scene_out, fps, width, height, cache_dir, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir):
+                if _resolve_scene_clip(scene, scene_out, fps, width, height, cache_dir, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root):
                     cache_hits += 1
                 scene_paths.append(scene_out)
                 durations.append(normalized_duration)
@@ -526,6 +533,7 @@ def render_video_from_timeline(
                             transition_types=getattr(timeline.meta, "transition_types", []),
                             command_timeout_sec=command_timeout_sec,
                             workdir=render_dir,
+                            cwd=project_root,
                         )
                     else:
                         if log_file:
@@ -533,17 +541,17 @@ def render_video_from_timeline(
                                 handle.write(
                                     "Crossfade disabled because crossfade_duration is too large for one or more scene durations.\n"
                                 )
-                        _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir)
+                        _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
                 except (RuntimeError, subprocess.CalledProcessError):
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
                             handle.write("Crossfade graph failed; falling back to concat.\n")
-                    _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir)
+                    _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
             else:
                 if safe_mode and timeline.meta.crossfade and len(scene_paths) > 1 and log_file:
                     with log_file.open("a", encoding="utf-8") as handle:
                         handle.write("Safe mode enabled: skipping crossfade and using concat.\n")
-                _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir)
+                _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
 
             srt_path = output_path.with_name("captions.srt")
             ass_path = output_path.with_name("captions.ass")
@@ -553,15 +561,15 @@ def render_video_from_timeline(
             if timeline.meta.include_voiceover:
                 if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
                     raise FileNotFoundError("Voiceover is enabled but no voiceover path was provided.")
-                if not Path(timeline.meta.voiceover.path).exists():
+                voiceover_path = Path(timeline.meta.voiceover.path).resolve()
+                if not voiceover_path.exists():
                     raise FileNotFoundError(f"Voiceover audio not found: {timeline.meta.voiceover.path}")
-            if (
-                timeline.meta.include_music
-                and timeline.meta.music
-                and timeline.meta.music.path
-                and not Path(timeline.meta.music.path).exists()
-            ):
-                raise FileNotFoundError(f"Music file not found: {timeline.meta.music.path}")
+                timeline.meta.voiceover.path = str(voiceover_path)
+            if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
+                music_path = Path(timeline.meta.music.path).resolve()
+                if not music_path.exists():
+                    raise FileNotFoundError(f"Music file not found: {timeline.meta.music.path}")
+                timeline.meta.music.path = str(music_path)
 
             voiceover_duration: float | None = None
             if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
@@ -590,11 +598,11 @@ def render_video_from_timeline(
 
                 mix_cmd = _build_mix_audio_cmd(simplify_mix=False)
                 ffmpeg_commands.append(mix_cmd)
-                mix_result = run_cmd(mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec, check=False, workdir=render_dir)
+                mix_result = run_cmd(mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec, check=False, workdir=render_dir, cwd=project_root)
                 if not mix_result["ok"]:
                     retry_mix_cmd = _build_mix_audio_cmd(simplify_mix=True)
                     ffmpeg_commands.append(retry_mix_cmd)
-                    run_cmd(retry_mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir)
+                    run_cmd(retry_mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir, cwd=project_root)
 
                 mux_cmd = ["ffmpeg", "-y", "-i", str(stitched_path), "-i", str(mixed_audio_path)]
                 stitched_duration = get_media_duration(stitched_path)
@@ -630,14 +638,14 @@ def render_video_from_timeline(
                     mux_cmd.extend(["-shortest"])
                 mux_cmd.append(str(tmp_output_path))
                 ffmpeg_commands.append(mux_cmd)
-                run_cmd(mux_cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir)
+                run_cmd(mux_cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir, cwd=project_root)
             else:
                 cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
                 if timeline.meta.burn_captions and ass_path.exists():
                     cmd.extend(["-vf", _subtitle_filter(ass_path)])
                 cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-movflags", "+faststart", str(tmp_output_path)])
                 ffmpeg_commands.append(cmd)
-                run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir)
+                run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir, cwd=project_root)
 
         if tmp_output_path.exists():
             tmp_output_path.replace(output_path)
@@ -677,6 +685,9 @@ def render_video_from_timeline(
                 },
                 "ffmpeg_commands": [" ".join(cmd) for cmd in ffmpeg_commands],
                 "tmp_output_path": str(tmp_output_path),
+                "log_file": str(log_file),
+                "render_dir": str(render_dir),
+                "report_file": str(report_file),
                 "log_tail": _tail_log_lines(log_file, lines=50),
             }
             report_file.parent.mkdir(parents=True, exist_ok=True)
