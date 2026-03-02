@@ -49,6 +49,23 @@ def _persist_scene_video_url(project_path: Path, scene_index: int, video_url: st
         return None
     return destination
 
+
+def _resolve_scene_video_path(project_path: Path, raw_path: str) -> Path | None:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+
+    candidate = Path(text).expanduser()
+    possible_paths: list[Path] = [candidate]
+    if not candidate.is_absolute():
+        possible_paths.append(project_path / candidate)
+        possible_paths.append(project_path / "assets/videos" / candidate.name)
+
+    for option in possible_paths:
+        if option.exists() and option.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
+            return option.resolve()
+    return None
+
 def _media_files_from_session_scenes(project_path: Path, session_scenes: list[Any]) -> list[Path]:
     images_dir = project_path / "assets/images"
     image_candidates = {p.stem.lower(): p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}}
@@ -58,11 +75,11 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
         if not isinstance(idx, int) or idx <= 0:
             continue
         video_path = str(getattr(scene, "video_path", "") or "").strip()
-        if video_path:
-            candidate = Path(video_path)
-            if candidate.exists() and candidate.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
-                media_files.append(candidate)
-                continue
+        resolved_video_path = _resolve_scene_video_path(project_path, video_path)
+        if resolved_video_path is not None:
+            scene.video_path = str(resolved_video_path)
+            media_files.append(resolved_video_path)
+            continue
 
         video_url = str(getattr(scene, "video_url", "") or "").strip()
         if video_url:
