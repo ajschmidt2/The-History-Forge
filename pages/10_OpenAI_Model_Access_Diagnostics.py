@@ -6,7 +6,7 @@ is accessible for your API key/project, and to suggest a safe fallback.
 
 import streamlit as st
 
-from src.config import get_secret
+from src.config import get_secret, resolve_openai_key
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL
 
 PREFERRED_FALLBACK_MODELS = [
@@ -48,7 +48,7 @@ def _pick_fallback_model(configured_model: str, model_ids: list[str]) -> str:
 def run_diagnostics() -> None:
     results: list[tuple[str, bool, str]] = []
 
-    api_key = get_secret("OPENAI_API_KEY", get_secret("openai_api_key", "")).strip()
+    api_key = resolve_openai_key()
     configured_model = get_secret("openai_model", DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
 
     if not api_key:
@@ -171,7 +171,7 @@ def run_diagnostics() -> None:
         st.divider()
         st.subheader("Suggested fix")
         st.code(
-            f'[default]\nopenai_api_key = "sk-..."\nopenai_model = "{suggested_model}"\n',
+            f'[default]\nOPENAI_API_KEY = "sk-..."\nopenai_api_key = "sk-..."\nopenai_model = "{suggested_model}"\n',
             language="toml",
         )
         st.markdown(

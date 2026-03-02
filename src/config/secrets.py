@@ -108,6 +108,28 @@ def _aliases(name: str) -> list[str]:
     return ordered
 
 
+
+
+def resolve_openai_key() -> str:
+    # check Streamlit secrets first
+    try:
+        import streamlit as st
+        for k in ("OPENAI_API_KEY", "openai_api_key"):
+            v = st.secrets.get(k, None)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+    except Exception:
+        pass
+
+    # then env vars
+    import os
+    for k in ("OPENAI_API_KEY", "openai_api_key"):
+        v = os.getenv(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+
+    return ""
+
 def get_secret(name: str, default: str = "", required: bool = False) -> str:
     """
     Safe secret getter.

@@ -7,7 +7,7 @@ import traceback
 
 import streamlit as st
 
-from src.config import get_secret, streamlit_secrets_detected
+from src.config import get_secret, resolve_openai_key, streamlit_secrets_detected
 
 st.set_page_config(page_title="API Key Diagnostics", page_icon="🔑")
 st.title("🔑 OpenAI API Key Diagnostics")
@@ -32,10 +32,20 @@ def run_diagnostics() -> None:
         )
     )
 
+    # Temporary safe debug visibility for secrets wiring (no full key output)
+    st.write("Has OPENAI_API_KEY in st.secrets:", "OPENAI_API_KEY" in st.secrets)
+    st.write("Has openai_api_key in st.secrets:", "openai_api_key" in st.secrets)
+
+    val = st.secrets.get("OPENAI_API_KEY", "") or st.secrets.get("openai_api_key", "")
+    val = str(val)
+    st.write("Key length:", len(val.strip()))
+    if val.strip():
+        st.write("Key preview:", val.strip()[:6] + "..." + val.strip()[-4:])
+
     # ------------------------------------------------------------------
     # 2. openai_api_key in Streamlit secrets (exact key name)
     # ------------------------------------------------------------------
-    raw_secret_value = get_secret("openai_api_key", "")
+    raw_secret_value = resolve_openai_key()
     key_in_secrets = bool(raw_secret_value and secrets_available)
     results.append(
         (
@@ -85,7 +95,7 @@ def run_diagnostics() -> None:
     # ------------------------------------------------------------------
     resolved_key = ""
     try:
-        resolved_key = get_secret("openai_api_key", "").strip()
+        resolved_key = resolve_openai_key()
         if resolved_key:
             results.append(
                 (
@@ -238,15 +248,16 @@ def run_diagnostics() -> None:
         st.divider()
         st.subheader("How to fix")
         st.code(
-            '[default]\nopenai_api_key = "sk-..."   # ← paste your real key here\n'
+            '[default]\nOPENAI_API_KEY = "sk-..."\nopenai_api_key = "sk-..."\n'
             'GEMINI_API_KEY = "AIza..."\nelevenlabs_api_key = ""\n',
             language="toml",
         )
         st.markdown(
             "1. Open `.streamlit/secrets.toml` in your project root.  \n"
-            "2. Set `openai_api_key` to your real key (from **platform.openai.com/api-keys**).  \n"
+            "2. Set both `OPENAI_API_KEY` and `openai_api_key` to your real key (from **platform.openai.com/api-keys**).  \n"
             "3. Save the file and **restart** the Streamlit app.  \n"
-            "4. Re-run this diagnostic page to confirm."
+            "4. If you also use a `[openai]` section, keep it, but ensure the top-level keys above exist.  \n"
+            "5. Re-run this diagnostic page to confirm."
         )
 
 
