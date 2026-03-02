@@ -15,8 +15,8 @@ st.caption("Use this page to confirm that the app is connected to Supabase and c
 # ---------------------------------------------------------------------------
 st.subheader("1. Credentials")
 
-url = get_secret("SUPABASE_URL").strip()
-key = get_secret("SUPABASE_KEY").strip()
+url = get_secret("SUPABASE_URL", "").strip()
+key = get_secret("SUPABASE_KEY", "").strip()
 
 placeholder_urls = {"", "https://xxxxxxxxxxxx.supabase.co"}
 placeholder_keys = {"", "your-anon-public-key", "your-anon-key-here"}

@@ -6,6 +6,8 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+import streamlit as st
+
 _ALIAS_MAP: dict[str, list[str]] = {
     "SUPABASE_URL": ["SUPABASE_URL", "supabase_url", "SUPABASE__URL"],
     "SUPABASE_ANON_KEY": ["SUPABASE_ANON_KEY", "SUPABASE_KEY", "supabase_anon_key", "supabase_key"],
@@ -106,30 +108,61 @@ def _aliases(name: str) -> list[str]:
     return ordered
 
 
-def get_secret(name: str, default: str | None = None, required: bool = False) -> str | None:
-    aliases = _aliases(name)
 
-    for key in aliases:
-        value = _read_streamlit_secret(key)
-        if value:
-            return value
 
-    for key in aliases:
-        value = _read_env(key)
-        if value:
-            return value
+def resolve_openai_key() -> str:
+    # check Streamlit secrets first
+    try:
+        import streamlit as st
+        for k in ("OPENAI_API_KEY", "openai_api_key"):
+            v = st.secrets.get(k, None)
+            if v is not None and str(v).strip():
+                return str(v).strip()
+    except Exception:
+        pass
 
-    fallback = _normalize(default)
-    if fallback:
-        return fallback
+    # then env vars
+    import os
+    for k in ("OPENAI_API_KEY", "openai_api_key"):
+        v = os.getenv(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+
+    return ""
+
+def get_secret(name: str, default: str = "", required: bool = False) -> str:
+    """
+    Safe secret getter.
+    Always returns a string (never None) so calling code can safely do .strip().
+    Looks in:
+      1) st.secrets
+      2) environment variables (common variants)
+      3) default
+    """
+    # Try Streamlit secrets
+    try:
+        val = st.secrets.get(name)
+        if val is not None:
+            return str(val)
+    except Exception:
+        pass
+
+    # Try env var exact
+    val = os.getenv(name)
+    if val is not None:
+        return str(val)
+
+    # Try common variants (lowercase)
+    val = os.getenv(name.lower())
+    if val is not None:
+        return str(val)
 
     if required:
-        keys = ", ".join(aliases)
         raise RuntimeError(
-            f"Missing required secret '{name}'. Expected one of: {keys}. "
-            "Set it in Streamlit secrets (flat or nested TOML) or environment variables."
+            f"Missing required secret '{name}'. Set it in Streamlit secrets or environment variables."
         )
-    return None
+
+    return str(default or "")
 
 
 def require_secrets(names: list[str]) -> dict[str, str]:

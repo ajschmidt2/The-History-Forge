@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable
 
+from src.config import resolve_openai_key
+
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 
 OPENAI_MODEL_OPTIONS = [
@@ -32,7 +34,7 @@ def resolve_openai_config(get_secret: Callable[[str, str], str] | None = None) -
 
     reader = get_secret or (lambda name, default="": default)
 
-    api_key = reader("openai_api_key", "").strip()
+    api_key = resolve_openai_key() if get_secret is None else reader("openai_api_key", "").strip()
     model = reader("openai_model", DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
 
     if not api_key:

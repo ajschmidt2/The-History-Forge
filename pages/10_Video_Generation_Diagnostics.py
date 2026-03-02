@@ -14,7 +14,7 @@ import traceback
 import requests
 import streamlit as st
 
-from src.config import get_secret
+from src.config import get_secret, resolve_openai_key
 from src.constants import SUPABASE_VIDEO_BUCKET
 
 st.set_page_config(page_title="Video Generation Diagnostics", page_icon="🎬")
@@ -450,9 +450,7 @@ if st.button("Run Sora Diagnostics", type="primary", key="sora_run"):
             # ------------------------------------------------------------------
             # 1. openai_api_key is set
             # ------------------------------------------------------------------
-            resolved_key = get_secret("openai_api_key", "").strip()
-            env_key = get_secret("OPENAI_API_KEY", "").strip()
-            final_key = resolved_key or env_key
+            final_key = resolve_openai_key()
 
             _result_row(
                 sora_results,
@@ -462,8 +460,7 @@ if st.button("Run Sora Diagnostics", type="primary", key="sora_run"):
                     f"Key resolved — `{final_key[:7]}…` ({len(final_key)} chars)"
                     if final_key
                     else (
-                        "No key found. Checked: central loader `get_secret('openai_api_key')`, "
-                        "`get_secret('openai_api_key')`, env vars `openai_api_key` / `OPENAI_API_KEY`.\n\n"
+                        "No key found. Checked: `resolve_openai_key()` via Streamlit secrets (`OPENAI_API_KEY` / `openai_api_key`) and env vars with the same names.\n\n"
                         "**Fix:** Add to `.streamlit/secrets.toml`:\n"
                         "```toml\nopenai_api_key = \"sk-...\"\n```"
                     )
