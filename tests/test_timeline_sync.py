@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from src.ui.timeline_sync import (
@@ -5,6 +6,7 @@ from src.ui.timeline_sync import (
     _has_custom_transition,
     _media_files_from_session_scenes,
     _resolve_scene_video_path,
+    _scene_number_from_path,
 )
 from src.video.timeline_schema import Meta, Scene, Timeline
 
@@ -90,3 +92,7 @@ def test_media_files_from_session_scenes_prefers_video_clip_over_image(tmp_path)
     media_files = _media_files_from_session_scenes(project_path, [scene])
 
     assert media_files == [video.resolve()]
+
+
+def test_scene_number_from_path_ignores_timestamp_suffix() -> None:
+    assert _scene_number_from_path(Path("s03_1736628831.mp4")) == 3

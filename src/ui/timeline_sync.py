@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 from typing import Any
 from urllib.request import urlopen
 import time
@@ -19,11 +20,12 @@ def _scene_index_from_stem(stem: str, fallback: int) -> int:
 
 
 def _scene_number_from_path(path: Path) -> int | None:
-    stem = path.stem.lower()
-    if stem.startswith("s"):
-        digits = "".join(ch for ch in stem[1:] if ch.isdigit())
-        if digits:
-            return int(digits)
+    match = re.match(r"^s(\d+)", path.stem.lower())
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
     return None
 
 
