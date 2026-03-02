@@ -264,17 +264,46 @@ def run_diagnostics() -> None:
     if not all_passed:
         st.divider()
         st.subheader("How to fix")
-        st.code(
-            '[default]\nopenai_api_key = "sk-..."   # ← paste your real key here\n'
-            'GEMINI_API_KEY = "AIza..."\nelevenlabs_api_key = ""\n',
-            language="toml",
-        )
-        st.markdown(
-            "1. Open `.streamlit/secrets.toml` in your project root.  \n"
-            "2. Set `openai_api_key` to your real key (from **platform.openai.com/api-keys**).  \n"
-            "3. Save the file and **restart** the Streamlit app.  \n"
-            "4. Re-run this diagnostic page to confirm."
-        )
+
+        cloud_tab, local_tab = st.tabs(["Streamlit Community Cloud", "Local / self-hosted"])
+
+        with cloud_tab:
+            st.markdown(
+                "The API key must be set in the **Streamlit Community Cloud dashboard** — "
+                "the committed `.streamlit/secrets.toml` file is **not** read by Cloud "
+                "deployments.\n\n"
+                "**Steps:**\n"
+                "1. Go to [share.streamlit.io](https://share.streamlit.io) and open your app.\n"
+                "2. Click **⋮ → Settings → Secrets**.\n"
+                "3. Add or update the following (replace the placeholder with your real key):\n"
+            )
+            st.code(
+                'openai_api_key = "sk-..."   # ← paste your real OpenAI key here\n',
+                language="toml",
+            )
+            st.markdown(
+                "4. Click **Save** — Streamlit will restart the app automatically.\n"
+                "5. Re-run this diagnostic page to confirm.\n\n"
+                "> **Tip:** get your key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)."
+            )
+
+        with local_tab:
+            st.markdown(
+                "Edit `.streamlit/secrets.toml` in your project root "
+                "(create it if it does not exist):\n"
+            )
+            st.code(
+                'openai_api_key = "sk-..."   # ← paste your real key here\n'
+                'GEMINI_API_KEY = "AIza..."\n'
+                'elevenlabs_api_key = ""\n',
+                language="toml",
+            )
+            st.markdown(
+                "1. Replace `sk-...` with your real key (from **platform.openai.com/api-keys**).\n"
+                "2. Save the file and **restart** the Streamlit app (`Ctrl-C` then `streamlit run app.py`).\n"
+                "3. Re-run this diagnostic page to confirm.\n\n"
+                "> **Note:** `.streamlit/secrets.toml` is in `.gitignore` — never commit real keys."
+            )
 
 
 if st.button("Run Diagnostics", type="primary"):

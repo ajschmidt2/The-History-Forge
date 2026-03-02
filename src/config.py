@@ -14,7 +14,9 @@ def _normalize(value: str) -> str:
     v = str(value or "").strip()
     if len(v) >= 2 and v[0] == v[-1] and v[0] in {'"', "'"}:
         v = v[1:-1].strip()
-    if v.lower() in {"paste_key_here", "your_api_key_here", "replace_me", "none", "null", ""}:
+    if v.lower() in {"paste_key_here", "your_api_key_here", "replace_me", "none", "null", "", "sk-...", "your-api-key"}:
+        return ""
+    if v.lower().startswith("paste") or v.lower().startswith("your_"):
         return ""
     return v
 
