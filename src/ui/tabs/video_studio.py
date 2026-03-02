@@ -41,6 +41,7 @@ def _save_music_file(destination_dir: Path, filename: str, music_bytes: bytes) -
 def _copy_track_to_project(track_path: Path, project_music_dir: Path, project_id: str) -> Path:
     destination = _save_music_file(project_music_dir, track_path.name, track_path.read_bytes())
     record_asset(project_id, "music", destination)
+    _sb_store.upload_music(project_id, destination.name, destination)
     return destination
 
 def _tail_file(path: Path, lines: int = 200) -> str:
@@ -324,7 +325,9 @@ def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: P
             if fallback and fallback.exists():
                 selected.append(fallback)
         if selected:
-            return sorted(selected, key=_media_sort_key)
+            # Keep media in explicit scene order so subtitle previews and scene
+            # timing always match what the Scene Editor shows.
+            return selected
     images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
     videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}])
     return sorted(images + videos, key=_media_sort_key)
@@ -548,14 +551,20 @@ def tab_video_compile() -> None:
     music_dir = project_path / "assets/music"
     renders_dir = project_path / "renders"
 
-    fetched_from_cloud = {"image": 0, "audio": 0, "video": 0}
+    fetched_from_cloud = {"image": 0, "audio": 0, "video": 0, "music": 0, "generated_video": 0}
     if _sb_store.is_configured():
         fetched_from_cloud = _sb_store.pull_project_assets(project_name, project_path)
         fetched_total = sum(fetched_from_cloud.values())
         if fetched_total > 0:
             st.success(
                 "Loaded assets from Supabase "
-                f"(images: {fetched_from_cloud['image']}, audio: {fetched_from_cloud['audio']}, videos: {fetched_from_cloud['video']})."
+                "(images: {images}, audio: {audio}, videos: {videos}, music: {music}, generated videos: {generated}).".format(
+                    images=fetched_from_cloud["image"],
+                    audio=fetched_from_cloud["audio"],
+                    videos=fetched_from_cloud["video"],
+                    music=fetched_from_cloud["music"],
+                    generated=fetched_from_cloud["generated_video"],
+                )
             )
 
     images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
@@ -583,7 +592,13 @@ def tab_video_compile() -> None:
         fetched = _sb_store.pull_project_assets(project_name, project_path)
         st.success(
             "Synced from Supabase "
-            f"(images: {fetched['image']}, audio: {fetched['audio']}, videos: {fetched['video']})."
+            "(images: {images}, audio: {audio}, videos: {videos}, music: {music}, generated videos: {generated}).".format(
+                images=fetched["image"],
+                audio=fetched["audio"],
+                videos=fetched["video"],
+                music=fetched["music"],
+                generated=fetched["generated_video"],
+            )
         )
         st.rerun()
 
@@ -694,6 +709,8 @@ def tab_video_compile() -> None:
                 lib_destination = _save_music_file(MUSIC_LIBRARY_ROOT, uploaded_music.name, uploaded_bytes)
                 project_destination = _save_music_file(music_dir, uploaded_music.name, uploaded_bytes)
                 record_asset(project_name, "music", project_destination)
+                _sb_store.upload_music(project_name, project_destination.name, project_destination)
+                _sb_store.upload_shared_music(lib_destination.name, lib_destination)
                 st.session_state.video_music_upload_signature = music_signature
                 st.success(
                     f"Saved {project_destination.name} to this project and your shared library ({lib_destination})."
@@ -723,6 +740,8 @@ def tab_video_compile() -> None:
                         lib_destination = _save_music_file(MUSIC_LIBRARY_ROOT, filename, music_bytes)
                         project_destination = _save_music_file(music_dir, filename, music_bytes)
                         record_asset(project_name, "music", project_destination)
+                        _sb_store.upload_music(project_name, project_destination.name, project_destination)
+                        _sb_store.upload_shared_music(lib_destination.name, lib_destination)
                         st.success(
                             f"Downloaded {project_destination.name} to this project and shared library ({lib_destination})."
                         )
