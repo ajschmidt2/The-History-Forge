@@ -284,6 +284,23 @@ def _media_sort_key(path: Path) -> tuple[int, int, str]:
     return (1, 10**9, path.name.lower())
 
 
+def _resolve_scene_video_path(project_path: Path, raw_path: str) -> Path | None:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+
+    candidate = Path(text).expanduser()
+    possible_paths: list[Path] = [candidate]
+    if not candidate.is_absolute():
+        possible_paths.append(project_path / candidate)
+        possible_paths.append(project_path / "assets/videos" / candidate.name)
+
+    for option in possible_paths:
+        if option.exists() and option.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
+            return option.resolve()
+    return None
+
+
 def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: Path) -> list[Path]:
     scenes = st.session_state.get("scenes", [])
     if scenes:
@@ -298,11 +315,11 @@ def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: P
             if not isinstance(idx, int) or idx <= 0:
                 continue
             video_path = str(getattr(scene, "video_path", "") or "")
-            if video_path:
-                candidate = Path(video_path)
-                if candidate.exists() and candidate.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
-                    selected.append(candidate)
-                    continue
+            resolved_video = _resolve_scene_video_path(project_path, video_path)
+            if resolved_video is not None:
+                scene.video_path = str(resolved_video)
+                selected.append(resolved_video)
+                continue
             fallback = images_by_index.get(idx)
             if fallback and fallback.exists():
                 selected.append(fallback)

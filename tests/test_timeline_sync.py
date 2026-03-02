@@ -1,6 +1,11 @@
 from types import SimpleNamespace
 
-from src.ui.timeline_sync import _apply_manual_scene_durations, _has_custom_transition
+from src.ui.timeline_sync import (
+    _apply_manual_scene_durations,
+    _has_custom_transition,
+    _media_files_from_session_scenes,
+    _resolve_scene_video_path,
+)
 from src.video.timeline_schema import Meta, Scene, Timeline
 
 
@@ -58,3 +63,30 @@ def test_has_custom_transition_detects_non_fade_values() -> None:
     assert _has_custom_transition(["fade", "wipeleft"]) is True
     assert _has_custom_transition(["fade", "fade"]) is False
     assert _has_custom_transition([]) is False
+
+
+def test_resolve_scene_video_path_supports_relative_assets_path(tmp_path) -> None:
+    project_path = tmp_path / "project"
+    video_path = project_path / "assets" / "videos" / "s01.mp4"
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path.write_bytes(b"video")
+
+    resolved = _resolve_scene_video_path(project_path, "assets/videos/s01.mp4")
+
+    assert resolved == video_path.resolve()
+
+
+def test_media_files_from_session_scenes_prefers_video_clip_over_image(tmp_path) -> None:
+    project_path = tmp_path / "project"
+    images_dir = project_path / "assets" / "images"
+    videos_dir = project_path / "assets" / "videos"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    (images_dir / "s01.png").write_bytes(b"image")
+    video = videos_dir / "s01.mp4"
+    video.write_bytes(b"video")
+
+    scene = SimpleNamespace(index=1, video_path="assets/videos/s01.mp4", video_url=None)
+    media_files = _media_files_from_session_scenes(project_path, [scene])
+
+    assert media_files == [video.resolve()]
