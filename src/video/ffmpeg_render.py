@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import hashlib
+import importlib
 import json
 import platform
 import shutil
@@ -409,6 +410,39 @@ def _scene_media_info(timeline: Timeline) -> list[dict]:
     return result
 
 
+def _try_pull_project_assets_for_scene(scene_path: Path, project_root: Path, log_path: Path | None = None) -> bool:
+    """Attempt to hydrate missing scene media from Supabase storage."""
+    normalized_parts = scene_path.as_posix().split("/")
+    try:
+        data_idx = normalized_parts.index("data")
+    except ValueError:
+        return False
+    if data_idx + 3 >= len(normalized_parts) or normalized_parts[data_idx + 1] != "projects":
+        return False
+
+    project_id = normalized_parts[data_idx + 2]
+    if not project_id:
+        return False
+
+    project_dir = (project_root / "data" / "projects" / project_id).resolve()
+    try:
+        _sb_store = importlib.import_module("src.supabase_storage")
+    except Exception:
+        return False
+    if not _sb_store.is_configured():
+        return False
+
+    fetched = _sb_store.pull_project_assets(project_id, project_dir)
+    fetched_total = int(sum(fetched.values()))
+    if log_path:
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                "Missing scene media detected; attempted Supabase sync for "
+                f"project '{project_id}' and downloaded {fetched_total} file(s).\n"
+            )
+    return fetched_total > 0 and scene_path.exists()
+
+
 
 def _scene_cache_key(scene, fps: int, width: int, height: int) -> str:
     source_path = Path(scene.image_path)
@@ -507,6 +541,8 @@ def render_video_from_timeline(
             durations: list[float] = []
             for scene in timeline.scenes:
                 scene_path = Path(scene.image_path).resolve()
+                if not scene_path.exists():
+                    _try_pull_project_assets_for_scene(scene_path, project_root, log_path=log_file)
                 if not scene_path.exists():
                     raise FileNotFoundError(f"Scene image not found: {scene.image_path}")
                 scene.image_path = str(scene_path)

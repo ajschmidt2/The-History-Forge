@@ -113,3 +113,45 @@ def test_scene_media_info_reports_existing_file(tmp_path) -> None:
     assert info[0]["exists"] is True
     assert info[0]["size_bytes"] == 103
     assert info[0]["scene_id"] == "scene_0"
+
+
+# ---------------------------------------------------------------------------
+# _try_pull_project_assets_for_scene
+# ---------------------------------------------------------------------------
+
+def test_try_pull_project_assets_for_scene_ignores_non_project_paths(tmp_path) -> None:
+    from src.video import ffmpeg_render
+
+    scene_path = tmp_path / "assets" / "images" / "s01.png"
+    assert ffmpeg_render._try_pull_project_assets_for_scene(scene_path, tmp_path) is False
+
+
+def test_try_pull_project_assets_for_scene_downloads_missing_asset(monkeypatch, tmp_path) -> None:
+    from src.video import ffmpeg_render
+
+    project_root = tmp_path / "repo"
+    project_root.mkdir(parents=True, exist_ok=True)
+    scene_path = project_root / "data" / "projects" / "proj-1" / "assets" / "images" / "s01.png"
+
+    class _FakeSBStore:
+        @staticmethod
+        def is_configured() -> bool:
+            return True
+
+        @staticmethod
+        def pull_project_assets(project_id: str, project_dir):
+            assert project_id == "proj-1"
+            assert project_dir == (project_root / "data" / "projects" / "proj-1").resolve()
+            scene_path.parent.mkdir(parents=True, exist_ok=True)
+            scene_path.write_bytes(b"img")
+            return {"image": 1, "audio": 0, "video": 0}
+
+    import types
+
+    module = types.SimpleNamespace(
+        is_configured=_FakeSBStore.is_configured,
+        pull_project_assets=_FakeSBStore.pull_project_assets,
+    )
+    monkeypatch.setattr(ffmpeg_render.importlib, "import_module", lambda name: module)
+
+    assert ffmpeg_render._try_pull_project_assets_for_scene(scene_path, project_root) is True
