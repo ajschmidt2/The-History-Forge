@@ -71,7 +71,10 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
     images_dir = project_path / "assets/images"
     image_candidates = {p.stem.lower(): p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}}
     media_files: list[Path] = []
-    for scene in session_scenes:
+    ordered_scenes = [scene for scene in session_scenes if isinstance(getattr(scene, "index", None), int) and int(getattr(scene, "index", 0)) > 0]
+    ordered_scenes.sort(key=lambda item: int(getattr(item, "index", 0)))
+
+    for scene in ordered_scenes:
         idx = getattr(scene, "index", None)
         if not isinstance(idx, int) or idx <= 0:
             continue
@@ -103,22 +106,35 @@ def _apply_scene_media_assignments(timeline: Timeline, session_scenes: list[Any]
     ordered_session_scenes = [scene for scene in session_scenes if isinstance(getattr(scene, "index", None), int) and int(getattr(scene, "index", 0)) > 0]
     ordered_session_scenes.sort(key=lambda item: int(getattr(item, "index", 0)))
 
-    for timeline_scene, scene in zip(timeline.scenes, ordered_session_scenes):
-        if getattr(scene, "video_path", None) and Path(scene.video_path).exists():
-            media_path = str(Path(scene.video_path).resolve())
-        elif getattr(scene, "video_url", None) and str(getattr(scene, "video_url", "")).startswith(("http://", "https://")):
-            media_path = str(scene.video_url)
-        elif getattr(scene, "video_object_path", None):
-            media_path = f"storage://generated-videos/{scene.video_object_path}"
-        else:
-            media_path = str(project_path / "assets/images" / f"s{scene.index:02d}.png")
+    for session_scene in ordered_session_scenes:
+        idx = int(session_scene.index)
+        target_pos = idx - 1
+        if target_pos < 0 or target_pos >= len(timeline.scenes):
+            continue
 
+        timeline_scene = timeline.scenes[target_pos]
+        scene_id = f"s{idx:02d}"
+
+        if getattr(session_scene, "video_path", None) and Path(session_scene.video_path).exists():
+            media_path = str(Path(session_scene.video_path).resolve())
+        elif getattr(session_scene, "video_object_path", None):
+            media_path = f"storage://generated-videos/{session_scene.video_object_path}"
+        elif getattr(session_scene, "video_url", None) and str(getattr(session_scene, "video_url", "")).startswith(("http://", "https://")):
+            media_path = str(session_scene.video_url)
+        else:
+            media_path = str(project_path / "assets/images" / f"{scene_id}.png")
+
+        timeline_scene.id = scene_id
         timeline_scene.image_path = media_path
-        timeline_scene.id = f"s{scene.index:02d}"
-        timeline_scene.duration = float(getattr(scene, "estimated_duration_sec", timeline_scene.duration) or timeline_scene.duration)
-        timeline_scene.video_loop = bool(getattr(scene, "video_loop", False))
-        timeline_scene.video_muted = bool(getattr(scene, "video_muted", True))
-        timeline_scene.video_volume = float(getattr(scene, "video_volume", 0.0) or 0.0)
+        timeline_scene.duration = float(getattr(session_scene, "estimated_duration_sec", timeline_scene.duration) or 3.0)
+        timeline_scene.video_loop = bool(getattr(session_scene, "video_loop", False))
+        timeline_scene.video_muted = bool(getattr(session_scene, "video_muted", True))
+        timeline_scene.video_volume = float(getattr(session_scene, "video_volume", 0.0) or 0.0)
+
+        if not str(timeline_scene.image_path).startswith("storage://"):
+            assert Path(timeline_scene.image_path).name.lower().startswith(scene_id.lower()), (
+                f"Scene {scene_id} mapped to wrong file {timeline_scene.image_path}"
+            )
 
 def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: int) -> list[str]:
     captions = [str(caption or "") for caption in (scene_captions or [])[:expected_count]]

@@ -518,6 +518,14 @@ def render_video_from_timeline(
             scene.motion = None
     if not timeline.scenes:
         raise ValueError("Timeline has no scenes to render.")
+    for scene in timeline.scenes:
+        source_path = str(scene.image_path or "")
+        if source_path.startswith("storage://"):
+            continue
+        name = Path(source_path).name.lower()
+        if not name.startswith(str(scene.id or "").lower()):
+            raise RuntimeError(f"Scene mapping mismatch: {scene.id} -> {scene.image_path}")
+
     output_path = ensure_parent_dir(out_mp4_path)
     staging_root = output_path.with_name(f"{output_path.stem}_staging").resolve()
     staging_root.mkdir(parents=True, exist_ok=True)
