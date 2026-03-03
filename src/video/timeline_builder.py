@@ -94,7 +94,7 @@ def build_default_timeline(
     narration_max_sec: float = 12.0,
     scene_video_options: dict[int, dict[str, float | bool]] | None = None,
 ) -> Timeline:
-    image_list = sorted(list(images), key=_image_sort_key)
+    image_list = list(images)
     if not image_list:
         raise ValueError("No scene images available to build a timeline.")
 

@@ -129,7 +129,10 @@ def _validate_render_preflight(
 
     expected_paths = {str(path) for path in media_files}
     timeline_paths = [scene.image_path for scene in timeline.scenes]
-    if len(timeline_paths) != len(media_files) or any(path not in expected_paths for path in timeline_paths):
+    if len(timeline_paths) != len(media_files) or any(
+        path not in expected_paths and not path.startswith("storage://")
+        for path in timeline_paths
+    ):
         st.error("timeline.json is out of sync with project media. Click Generate timeline.json to resync.")
         return False
 
@@ -320,6 +323,13 @@ def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: P
             if resolved_video is not None:
                 scene.video_path = str(resolved_video)
                 selected.append(resolved_video)
+                continue
+            # For cloud-only video clips (video_object_path set, no local file yet),
+            # append a canonical image placeholder so the scene count stays correct.
+            # _apply_scene_media_assignments will later replace this with storage://.
+            video_object_path = str(getattr(scene, "video_object_path", "") or "")
+            if video_object_path:
+                selected.append(images_dir / f"s{idx:02d}.png")
                 continue
             fallback = images_by_index.get(idx)
             if fallback and fallback.exists():
