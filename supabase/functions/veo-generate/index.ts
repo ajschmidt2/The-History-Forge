@@ -217,6 +217,7 @@ Deno.serve(async (req) => {
 
     const submitUrl =
       `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/${location}/publishers/google/models/${VEO_MODEL}:predictLongRunning`;
+    console.log("submitUrl:", submitUrl);
 
     const submitResp = await fetch(submitUrl, {
       method: "POST",
@@ -246,9 +247,11 @@ Deno.serve(async (req) => {
     if (!operationName) {
       throw new Error("Veo did not return an operation name");
     }
+    console.log("operationName:", operationName);
 
-    const opUrl =
-      `https://${location}-aiplatform.googleapis.com/v1beta1/${operationName}`;
+    const m = operationName.match(/\/locations\/([^/]+)\//);
+    const opLocation = m?.[1] ?? location;
+    const opUrl = `https://${opLocation}-aiplatform.googleapis.com/v1beta1/${operationName}`;
     for (let i = 0; i < MAX_POLLS; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       const opResp = await fetch(opUrl, {
