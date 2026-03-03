@@ -460,6 +460,8 @@ def tab_create_scenes() -> None:
             if st.button("Apply to all", width="stretch", key="scene_transition_apply_all"):
                 transitions = [transition_preset] * len(transitions)
                 st.session_state.scene_transition_types = transitions
+                for _i, _t in enumerate(transitions):
+                    st.session_state[f"scene_transition_{_i + 1}"] = _t
                 st.rerun()
 
         for i in range(len(transitions)):
