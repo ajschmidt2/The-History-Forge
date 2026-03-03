@@ -638,6 +638,71 @@ def tab_create_scenes() -> None:
         else:
             st.caption("Use the **AI Video Generator** tab to create videos for this project.")
 
+        # ------------------------------------------------------------------
+        # Browse all videos in the Supabase generated-videos bucket
+        # ------------------------------------------------------------------
+        if _sb_store.is_configured():
+            with st.expander("Browse Supabase bucket videos", expanded=False):
+                bucket_cache_key = f"sb_all_bucket_videos_{project_id}"
+                fetch_btn_key = _scene_widget_key("sb_bucket_fetch_", selected)
+                bucket_pick_key = _scene_widget_key("sb_bucket_pick_", selected)
+                bucket_assign_key = _scene_widget_key("sb_bucket_assign_", selected)
+
+                col_btn, col_info = st.columns([2, 3])
+                with col_btn:
+                    if st.button("Refresh from bucket", key=fetch_btn_key, width="stretch"):
+                        with st.spinner("Scanning Supabase bucket…"):
+                            st.session_state[bucket_cache_key] = _sb_store.list_all_bucket_videos()
+
+                bucket_videos: list[dict] = st.session_state.get(bucket_cache_key, [])
+
+                with col_info:
+                    if bucket_videos:
+                        st.caption(f"{len(bucket_videos)} video(s) found in bucket.")
+                    elif bucket_cache_key in st.session_state:
+                        st.caption("No video files found in the bucket.")
+                    else:
+                        st.caption("Click **Refresh from bucket** to scan the Supabase `generated-videos` bucket.")
+
+                if bucket_videos:
+                    bucket_labels = [
+                        f"{v['filename']}  [{v.get('object_path', '')}]"
+                        for v in bucket_videos
+                    ]
+                    bucket_picked = st.selectbox(
+                        "Select video from Supabase bucket",
+                        ["— choose —"] + bucket_labels,
+                        key=bucket_pick_key,
+                    )
+
+                    bucket_chosen: dict | None = None
+                    if bucket_picked != "— choose —":
+                        bucket_chosen = bucket_videos[bucket_labels.index(bucket_picked)]
+                        preview_url = bucket_chosen.get("url", "")
+                        if preview_url:
+                            st.video(preview_url)
+
+                    if st.button("Assign video", key=bucket_assign_key, disabled=(bucket_chosen is None)):
+                        try:
+                            canonical_path = _assign_scene_video_to_canonical_path(
+                                selected,
+                                {"video_url": bucket_chosen.get("url", ""), "video_path": None},
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Could not assign video: {exc}")
+                        else:
+                            selected.video_path = str(canonical_path)
+                            selected.video_url = None
+                            selected.video_object_path = bucket_chosen.get("object_path")
+                            selected.video_loop = False
+                            selected.video_muted = True
+                            selected.video_volume = 0.0
+                            _remove_scene_image_asset(selected)
+                            st.toast(
+                                f"Bucket video '{bucket_chosen['filename']}' assigned to scene {selected.index} as {canonical_path.name}."
+                            )
+                            st.rerun()
+
         caption_state_key = _timeline_state_key()
         captions = _captions_from_scenes(scenes)
         st.session_state[caption_state_key] = captions

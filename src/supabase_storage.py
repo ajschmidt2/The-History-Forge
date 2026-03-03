@@ -504,6 +504,55 @@ def pull_project_assets(project_id: str, project_dir: Path) -> dict[str, int]:
     return results
 
 
+def list_all_bucket_videos(bucket: str = SUPABASE_VIDEO_BUCKET, limit: int = 100) -> list[dict[str, str]]:
+    """List ALL video files in *bucket* by recursively scanning every subfolder.
+
+    Unlike :func:`list_generated_videos`, this is **not** filtered by
+    ``project_id``, so it surfaces every video that exists in the bucket
+    (e.g. files stored under an ``anon/`` prefix or at the bucket root).
+    """
+    if not is_configured():
+        return []
+
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    _VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv"}
+
+    def _collect(prefix: str, depth: int) -> None:
+        if depth > 4 or len(rows) >= limit:
+            return
+        for obj in _list_storage_objects(bucket, prefix):
+            name = str(obj.get("name") or "").strip()
+            if not name:
+                continue
+            storage_path = f"{prefix}/{name}".lstrip("/") if prefix else name
+            # Supabase returns id=None for folder placeholders
+            if obj.get("id") is None:
+                _collect(storage_path, depth + 1)
+            else:
+                if not any(name.lower().endswith(ext) for ext in _VIDEO_EXTS):
+                    continue
+                if storage_path in seen:
+                    continue
+                seen.add(storage_path)
+                url = get_public_storage_url(bucket, storage_path)
+                if not url:
+                    continue
+                rows.append(
+                    {
+                        "filename": name,
+                        "url": url,
+                        "object_path": storage_path,
+                        "created_at": str(obj.get("created_at") or ""),
+                    }
+                )
+
+    _collect("", 0)
+    rows.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return rows[:limit]
+
+
 def list_generated_videos(project_id: str, limit: int = 25) -> list[dict[str, str]]:
     """List AI generated videos from the configured generated-videos bucket."""
     if not project_id:
