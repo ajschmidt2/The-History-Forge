@@ -237,8 +237,11 @@ Deno.serve(async (req) => {
 
     if (!submitResp.ok) {
       const text = await submitResp.text();
+      const notFoundHint = submitResp.status === 404
+        ? " Ensure GOOGLE_CLOUD_LOCATION is a Veo-supported region (for example us-central1) and the model is available for this project/region in Vertex AI Model Garden."
+        : "";
       throw new Error(
-        `Veo submit failed (${submitResp.status}): ${text.slice(0, 500)}`,
+        `Veo submit failed (${submitResp.status}): ${text.slice(0, 500)}${notFoundHint}`,
       );
     }
 
@@ -259,8 +262,11 @@ Deno.serve(async (req) => {
       });
       if (!opResp.ok) {
         const text = await opResp.text();
+        const notFoundHint = opResp.status === 404
+          ? ` Operation may not exist in region '${opLocation}' yet, or Veo may be unavailable there. Verify GOOGLE_CLOUD_LOCATION and model availability in Vertex AI Model Garden.`
+          : "";
         throw new Error(
-          `Veo poll failed (${opResp.status}): ${text.slice(0, 500)}`,
+          `Veo poll failed (${opResp.status}): ${text.slice(0, 500)}${notFoundHint}`,
         );
       }
 
