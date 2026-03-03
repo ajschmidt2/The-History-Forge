@@ -456,6 +456,7 @@ def _scene_cache_key(scene, fps: int, width: int, height: int) -> str:
         source_stat = None
     payload = {
         "image_path": str(source_path.resolve()),
+        "video_object_path": getattr(scene, "video_object_path", None),
         "size": source_stat.st_size if source_stat else None,
         "mtime_ns": source_stat.st_mtime_ns if source_stat else None,
         "duration": scene.duration,
@@ -536,8 +537,9 @@ def render_video_from_timeline(
 
     project_slug = (getattr(timeline.meta, "project_id", "") or "").strip() or Path(timeline_path).resolve().parent.name
     storage_buckets = {
-        "images": "images",
-        "audio": (None if str(get_secret("SUPABASE_AUDIO_SAME_BUCKET", "0") or "0") == "1" else str(get_secret("SUPABASE_AUDIO_BUCKET", "audio") or "audio")),
+        "images": str(get_secret("SUPABASE_IMAGES_BUCKET", "history-forge-images") or "history-forge-images"),
+        "audio": str(get_secret("SUPABASE_AUDIO_BUCKET", "history-forge-audio") or "history-forge-audio"),
+        "videos": str(get_secret("SUPABASE_VIDEOS_BUCKET", "generated-videos") or "generated-videos"),
     }
     timeline = stage_timeline_assets(
         timeline,
@@ -545,7 +547,12 @@ def render_video_from_timeline(
         project_slug=project_slug,
         bucket_images=storage_buckets["images"],
         bucket_audio=storage_buckets["audio"],
+        bucket_videos=storage_buckets["videos"],
     )
+    with log_file.open("a", encoding="utf-8") as h:
+        h.write("=== STAGED SCENES ===\n")
+        for s in timeline.scenes:
+            h.write(f"{s.id} -> {s.image_path}\n")
     staged_files = sorted(str(path.resolve()) for path in staging_root.rglob("*") if path.is_file())
 
     try:

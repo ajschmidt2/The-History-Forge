@@ -524,7 +524,7 @@ def list_generated_videos(project_id: str, limit: int = 25) -> list[dict[str, st
             url = get_public_storage_url(SUPABASE_VIDEO_BUCKET, storage_path)
             if not url:
                 continue
-            rows.append({"filename": name, "url": url, "created_at": str(obj.get("created_at") or "")})
+            rows.append({"filename": name, "url": url, "object_path": storage_path, "created_at": str(obj.get("created_at") or "")})
 
     rows.sort(key=lambda item: item.get("created_at", ""), reverse=True)
     return rows[: max(1, int(limit or 25))]

@@ -83,6 +83,12 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
             media_files.append(resolved_video_path)
             continue
 
+        video_object_path = str(getattr(scene, "video_object_path", "") or "").strip()
+        if video_object_path:
+            preferred_stem = f"s{idx:02d}".lower()
+            media_files.append(image_candidates.get(preferred_stem, images_dir / f"s{idx:02d}.png"))
+            continue
+
         video_url = str(getattr(scene, "video_url", "") or "").strip()
         if video_url:
             downloaded = _persist_scene_video_url(project_path, idx, video_url)
@@ -93,10 +99,31 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
                 continue
 
         preferred_stem = f"s{idx:02d}".lower()
-        if preferred_stem in image_candidates:
-            media_files.append(image_candidates[preferred_stem])
+        media_files.append(image_candidates.get(preferred_stem, images_dir / f"s{idx:02d}.png"))
     return media_files
 
+
+def _apply_scene_media_assignments(timeline: Timeline, session_scenes: list[Any] | None, project_path: Path) -> None:
+    if not session_scenes:
+        return
+
+    ordered_session_scenes = [scene for scene in session_scenes if isinstance(getattr(scene, "index", None), int) and int(getattr(scene, "index", 0)) > 0]
+    ordered_session_scenes.sort(key=lambda item: int(getattr(item, "index", 0)))
+
+    for timeline_scene, scene in zip(timeline.scenes, ordered_session_scenes):
+        if getattr(scene, "video_path", None) and Path(scene.video_path).exists():
+            media_path = str(Path(scene.video_path).resolve())
+        elif getattr(scene, "video_object_path", None):
+            media_path = f"storage://generated-videos/{scene.video_object_path}"
+        else:
+            media_path = str(project_path / "assets/images" / f"s{scene.index:02d}.png")
+
+        timeline_scene.image_path = media_path
+        timeline_scene.id = f"s{scene.index:02d}"
+        timeline_scene.duration = float(getattr(scene, "estimated_duration_sec", timeline_scene.duration) or timeline_scene.duration)
+        timeline_scene.video_loop = bool(getattr(scene, "video_loop", False))
+        timeline_scene.video_muted = bool(getattr(scene, "video_muted", True))
+        timeline_scene.video_volume = float(getattr(scene, "video_volume", 0.0) or 0.0)
 
 def _normalize_scene_captions(scene_captions: list[str] | None, expected_count: int) -> list[str]:
     captions = [str(caption or "") for caption in (scene_captions or [])[:expected_count]]
@@ -277,6 +304,7 @@ def sync_timeline_for_project(
     )
 
     _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
+    _apply_scene_media_assignments(timeline, session_scenes, project_path)
 
     normalized_captions = _normalize_scene_captions(scene_captions, len(media_files))
     if len(timeline.scenes) != len(normalized_captions):
@@ -305,6 +333,7 @@ def sync_timeline_for_project(
             scene_video_options=scene_video_options,
         )
         _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
+        _apply_scene_media_assignments(timeline, session_scenes, project_path)
     if len(timeline.scenes) != len(normalized_captions):
         raise ValueError(
             f"Caption mapping mismatch: {len(timeline.scenes)} timeline scenes vs {len(normalized_captions)} captions. "

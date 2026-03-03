@@ -128,6 +128,7 @@ class Scene:
     estimated_duration_sec: float = 0.0
     video_path: Optional[str] = None   # local path to an AI-generated video clip
     video_url: Optional[str] = None    # cloud/public URL of the AI-generated video clip
+    video_object_path: Optional[str] = None  # object path in generated-videos bucket
     video_loop: bool = False
     video_muted: bool = True
     video_volume: float = 0.0
