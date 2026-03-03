@@ -1,3 +1,5 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 const VEO_MODEL = "veo-2.0-generate-001";
 const POLL_INTERVAL_MS = 8_000;
 const MAX_POLLS = 90;
@@ -178,8 +180,13 @@ async function fetchAccessToken(scope: string, sa: Required<Pick<ServiceAccount,
 // ---------------------------------------------------------------------------
 
 Deno.serve(async (req) => {
+  let jobId: string | null = null;
   try {
     const sa = loadServiceAccount();
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
 
     if (req.method === "OPTIONS") {
       return new Response("ok", { headers: corsHeaders });
@@ -192,7 +199,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { prompt, aspectRatio } = await req.json();
+    const { prompt, aspectRatio, durationSeconds } = await req.json();
     if (!prompt || typeof prompt !== "string") {
       return new Response(JSON.stringify({ error: "'prompt' is required" }), {
         status: 400,
@@ -209,6 +216,30 @@ Deno.serve(async (req) => {
     const safeRatio = ["16:9", "9:16", "1:1"].includes(aspectRatio)
       ? aspectRatio
       : "16:9";
+    const duration = Number.isFinite(durationSeconds)
+      ? Number(durationSeconds)
+      : 8;
+    const nowIso = new Date().toISOString();
+
+    const { data: job, error: jobErr } = await supabase
+      .from("video_jobs")
+      .insert({
+        provider: "google",
+        prompt,
+        status: "queued",
+        progress: 0,
+        bucket: "generated-videos",
+        model: VEO_MODEL,
+        aspect_ratio: safeRatio,
+        duration_seconds: duration,
+      })
+      .select("id")
+      .single();
+
+    if (jobErr) {
+      throw new Error("DB insert failed: " + jobErr.message);
+    }
+    jobId = String(job.id);
 
     const accessToken = await fetchAccessToken(
       "https://www.googleapis.com/auth/cloud-platform",
@@ -229,7 +260,7 @@ Deno.serve(async (req) => {
         instances: [{ prompt }],
         parameters: {
           aspectRatio: safeRatio,
-          durationSeconds: 8,
+          durationSeconds: duration,
           sampleCount: 1,
         },
       }),
@@ -251,6 +282,11 @@ Deno.serve(async (req) => {
       throw new Error("Veo did not return an operation name");
     }
     console.log("operationName:", operationName);
+
+    await supabase
+      .from("video_jobs")
+      .update({ status: "rendering", progress: 0.1, google_operation_name: operationName })
+      .eq("id", jobId);
 
     const m = operationName.match(/\/locations\/([^/]+)\//);
     const opLocation = m?.[1] ?? location;
@@ -286,38 +322,59 @@ Deno.serve(async (req) => {
 
       const inlineB64 =
         prediction.bytesBase64Encoded ?? prediction.videoData;
+      let mp4Bytes: Uint8Array | null = null;
       if (inlineB64) {
-        return new Response(JSON.stringify({ videoBase64: inlineB64 }), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        const binary = atob(inlineB64);
+        mp4Bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
       }
 
       const videoUri: string | undefined =
         prediction.videoUri ?? prediction.videoUrl;
-      if (typeof videoUri === "string" && videoUri.startsWith("http")) {
+      if (!mp4Bytes && typeof videoUri === "string" && videoUri.startsWith("http")) {
         const dl = await fetch(videoUri);
         if (!dl.ok) {
           throw new Error(
             `Failed to download Veo result URL (${dl.status})`,
           );
         }
-        const bytes = new Uint8Array(await dl.arrayBuffer());
-        let binary = "";
-        const chunkSize = 0x8000;
-        for (
-          let offset = 0;
-          offset < bytes.length;
-          offset += chunkSize
-        ) {
-          const chunk = bytes.subarray(
-            offset,
-            Math.min(offset + chunkSize, bytes.length),
-          );
-          binary += String.fromCharCode(...chunk);
+        mp4Bytes = new Uint8Array(await dl.arrayBuffer());
+      }
+
+      if (mp4Bytes) {
+        const datePrefix = nowIso.slice(0, 10);
+        const fileName = `${crypto.randomUUID()}.mp4`;
+        const storagePath = `google/${datePrefix}/${jobId}/${fileName}`;
+
+        const { error: upErr } = await supabase.storage
+          .from("generated-videos")
+          .upload(storagePath, mp4Bytes, {
+            contentType: "video/mp4",
+            upsert: true,
+          });
+
+        if (upErr) {
+          throw new Error("Storage upload failed: " + upErr.message);
         }
-        const b64 = btoa(binary);
-        return new Response(JSON.stringify({ videoBase64: b64 }), {
+
+        const publicUrl = `${Deno.env.get("SUPABASE_URL")}/storage/v1/object/public/generated-videos/${storagePath}`;
+
+        await supabase
+          .from("video_jobs")
+          .update({
+            status: "done",
+            progress: 1,
+            storage_path: storagePath,
+            public_url: publicUrl,
+          })
+          .eq("id", jobId);
+
+        return new Response(JSON.stringify({
+          ok: true,
+          job_id: jobId,
+          google_operation_name: operationName,
+          storage_path: storagePath,
+          public_url: publicUrl,
+        }), {
           status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -328,6 +385,17 @@ Deno.serve(async (req) => {
 
     throw new Error("Veo generation timed out");
   } catch (err) {
+    if (jobId) {
+      const supabase = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      );
+      await supabase.from("video_jobs").update({
+        status: "failed",
+        error: String(err),
+        progress: 0,
+      }).eq("id", jobId);
+    }
     console.error("[fatal]", err instanceof Error ? err.stack ?? err.message : String(err));
     return new Response(
       JSON.stringify({ ok: false, error: String(err) }),
