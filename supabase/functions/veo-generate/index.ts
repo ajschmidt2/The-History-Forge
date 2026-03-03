@@ -11,29 +11,52 @@ const corsHeaders = {
 // Service-account helpers — native Web Crypto, no npm dependencies
 // ---------------------------------------------------------------------------
 
-interface ServiceAccount {
-  client_email: string;
-  private_key: string;
-}
+type ServiceAccount = {
+  type?: string;
+  project_id?: string;
+  private_key_id?: string;
+  private_key?: string;
+  client_email?: string;
+  client_id?: string;
+  token_uri?: string;
+};
 
-function readServiceAccount(): ServiceAccount {
-  const raw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_JSON") ?? "";
+function loadServiceAccount(): Required<Pick<ServiceAccount, "private_key" | "client_email" | "project_id">> & ServiceAccount {
+  const raw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_JSON");
   if (!raw) {
-    throw new Error("Missing Supabase secret GOOGLE_SERVICE_ACCOUNT_JSON");
+    throw new Error("Missing secret: GOOGLE_SERVICE_ACCOUNT_JSON (set it in Supabase Edge Function Secrets)");
   }
-  let parsed: Record<string, unknown>;
+
+  let sa: ServiceAccount;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON");
+    sa = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. Ensure it is ONE LINE minified JSON. Parse error: ${String(e)}`);
   }
-  const { client_email, private_key } = parsed as ServiceAccount;
-  if (!client_email || !private_key) {
+
+  if (!sa.private_key) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON missing field: private_key");
+  }
+  if (!sa.client_email) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON missing field: client_email");
+  }
+  if (!sa.project_id) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON missing field: project_id");
+  }
+
+  // Convert literal "\n" sequences into actual newlines for PEM parsing
+  const normalizedKey = sa.private_key.replace(/\\n/g, "\n").trim() + "\n";
+  sa.private_key = normalizedKey;
+
+  // Validate PEM markers
+  if (!normalizedKey.includes("-----BEGIN PRIVATE KEY-----") || !normalizedKey.includes("-----END PRIVATE KEY-----")) {
     throw new Error(
-      "GOOGLE_SERVICE_ACCOUNT_JSON must contain client_email and private_key",
+      "Service account private_key is not a valid PEM after normalization. " +
+      "Ensure the JSON 'private_key' value contains \\n sequences and was not altered when pasted into secrets.",
     );
   }
-  return { client_email, private_key };
+
+  return sa as any;
 }
 
 function base64urlEncode(data: Uint8Array | string): string {
@@ -47,12 +70,13 @@ function base64urlEncode(data: Uint8Array | string): string {
 }
 
 async function fetchAccessToken(scope: string): Promise<string> {
-  const { client_email, private_key } = readServiceAccount();
+  const sa = loadServiceAccount();
+  console.log("Loaded service account for:", sa.client_email);
 
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };
   const payload = {
-    iss: client_email,
+    iss: sa.client_email,
     scope,
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
@@ -64,7 +88,7 @@ async function fetchAccessToken(scope: string): Promise<string> {
   const signingInput = `${headerB64}.${payloadB64}`;
 
   // Normalise PEM — the JSON value may store newlines as the literal "\n"
-  const pem = private_key.replace(/\\n/g, "\n");
+  const pem = sa.private_key;
   const pemBody = pem
     .replace(/-----BEGIN PRIVATE KEY-----/, "")
     .replace(/-----END PRIVATE KEY-----/, "")
