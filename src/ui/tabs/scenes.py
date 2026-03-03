@@ -73,6 +73,7 @@ def _cloud_generated_videos_for_project(project_id: str) -> list[dict[str, str]]
                     "filename": filename or "video",
                     "url": url,
                     "created_at": str(row.get("created_at") or ""),
+                    "object_path": str(row.get("object_path") or ""),
                 }
             )
     except Exception:
@@ -109,6 +110,7 @@ def _saved_video_choices(project_id: str) -> list[dict[str, str | None]]:
                 "video_path": None,
                 "video_url": url,
                 "source": "cloud",
+                "video_object_path": str(row.get("object_path") or "") or None,
             }
         )
 
@@ -558,6 +560,7 @@ def tab_create_scenes() -> None:
             ):
                 selected.video_path = None
                 selected.video_url = None
+                selected.video_object_path = None
                 st.rerun()
         else:
             st.caption("No AI video assigned to this scene.")
@@ -586,6 +589,7 @@ def tab_create_scenes() -> None:
             if st.button("Assign video", key=assign_key, disabled=(chosen is None)):
                 selected.video_path = str(chosen.get("video_path") or "") or None
                 selected.video_url = str(chosen.get("video_url") or "") or None
+                selected.video_object_path = str(chosen.get("video_object_path") or "") or None
                 selected.video_loop = bool(getattr(selected, "video_loop", False))
                 selected.video_muted = True
                 selected.video_volume = 0.0

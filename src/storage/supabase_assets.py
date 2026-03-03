@@ -8,6 +8,7 @@ from src.video.timeline_schema import Timeline
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
 
 # Mapping rules between local-ish timeline paths and storage object paths.
 # Override via env vars when your bucket layout differs.
@@ -88,27 +89,51 @@ def ensure_local_asset(
     staging_root: Path,
     bucket_images: str,
     bucket_audio: str | None,
+    bucket_videos: str | None,
     project_slug: str,
     object_path_mapper: Callable[[str, str, bool], str] | None = None,
 ) -> str:
+    if path_str.startswith("storage://"):
+        rest = path_str[len("storage://"):]
+        bucket, object_path = rest.split("/", 1)
+        object_path = _sanitize_storage_path(object_path)
+
+        ext = Path(object_path).suffix.lower()
+        if ext in VIDEO_EXTENSIONS:
+            category = "videos"
+        elif ext in AUDIO_EXTENSIONS:
+            category = "audio"
+        else:
+            category = "images"
+
+        dest = (staging_root / category / Path(*object_path.split("/"))).resolve()
+        download_storage_object(bucket, object_path, dest)
+        return str(dest)
+
     candidate = Path(path_str).expanduser()
     if candidate.exists():
         return str(candidate.resolve())
 
     ext = candidate.suffix.lower()
-    is_audio = ext in AUDIO_EXTENSIONS
     if ext in IMAGE_EXTENSIONS:
+        kind = "image"
         bucket = bucket_images
         category = "images"
-    elif is_audio:
+    elif ext in VIDEO_EXTENSIONS:
+        kind = "video"
+        bucket = bucket_videos or bucket_images
+        category = "videos"
+    elif ext in AUDIO_EXTENSIONS:
+        kind = "audio"
         bucket = bucket_audio or bucket_images
         category = "audio"
     else:
+        kind = "misc"
         bucket = bucket_images
         category = "misc"
 
     mapper = object_path_mapper or _default_object_path_mapper
-    object_path = mapper(path_str, project_slug, is_audio)
+    object_path = mapper(path_str, project_slug, kind == "audio")
 
     local_rel = Path(*object_path.split("/"))
     if any(part in {"..", ""} for part in local_rel.parts):
@@ -123,8 +148,9 @@ def stage_timeline_assets(
     timeline: Timeline,
     staging_root: Path,
     project_slug: str,
-    bucket_images: str = "images",
+    bucket_images: str = "history-forge-images",
     bucket_audio: str | None = None,
+    bucket_videos: str | None = None,
 ) -> Timeline:
     staging_root = staging_root.resolve()
     staging_root.mkdir(parents=True, exist_ok=True)
@@ -135,6 +161,7 @@ def stage_timeline_assets(
             staging_root=staging_root,
             bucket_images=bucket_images,
             bucket_audio=bucket_audio,
+            bucket_videos=bucket_videos,
             project_slug=project_slug,
         )
 
@@ -144,6 +171,7 @@ def stage_timeline_assets(
             staging_root=staging_root,
             bucket_images=bucket_images,
             bucket_audio=bucket_audio,
+            bucket_videos=bucket_videos,
             project_slug=project_slug,
         )
 
@@ -153,6 +181,7 @@ def stage_timeline_assets(
             staging_root=staging_root,
             bucket_images=bucket_images,
             bucket_audio=bucket_audio,
+            bucket_videos=bucket_videos,
             project_slug=project_slug,
         )
 

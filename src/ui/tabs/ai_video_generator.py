@@ -100,10 +100,11 @@ def _clear_scene_image_asset(scene) -> None:
         image_path.unlink(missing_ok=True)
 
 
-def _assign_video_to_scene(scene, *, local_path: str | None, url: str | None) -> None:
+def _assign_video_to_scene(scene, *, local_path: str | None, url: str | None, object_path: str | None = None) -> None:
     """Assign a video clip to a scene and remove any existing image asset."""
     scene.video_path = local_path if local_path and Path(local_path).exists() else None
     scene.video_url = None if scene.video_path else (url if str(url or "").startswith(("http://", "https://")) else None)
+    scene.video_object_path = str(object_path or "").strip() or None
     scene.video_loop = False
     scene.video_muted = True
     scene.video_volume = 0.0
@@ -388,7 +389,7 @@ def tab_ai_video_generator() -> None:
                 if st.button("Assign to scene", type="secondary", width="stretch"):
                     chosen_idx = scene_labels.index(chosen_label)
                     chosen_scene = scenes[chosen_idx]
-                    _assign_video_to_scene(chosen_scene, local_path=result_local, url=result_url)
+                    _assign_video_to_scene(chosen_scene, local_path=result_local, url=result_url, object_path=None)
                     st.toast(
                         f"Video assigned to {chosen_label}. "
                         "Scene image removed so this scene now uses video only."
@@ -453,7 +454,7 @@ def _render_saved_videos() -> None:
                     if st.button("Assign", key=btn_key, width="stretch"):
                         chosen_idx = scene_labels.index(chosen)
                         chosen_scene = scenes[chosen_idx]
-                        _assign_video_to_scene(chosen_scene, local_path=str(vid_path), url=None)
+                        _assign_video_to_scene(chosen_scene, local_path=str(vid_path), url=None, object_path=None)
                         st.toast(f"Video assigned to {chosen}. Scene image removed.")
                         st.rerun()
             else:
@@ -541,7 +542,7 @@ def _render_history() -> None:
                             chosen_idx = scene_labels.index(chosen)
                             chosen_scene = scenes[chosen_idx]
                             local_path = _persist_video_from_url(project_id, url, stem_hint=f"scene_{chosen_scene.index:02d}") if url else None
-                            _assign_video_to_scene(chosen_scene, local_path=local_path, url=url)
+                            _assign_video_to_scene(chosen_scene, local_path=local_path, url=url, object_path=str(row.get("object_path") or "") or None)
                             if local_path:
                                 st.toast(f"Video assigned to {chosen}. Scene image removed.")
                             else:
