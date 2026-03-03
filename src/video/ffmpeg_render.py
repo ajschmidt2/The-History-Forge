@@ -518,13 +518,19 @@ def render_video_from_timeline(
             scene.motion = None
     if not timeline.scenes:
         raise ValueError("Timeline has no scenes to render.")
-    for scene in timeline.scenes:
+
+    scene_mapping_warnings: list[str] = []
+    for idx, scene in enumerate(timeline.scenes, start=1):
+        expected_scene_id = f"s{idx:02d}"
         source_path = str(scene.image_path or "")
-        if source_path.startswith("storage://"):
-            continue
-        name = Path(source_path).name.lower()
-        if not name.startswith(str(scene.id or "").lower()):
-            raise RuntimeError(f"Scene mapping mismatch: {scene.id} -> {scene.image_path}")
+        if source_path and not source_path.startswith("storage://"):
+            name = Path(source_path).name.lower()
+            if not name.startswith(expected_scene_id):
+                scene_mapping_warnings.append(
+                    f"Normalized scene id {scene.id!r} -> {expected_scene_id!r} for media {scene.image_path!r}"
+                )
+        if scene.id != expected_scene_id:
+            scene.id = expected_scene_id
 
     output_path = ensure_parent_dir(out_mp4_path)
     staging_root = output_path.with_name(f"{output_path.stem}_staging").resolve()
@@ -558,6 +564,10 @@ def render_video_from_timeline(
         bucket_videos=storage_buckets["videos"],
     )
     with log_file.open("a", encoding="utf-8") as h:
+        if scene_mapping_warnings:
+            h.write("=== SCENE MAPPING NORMALIZATION ===\n")
+            for warning in scene_mapping_warnings:
+                h.write(f"{warning}\n")
         h.write("=== STAGED SCENES ===\n")
         for s in timeline.scenes:
             h.write(f"{s.id} -> {s.image_path}\n")
