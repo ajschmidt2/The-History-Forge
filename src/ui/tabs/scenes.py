@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import shutil
+from urllib.request import urlopen
 
 import streamlit as st
 
@@ -143,6 +145,31 @@ def _remove_scene_image_asset(scene: Scene) -> None:
         image_path.unlink(missing_ok=True)
 
 
+def _canonical_scene_video_path(scene_index: int) -> Path:
+    videos_dir = _project_path() / "assets/videos"
+    videos_dir.mkdir(parents=True, exist_ok=True)
+    return videos_dir / f"s{scene_index:02d}.mp4"
+
+
+def _assign_scene_video_to_canonical_path(scene: Scene, chosen: dict[str, str | None]) -> Path:
+    dest_path = _canonical_scene_video_path(scene.index)
+    src_video_path = str(chosen.get("video_path") or "").strip()
+    src_video_url = str(chosen.get("video_url") or "").strip()
+
+    if src_video_path:
+        src = Path(src_video_path).expanduser()
+        if not src.exists():
+            raise FileNotFoundError(f"Selected local video does not exist: {src}")
+        shutil.copy2(src, dest_path)
+    elif src_video_url.startswith(("http://", "https://")):
+        with urlopen(src_video_url) as response:
+            dest_path.write_bytes(response.read())
+    else:
+        raise ValueError("No valid video source selected.")
+
+    return dest_path.resolve()
+
+
 def _timeline_state_key() -> str:
     return f"video_scene_captions::{_project_path() / 'timeline.json'}"
 
@@ -268,27 +295,33 @@ def _remap_scene_widget_state(index_map: dict[int, int]) -> None:
 
 
 def _rename_scene_assets(index_map: dict[int, int]) -> None:
-    images_dir = _project_path() / "assets/images"
-    if not images_dir.exists():
-        return
+    project_path = _project_path()
 
-    planned: list[tuple[Path, Path]] = []
-    for old_index, new_index in index_map.items():
-        src = images_dir / f"s{old_index:02d}.png"
-        dst = images_dir / f"s{new_index:02d}.png"
-        if src.exists() and src != dst:
-            planned.append((src, dst))
+    def _rename_sequence(directory: Path, suffixes: set[str]) -> None:
+        if not directory.exists():
+            return
 
-    temp_moves: list[tuple[Path, Path]] = []
-    for src, dst in planned:
-        tmp = src.with_name(f"{src.stem}__tmp_reindex{src.suffix}")
-        src.rename(tmp)
-        temp_moves.append((tmp, dst))
+        planned: list[tuple[Path, Path]] = []
+        for old_index, new_index in index_map.items():
+            for suffix in suffixes:
+                src = directory / f"s{old_index:02d}{suffix}"
+                dst = directory / f"s{new_index:02d}{suffix}"
+                if src.exists() and src != dst:
+                    planned.append((src, dst))
 
-    for tmp, dst in temp_moves:
-        if dst.exists():
-            dst.unlink()
-        tmp.rename(dst)
+        temp_moves: list[tuple[Path, Path]] = []
+        for src, dst in planned:
+            tmp = src.with_name(f"{src.stem}__tmp_reindex{src.suffix}")
+            src.rename(tmp)
+            temp_moves.append((tmp, dst))
+
+        for tmp, dst in temp_moves:
+            if dst.exists():
+                dst.unlink()
+            tmp.rename(dst)
+
+    _rename_sequence(project_path / "assets/images", {".png"})
+    _rename_sequence(project_path / "assets/videos", {".mp4", ".mov", ".webm", ".mkv"})
 
 
 def _reindex_scenes_and_assets() -> None:
@@ -587,16 +620,21 @@ def tab_create_scenes() -> None:
                     st.video(str(preview_src))
 
             if st.button("Assign video", key=assign_key, disabled=(chosen is None)):
-                selected.video_path = str(chosen.get("video_path") or "") or None
-                selected.video_url = str(chosen.get("video_url") or "") or None
-                selected.video_object_path = str(chosen.get("video_object_path") or "") or None
-                selected.video_loop = bool(getattr(selected, "video_loop", False))
-                selected.video_muted = True
-                selected.video_volume = 0.0
-                _remove_scene_image_asset(selected)
-                source = str(chosen.get("source") or "saved")
-                st.toast(f"Video '{picked}' ({source}) assigned to scene {selected.index}.")
-                st.rerun()
+                try:
+                    canonical_path = _assign_scene_video_to_canonical_path(selected, chosen)
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Could not assign video: {exc}")
+                else:
+                    selected.video_path = str(canonical_path)
+                    selected.video_url = None
+                    selected.video_object_path = None
+                    selected.video_loop = bool(getattr(selected, "video_loop", False))
+                    selected.video_muted = True
+                    selected.video_volume = 0.0
+                    _remove_scene_image_asset(selected)
+                    source = str(chosen.get("source") or "saved")
+                    st.toast(f"Video '{picked}' ({source}) assigned to scene {selected.index} as {canonical_path.name}.")
+                    st.rerun()
         else:
             st.caption("Use the **AI Video Generator** tab to create videos for this project.")
 
