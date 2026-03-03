@@ -2,7 +2,6 @@ from pathlib import Path
 import re
 from typing import Any
 from urllib.request import urlopen
-import time
 
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
 from src.video.timeline_schema import CaptionStyle, Timeline
@@ -43,7 +42,7 @@ def _persist_scene_video_url(project_path: Path, scene_index: int, video_url: st
         return None
     videos_dir = project_path / "assets/videos"
     videos_dir.mkdir(parents=True, exist_ok=True)
-    destination = videos_dir / f"s{scene_index:02d}_{int(time.time())}.mp4"
+    destination = videos_dir / f"s{scene_index:02d}.mp4"
     try:
         with urlopen(video_url) as response:
             destination.write_bytes(response.read())
@@ -83,12 +82,6 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
             media_files.append(resolved_video_path)
             continue
 
-        video_object_path = str(getattr(scene, "video_object_path", "") or "").strip()
-        if video_object_path:
-            preferred_stem = f"s{idx:02d}".lower()
-            media_files.append(image_candidates.get(preferred_stem, images_dir / f"s{idx:02d}.png"))
-            continue
-
         video_url = str(getattr(scene, "video_url", "") or "").strip()
         if video_url:
             downloaded = _persist_scene_video_url(project_path, idx, video_url)
@@ -113,6 +106,8 @@ def _apply_scene_media_assignments(timeline: Timeline, session_scenes: list[Any]
     for timeline_scene, scene in zip(timeline.scenes, ordered_session_scenes):
         if getattr(scene, "video_path", None) and Path(scene.video_path).exists():
             media_path = str(Path(scene.video_path).resolve())
+        elif getattr(scene, "video_url", None) and str(getattr(scene, "video_url", "")).startswith(("http://", "https://")):
+            media_path = str(scene.video_url)
         elif getattr(scene, "video_object_path", None):
             media_path = f"storage://generated-videos/{scene.video_object_path}"
         else:
@@ -217,7 +212,6 @@ def sync_timeline_for_project(
             media_files = _media_files_from_session_scenes(project_path, session_scenes)
         if not media_files:
             media_files = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}], key=_media_sort_key)
-    media_files = sorted(media_files, key=_media_sort_key)
     if not media_files:
         return None
 
@@ -324,7 +318,7 @@ def sync_timeline_for_project(
             enable_motion=enable_motion,
             crossfade=effective_crossfade,
             crossfade_duration=crossfade_duration,
-        transition_types=transition_types,
+            transition_types=transition_types,
             scene_duration=float(scene_duration) if scene_duration is not None else None,
             scene_excerpts=scene_excerpts,
             narration_wpm=narration_wpm,
