@@ -520,6 +520,19 @@ def _collect_scene_captions(
     st.session_state[state_key] = captions
     for idx, media_path in enumerate(media_files, start=1):
         display_scene_number = _scene_number_from_path(media_path) or idx
+        text_key = f"video_scene_caption_{idx}_{media_path.name}"
+        sync_key = f"{text_key}::__synced"
+        if text_key not in st.session_state or st.session_state.get(sync_key) != captions[idx - 1]:
+            st.session_state[text_key] = captions[idx - 1]
+            st.session_state[sync_key] = captions[idx - 1]
+
+        preview_caption = format_caption(
+            str(st.session_state.get(text_key, "")),
+            max_lines=caption_max_lines,
+            max_chars_per_line=caption_max_chars,
+        ) or f"Scene {display_scene_number}"
+        captions[idx - 1] = preview_caption
+
         with st.expander(f"Scene {display_scene_number}: {media_path.name}"):
             if media_path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
                 if media_path.exists():
@@ -529,12 +542,12 @@ def _collect_scene_captions(
                         st.caption(f"Could not load video: {media_path.name}")
                 else:
                     st.caption(f"Video file not found on disk: {media_path.name}")
-                st.caption(f"Subtitle preview: {captions[idx - 1] or '(No subtitle)'}")
+                st.caption(f"Subtitle preview: {preview_caption or '(No subtitle)'}")
             else:
                 try:
                     preview_bytes = _render_subtitle_preview(
                         media_path,
-                        captions[idx - 1],
+                        preview_caption,
                         caption_style=caption_style,
                         burn_captions=burn_captions,
                     )
@@ -543,14 +556,14 @@ def _collect_scene_captions(
                     st.caption(f"Preview unavailable ({media_path.name}): {_preview_exc}")
             edited_caption = st.text_area(
                 "Subtitle for this scene",
-                value=captions[idx - 1],
                 height=90,
-                key=f"video_scene_caption_{idx}_{media_path.name}",
+                key=text_key,
             )
             captions[idx - 1] = (
                 format_caption(edited_caption, max_lines=caption_max_lines, max_chars_per_line=caption_max_chars)
                 or f"Scene {display_scene_number}"
             )
+            st.session_state[sync_key] = captions[idx - 1]
 
     captions = _normalize_caption_list(captions, len(media_files))
     st.session_state[state_key] = captions
