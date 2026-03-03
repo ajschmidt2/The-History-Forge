@@ -796,22 +796,34 @@ def tab_video_compile() -> None:
             index=0 if meta_defaults.get("aspect_ratio") != "16:9" else 1,
             key="video_aspect_ratio",
         )
+    raw_fps = st.session_state.get("video_fps", meta_defaults.get("fps", 30))
+    try:
+        fps_default = int(raw_fps)
+    except (TypeError, ValueError):
+        fps_default = 30
+    fps_default = min(60, max(24, fps_default))
+    st.session_state["video_fps"] = fps_default
     with settings_cols[2]:
         fps = st.number_input(
             "FPS",
             min_value=24,
             max_value=60,
-            value=int(meta_defaults.get("fps", 30)),
+            value=fps_default,
             key="video_fps",
         )
-    scene_duration_default = meta_defaults.get("scene_duration", 3.0)
-    if scene_duration_default is None:
+
+    raw_scene_duration = st.session_state.get("video_scene_duration", meta_defaults.get("scene_duration", 3.0))
+    try:
+        scene_duration_default = float(raw_scene_duration)
+    except (TypeError, ValueError):
         scene_duration_default = 3.0
+    scene_duration_default = min(12.0, max(1.0, scene_duration_default))
+    st.session_state["video_scene_duration"] = scene_duration_default
     scene_duration = st.slider(
         "Seconds per image",
         min_value=1.0,
         max_value=12.0,
-        value=float(scene_duration_default),
+        value=scene_duration_default,
         step=0.5,
         help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
         key="video_scene_duration",
