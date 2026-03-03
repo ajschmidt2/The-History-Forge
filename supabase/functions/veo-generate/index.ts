@@ -12,48 +12,45 @@ const corsHeaders = {
 // ---------------------------------------------------------------------------
 
 type ServiceAccount = {
-  type?: string;
   project_id?: string;
-  private_key_id?: string;
-  private_key?: string;
   client_email?: string;
-  client_id?: string;
+  private_key?: string;
   token_uri?: string;
 };
 
-function loadServiceAccount(): Required<Pick<ServiceAccount, "private_key" | "client_email" | "project_id">> & ServiceAccount {
+function loadServiceAccount(): Required<Pick<ServiceAccount, "project_id" | "client_email" | "private_key">> & ServiceAccount {
   const raw = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_JSON");
-  if (!raw) {
-    throw new Error("Missing secret: GOOGLE_SERVICE_ACCOUNT_JSON (set it in Supabase Edge Function Secrets)");
-  }
+  console.log("[auth] has_secret:", Boolean(raw), "[auth] secret_len:", raw?.length ?? 0);
+
+  if (!raw) throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON secret");
 
   let sa: ServiceAccount;
   try {
     sa = JSON.parse(raw);
   } catch (e) {
-    throw new Error(`GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. Ensure it is ONE LINE minified JSON. Parse error: ${String(e)}`);
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON invalid JSON (must be one-line minified). " + String(e));
   }
 
-  if (!sa.private_key) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON missing field: private_key");
-  }
-  if (!sa.client_email) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON missing field: client_email");
-  }
-  if (!sa.project_id) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON missing field: project_id");
-  }
+  if (!sa.project_id) throw new Error("Service account JSON missing project_id");
+  if (!sa.client_email) throw new Error("Service account JSON missing client_email");
+  if (!sa.private_key) throw new Error("Service account JSON missing private_key");
 
-  // Convert literal "\n" sequences into actual newlines for PEM parsing
-  const normalizedKey = sa.private_key.replace(/\\n/g, "\n").trim() + "\n";
-  sa.private_key = normalizedKey;
+  // Normalize PEM: convert literal backslash-n sequences into real newlines
+  const before = sa.private_key;
+  const normalized = before.replace(/\\n/g, "\n").trim() + "\n";
 
-  // Validate PEM markers
-  if (!normalizedKey.includes("-----BEGIN PRIVATE KEY-----") || !normalizedKey.includes("-----END PRIVATE KEY-----")) {
-    throw new Error(
-      "Service account private_key is not a valid PEM after normalization. " +
-      "Ensure the JSON 'private_key' value contains \\n sequences and was not altered when pasted into secrets.",
-    );
+  console.log(
+    "[auth] email_present:", Boolean(sa.client_email),
+    "[auth] key_has_BEGIN:", before.includes("BEGIN PRIVATE KEY"),
+    "[auth] key_has_literal_slashn:", before.includes("\\n"),
+    "[auth] normalized_has_newlines:", normalized.includes("\n"),
+    "[auth] normalized_has_END:", normalized.includes("END PRIVATE KEY"),
+  );
+
+  sa.private_key = normalized;
+
+  if (!sa.private_key.includes("-----BEGIN PRIVATE KEY-----") || !sa.private_key.includes("-----END PRIVATE KEY-----")) {
+    throw new Error("private_key is not valid PEM after normalization. Re-check how the JSON was generated/pasted.");
   }
 
   return sa as any;
@@ -69,9 +66,7 @@ function base64urlEncode(data: Uint8Array | string): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
-async function fetchAccessToken(scope: string): Promise<string> {
-  const sa = loadServiceAccount();
-  console.log("Loaded service account for:", sa.client_email);
+async function fetchAccessToken(scope: string, sa: Required<Pick<ServiceAccount, "project_id" | "client_email" | "private_key">> & ServiceAccount): Promise<string> {
 
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };
@@ -139,18 +134,20 @@ async function fetchAccessToken(scope: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
-
-  if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
   try {
+    const sa = loadServiceAccount();
+
+    if (req.method === "OPTIONS") {
+      return new Response("ok", { headers: corsHeaders });
+    }
+
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const { prompt, aspectRatio } = await req.json();
     if (!prompt || typeof prompt !== "string") {
       return new Response(JSON.stringify({ error: "'prompt' is required" }), {
@@ -159,7 +156,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const projectId = Deno.env.get("GOOGLE_CLOUD_PROJECT_ID") ?? "";
+    const projectId = Deno.env.get("GOOGLE_CLOUD_PROJECT_ID") ?? sa.project_id;
     const location = Deno.env.get("GOOGLE_CLOUD_LOCATION") ?? "us-central1";
     if (!projectId) {
       throw new Error("Missing Supabase secret GOOGLE_CLOUD_PROJECT_ID");
@@ -171,6 +168,7 @@ Deno.serve(async (req) => {
 
     const accessToken = await fetchAccessToken(
       "https://www.googleapis.com/auth/cloud-platform",
+      sa,
     );
 
     const submitUrl =
@@ -276,11 +274,10 @@ Deno.serve(async (req) => {
     }
 
     throw new Error("Veo generation timed out");
-  } catch (error) {
+  } catch (err) {
+    console.error("[fatal]", err instanceof Error ? err.stack ?? err.message : String(err));
     return new Response(
-      JSON.stringify({
-        error: error instanceof Error ? error.message : "Unknown error",
-      }),
+      JSON.stringify({ ok: false, error: String(err) }),
       {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
