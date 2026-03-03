@@ -234,7 +234,11 @@ def _preview_caption_style(meta_defaults: dict) -> tuple[bool, CaptionStyle]:
     if isinstance(selected_preset_name, str) and selected_preset_name in presets:
         style = presets[selected_preset_name].model_copy(deep=True)
 
-    style.font_size = int(st.session_state.get("video_caption_font_size", style.font_size))
+    raw_font_size = st.session_state.get("video_caption_font_size", style.font_size)
+    try:
+        style.font_size = int(raw_font_size)
+    except (TypeError, ValueError):
+        style.font_size = int(style.font_size)
 
     position_options = _caption_position_options()
     selected_label = st.session_state.get("video_caption_position")
@@ -534,7 +538,7 @@ def _collect_scene_captions(
                         caption_style=caption_style,
                         burn_captions=burn_captions,
                     )
-                    st.image(preview_bytes, width="stretch")
+                    st.image(preview_bytes, use_container_width=True)
                 except Exception as _preview_exc:
                     st.caption(f"Preview unavailable ({media_path.name}): {_preview_exc}")
             edited_caption = st.text_area(
@@ -792,28 +796,45 @@ def tab_video_compile() -> None:
             index=0 if meta_defaults.get("aspect_ratio") != "16:9" else 1,
             key="video_aspect_ratio",
         )
+    raw_fps = st.session_state.get("video_fps", meta_defaults.get("fps", 30))
+    try:
+        fps_default = int(raw_fps)
+    except (TypeError, ValueError):
+        fps_default = 30
+    fps_default = min(60, max(24, fps_default))
+    st.session_state["video_fps"] = fps_default
     with settings_cols[2]:
         fps = st.number_input(
             "FPS",
             min_value=24,
             max_value=60,
-            value=int(meta_defaults.get("fps", 30)),
+            value=fps_default,
             key="video_fps",
         )
-    scene_duration_default = meta_defaults.get("scene_duration", 3.0)
-    if scene_duration_default is None:
+
+    raw_scene_duration = st.session_state.get("video_scene_duration", meta_defaults.get("scene_duration", 3.0))
+    try:
+        scene_duration_default = float(raw_scene_duration)
+    except (TypeError, ValueError):
         scene_duration_default = 3.0
+    scene_duration_default = min(12.0, max(1.0, scene_duration_default))
+    st.session_state["video_scene_duration"] = scene_duration_default
     scene_duration = st.slider(
         "Seconds per image",
         min_value=1.0,
         max_value=12.0,
-        value=float(scene_duration_default),
+        value=scene_duration_default,
         step=0.5,
         help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
         key="video_scene_duration",
     )
 
-    preview_burn_captions, preview_caption_style = _preview_caption_style(meta_defaults)
+    try:
+        preview_burn_captions, preview_caption_style = _preview_caption_style(meta_defaults)
+    except Exception as _preview_style_exc:
+        st.warning(f"Using default caption preview settings due to: {_preview_style_exc}")
+        preview_burn_captions = bool(meta_defaults.get("burn_captions", True))
+        preview_caption_style = CaptionStyle()
 
     st.markdown("### Scene subtitle review")
     if media_files:
