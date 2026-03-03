@@ -8,6 +8,7 @@ from utils import Scene, split_script_into_scenes
 from src.ui.state import active_project_id, clear_downstream, scenes_ready, script_ready
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.utils import get_media_duration
+import src.supabase_storage as _sb_store
 
 
 def _saved_videos_for_project(project_id: str) -> list[Path]:
@@ -16,6 +17,102 @@ def _saved_videos_for_project(project_id: str) -> list[Path]:
     if not d.exists():
         return []
     return sorted(d.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _cloud_generated_videos_for_project(project_id: str) -> list[dict[str, str]]:
+    """Return generated video records from Supabase for *project_id*, newest first."""
+    if not project_id or not _sb_store.is_configured():
+        return []
+
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    sb = _sb_store.get_client()
+    if sb is not None:
+        try:
+            resp = (
+                sb.table("assets")
+                .select("filename, url, created_at")
+                .eq("project_id", project_id)
+                .eq("asset_type", "generated_video")
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+            )
+            for row in resp.data or []:
+                filename = str(row.get("filename") or "").strip()
+                url = str(row.get("url") or "").strip()
+                if not url:
+                    continue
+                dedupe_key = (filename, url)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                rows.append(
+                    {
+                        "filename": filename or "video",
+                        "url": url,
+                        "created_at": str(row.get("created_at") or ""),
+                    }
+                )
+        except Exception:
+            pass
+
+    try:
+        for row in _sb_store.list_generated_videos(project_id, limit=50):
+            filename = str(row.get("filename") or "").strip()
+            url = str(row.get("url") or "").strip()
+            if not url:
+                continue
+            dedupe_key = (filename, url)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            rows.append(
+                {
+                    "filename": filename or "video",
+                    "url": url,
+                    "created_at": str(row.get("created_at") or ""),
+                }
+            )
+    except Exception:
+        pass
+
+    rows.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return rows
+
+
+def _saved_video_choices(project_id: str) -> list[dict[str, str | None]]:
+    """Build assignable video choices from local files + Supabase generated videos."""
+    choices: list[dict[str, str | None]] = []
+
+    for path in _saved_videos_for_project(project_id):
+        path_str = str(path)
+        choices.append(
+            {
+                "label": f"{path.name} · local",
+                "video_path": path_str,
+                "video_url": None,
+                "source": "local",
+            }
+        )
+
+    for row in _cloud_generated_videos_for_project(project_id):
+        filename = str(row.get("filename") or "video")
+        url = str(row.get("url") or "")
+        if not url:
+            continue
+        # Keep cloud options visible even if similarly named local file exists.
+        choices.append(
+            {
+                "label": f"{filename} · cloud",
+                "video_path": None,
+                "video_url": url,
+                "source": "cloud",
+            }
+        )
+
+    return choices
 
 
 _TRANSITION_OPTIONS = [
@@ -465,28 +562,36 @@ def tab_create_scenes() -> None:
         else:
             st.caption("No AI video assigned to this scene.")
 
-        # Picker: load from saved project videos
+        # Picker: load from local files or Supabase generated-videos bucket
         project_id = active_project_id()
-        saved_vids = _saved_videos_for_project(project_id)
-        if saved_vids:
-            vid_names = [v.name for v in saved_vids]
+        video_choices = _saved_video_choices(project_id)
+        if video_choices:
+            option_labels = [str(item["label"] or "video") for item in video_choices]
             pick_key = _scene_widget_key("scene_vid_pick_", selected)
             assign_key = _scene_widget_key("scene_vid_assign_", selected)
             picked = st.selectbox(
                 "Load saved video",
-                ["— choose —"] + vid_names,
+                ["— choose —"] + option_labels,
                 key=pick_key,
-                help="Select a previously generated video to assign to this scene.",
+                help="Select a previously generated video from local project storage or Supabase.",
             )
-            if st.button("Assign video", key=assign_key, disabled=(picked == "— choose —")):
-                chosen_path = saved_vids[vid_names.index(picked)]
-                selected.video_path = str(chosen_path)
-                selected.video_url = None
+
+            chosen = None
+            if picked != "— choose —":
+                chosen = video_choices[option_labels.index(picked)]
+                preview_src = chosen.get("video_path") or chosen.get("video_url")
+                if preview_src:
+                    st.video(str(preview_src))
+
+            if st.button("Assign video", key=assign_key, disabled=(chosen is None)):
+                selected.video_path = str(chosen.get("video_path") or "") or None
+                selected.video_url = str(chosen.get("video_url") or "") or None
                 selected.video_loop = bool(getattr(selected, "video_loop", False))
                 selected.video_muted = True
                 selected.video_volume = 0.0
                 _remove_scene_image_asset(selected)
-                st.toast(f"Video '{picked}' assigned to scene {selected.index}.")
+                source = str(chosen.get("source") or "saved")
+                st.toast(f"Video '{picked}' ({source}) assigned to scene {selected.index}.")
                 st.rerun()
         else:
             st.caption("Use the **AI Video Generator** tab to create videos for this project.")
