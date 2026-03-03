@@ -66,6 +66,44 @@ function base64urlEncode(data: Uint8Array | string): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
+function pemToPkcs8Bytes(pem: string): Uint8Array {
+  const p = pem.trim();
+
+  // Accept only PKCS#8 key format
+  if (!p.includes("-----BEGIN PRIVATE KEY-----") || !p.includes("-----END PRIVATE KEY-----")) {
+    // If you ever see RSA PRIVATE KEY here, the key is PKCS#1 and WebCrypto pkcs8 import will fail.
+    throw new Error("Private key is not a PKCS#8 PEM (expected BEGIN/END PRIVATE KEY). Re-download the JSON key from GCP.");
+  }
+
+  // Remove markers
+  let body = p
+    .replace("-----BEGIN PRIVATE KEY-----", "")
+    .replace("-----END PRIVATE KEY-----", "");
+
+  // Strip whitespace first
+  body = body.replace(/\s+/g, "");
+
+  // Strip anything that is not base64 (this catches hidden chars/backslashes/etc.)
+  const cleaned = body.replace(/[^A-Za-z0-9+/=]/g, "");
+
+  if (cleaned.length < 1000) {
+    throw new Error(`PEM body unexpectedly short after cleaning (${cleaned.length} chars). Secret may be corrupted.`);
+  }
+
+  // Fix base64 padding if needed
+  const pad = cleaned.length % 4;
+  const padded = pad === 0 ? cleaned : cleaned + "=".repeat(4 - pad);
+
+  let binary: string;
+  try {
+    binary = atob(padded);
+  } catch (e) {
+    throw new Error("Failed to base64-decode PEM body. Secret likely contains invalid characters. " + String(e));
+  }
+
+  return Uint8Array.from(binary, (c) => c.charCodeAt(0));
+}
+
 async function fetchAccessToken(scope: string, sa: Required<Pick<ServiceAccount, "project_id" | "client_email" | "private_key">> & ServiceAccount): Promise<string> {
 
   const now = Math.floor(Date.now() / 1000);
@@ -82,21 +120,27 @@ async function fetchAccessToken(scope: string, sa: Required<Pick<ServiceAccount,
   const payloadB64 = base64urlEncode(JSON.stringify(payload));
   const signingInput = `${headerB64}.${payloadB64}`;
 
-  // Normalise PEM — the JSON value may store newlines as the literal "\n"
   const pem = sa.private_key;
-  const pemBody = pem
-    .replace(/-----BEGIN PRIVATE KEY-----/, "")
-    .replace(/-----END PRIVATE KEY-----/, "")
-    .replace(/\s+/g, "");
-  const keyBytes = Uint8Array.from(atob(pemBody), (c) => c.charCodeAt(0));
 
-  const cryptoKey = await crypto.subtle.importKey(
-    "pkcs8",
-    keyBytes,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
+  const keyBytes = pemToPkcs8Bytes(pem);
+
+  let cryptoKey: CryptoKey;
+  try {
+    cryptoKey = await crypto.subtle.importKey(
+      "pkcs8",
+      keyBytes,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+  } catch (e) {
+    throw new Error(
+      "WebCrypto could not import the service account private key as PKCS#8. " +
+      "This usually means the secret was pasted with corrupted characters or the key is not PKCS#8. " +
+      "Re-download a fresh service account JSON key from GCP and re-paste the ONE-LINE minified JSON. " +
+      "Import error: " + String(e),
+    );
+  }
 
   const signature = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
