@@ -510,6 +510,8 @@ def _collect_scene_captions(
     caption_style: CaptionStyle,
     burn_captions: bool,
     aspect_ratio: str,
+    scene_duration_by_index: dict[int, float] | None = None,
+    default_scene_duration: float = 3.0,
 ) -> list[str]:
     state_key = f"video_scene_captions::{timeline_path}"
     if state_key not in st.session_state or len(st.session_state[state_key]) != len(media_files):
@@ -533,7 +535,9 @@ def _collect_scene_captions(
         ) or f"Scene {display_scene_number}"
         captions[idx - 1] = preview_caption
 
+        scene_duration_seconds = float((scene_duration_by_index or {}).get(display_scene_number, default_scene_duration))
         with st.expander(f"Scene {display_scene_number}: {media_path.name}"):
+            st.caption(f"Scene duration: {scene_duration_seconds:.2f}s")
             if media_path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
                 if media_path.exists():
                     try:
@@ -849,6 +853,19 @@ def tab_video_compile() -> None:
         preview_burn_captions = bool(meta_defaults.get("burn_captions", True))
         preview_caption_style = CaptionStyle()
 
+    scene_duration_by_index: dict[int, float] = {}
+    for scene in st.session_state.get("scenes", []):
+        idx = getattr(scene, "index", None)
+        raw_duration = getattr(scene, "estimated_duration_sec", None)
+        if not isinstance(idx, int):
+            continue
+        try:
+            duration_value = float(raw_duration)
+        except (TypeError, ValueError):
+            continue
+        if duration_value > 0:
+            scene_duration_by_index[idx] = duration_value
+
     st.markdown("### Scene subtitle review")
     if media_files:
         scene_captions = _collect_scene_captions(
@@ -857,6 +874,8 @@ def tab_video_compile() -> None:
             caption_style=preview_caption_style,
             burn_captions=preview_burn_captions,
             aspect_ratio=str(st.session_state.get("video_aspect_ratio", meta_defaults.get("aspect_ratio", "9:16"))),
+            scene_duration_by_index=scene_duration_by_index,
+            default_scene_duration=float(scene_duration),
         )
         if st.button("Auto-fill subtitles from scene script excerpts", width="stretch", key="video_auto_captions"):
             try:
@@ -1135,6 +1154,22 @@ def tab_video_compile() -> None:
         if not timeline_path.exists():
             st.error("timeline.json is missing. Click Generate timeline.json first.")
             return
+
+        try:
+            refreshed_timeline_path = sync_timeline_for_project(
+                project_path=project_path,
+                project_id=project_name,
+                title=title,
+                media_files=media_files,
+                session_scenes=st.session_state.get("scenes", []),
+                scene_captions=scene_captions,
+                meta_overrides=timeline_meta_overrides,
+            )
+        except ValueError as exc:
+            st.error(f"Timeline refresh before render failed: {exc}")
+            return
+        if refreshed_timeline_path is not None:
+            timeline_path = refreshed_timeline_path
 
         try:
             timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
