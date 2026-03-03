@@ -555,7 +555,7 @@ def _collect_scene_captions(
                         caption_style=caption_style,
                         burn_captions=burn_captions,
                     )
-                    st.image(preview_bytes, use_container_width=True)
+                    st.image(preview_bytes, width="stretch")
                 except Exception as _preview_exc:
                     st.caption(f"Preview unavailable ({media_path.name}): {_preview_exc}")
             edited_caption = st.text_area(

@@ -404,6 +404,38 @@ def upload_generated_video(
     return public_url
 
 
+def record_generated_video_asset(*, project_id: str, public_url: str, prompt: str, provider: str) -> None:
+    """Record a generated-video asset row using an existing public URL (no upload)."""
+    sb = get_client()
+    if sb is None:
+        return
+
+    safe_provider = str(provider or "unknown").strip().lower() or "unknown"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    metadata_prompt = " ".join(str(prompt or "").split())[:80]
+    safe_prompt = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in metadata_prompt).strip("_")
+    suffix = f"_{safe_prompt}" if safe_prompt else ""
+    filename = f"{safe_provider}_{stamp}{suffix}.mp4"
+
+    payload = {
+        "project_id": project_id,
+        "asset_type": "generated_video",
+        "filename": filename,
+        "url": public_url,
+        "provider": safe_provider,
+        "prompt": prompt,
+    }
+
+    try:
+        sb.table("assets").insert(payload).execute()
+        return
+    except Exception:
+        pass
+
+    # Fallback for schemas that do not yet include prompt/provider columns.
+    record_asset(project_id, "generated_video", filename, public_url)
+
+
 def sync_project_assets(project_id: str, project_dir: Path) -> dict[str, list[str]]:
     """Upload all local assets for *project_id* to Supabase.
 

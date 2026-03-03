@@ -401,7 +401,7 @@ def tab_ai_video_generator() -> None:
                 "then return here to assign this video to a scene."
             )
 
-        if st.button("Generate another video", use_container_width=False):
+        if st.button("Generate another video", width="content"):
             _reset_result()
             st.rerun()
 

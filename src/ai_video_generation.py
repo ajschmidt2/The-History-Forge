@@ -3,7 +3,8 @@
 Both providers follow an async pattern:
   • Veo is proxied through a Supabase Edge Function (server-side Vertex AI call).
   • Sora is called directly from this backend module.
-  • The resulting video bytes are optionally saved locally, uploaded to the
+  • Veo returns a public URL from the Edge Function (no backend byte upload).
+  • Sora returns bytes that are optionally saved locally, uploaded to the
     configured Supabase video bucket, and recorded in the ``assets`` table.
 
 Public API
@@ -86,17 +87,14 @@ _POLL_INTERVAL_S = 8   # seconds between status polls
 _MAX_POLLS = 90        # up to 12 minutes total
 
 
-def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
-    """Generate Veo video bytes by invoking a Supabase Edge Function."""
+def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> str:
+    """Generate a Veo video and return its public URL from the Edge Function."""
     supabase_url = get_secret("SUPABASE_URL")
     supabase_key = _supabase_invoke_key()
     function_name = get_secret("SUPABASE_VEO_FUNCTION_NAME", "veo-generate")
 
     if not supabase_url or not supabase_key:
-        raise ValueError(
-            "Veo is not configured. Set SUPABASE_URL and one of "
-            "SUPABASE_KEY / SUPABASE_ANON_KEY so the app can call the Supabase Edge Function."
-        )
+        raise ValueError("Veo not configured. Need SUPABASE_URL and SUPABASE_KEY/SUPABASE_ANON_KEY.")
 
     veo_ratio = aspect_ratio if aspect_ratio in VEO_ASPECT_RATIOS else "16:9"
     invoke_url = f"{supabase_url.rstrip('/')}/functions/v1/{function_name}"
@@ -109,25 +107,17 @@ def _generate_veo(prompt: str, aspect_ratio: str = "16:9") -> bytes:
 
     resp = requests.post(invoke_url, json=payload, headers=headers, timeout=300)
     if resp.status_code == 401:
-        raise PermissionError(
-            "Supabase Edge Function returned 401 Unauthorized.\n\n"
-            "Most common fix: redeploy the function with JWT verification disabled:\n"
-            "  supabase functions deploy veo-generate --no-verify-jwt\n\n"
-            "Also confirm that SUPABASE_KEY in .streamlit/secrets.toml is set to "
-            "your real anon/public key (Project Settings → API in the Supabase "
-            "dashboard), not a placeholder value."
-        )
+        raise PermissionError("Edge Function returned 401. Redeploy with --no-verify-jwt.")
     resp.raise_for_status()
 
     body = resp.json()
-    if body.get("error"):
+    if body.get("ok") is False and body.get("error"):
         raise RuntimeError(str(body["error"]))
 
-    b64 = body.get("videoBase64")
-    if not b64:
-        raise RuntimeError("Veo Edge Function returned no videoBase64 payload.")
-
-    return base64.b64decode(b64)
+    public_url = body.get("public_url") or body.get("publicUrl") or body.get("url")
+    if not public_url:
+        raise RuntimeError(f"Veo Edge Function returned no public_url. Keys={list(body.keys())}")
+    return str(public_url)
 
 
 # ---------------------------------------------------------------------------
@@ -595,8 +585,9 @@ def generate_video(
         Desired aspect ratio string such as ``"16:9"``, ``"9:16"``, or ``"1:1"``.
         Defaults to ``"16:9"`` when the value is unsupported by the chosen provider.
     save_dir:
-        Optional directory path.  When supplied the raw MP4 bytes are written to
-        ``{save_dir}/{provider}_{short_id}.mp4`` before uploading to Supabase.
+        Optional directory path. When supplied, provider output is persisted as
+        ``{save_dir}/{provider}_{short_id}.mp4`` (downloaded from URL for Veo,
+        raw bytes for Sora).
     seconds:
         Desired Sora clip length. Supported values are ``4``, ``8``, or ``12``.
         Ignored for providers that do not use this field.
@@ -604,8 +595,9 @@ def generate_video(
     Returns
     -------
     tuple[str, str | None]
-        ``(public_url, local_path)`` where *public_url* is the Supabase URL (or a
-        ``data:`` URL when Supabase is not configured) and *local_path* is the
+        ``(public_url, local_path)`` where *public_url* is the provider-backed
+        URL (Veo Edge Function URL or Supabase URL for Sora, with ``data:`` URL
+        fallback when Sora upload is unavailable) and *local_path* is the
         absolute path to the locally saved file (``None`` if not saved locally).
 
     Raises
@@ -618,8 +610,32 @@ def generate_video(
     provider = (provider or "").strip().lower()
 
     if provider == "veo":
-        video_bytes = _generate_veo(prompt, aspect_ratio=aspect_ratio)
-    elif provider == "sora":
+        public_url = _generate_veo(prompt, aspect_ratio=aspect_ratio)
+
+        short_id = uuid.uuid4().hex[:8]
+        filename = f"{provider}_{short_id}.mp4"
+        local_path: Optional[str] = None
+        if save_dir is not None:
+            try:
+                save_path = Path(save_dir)
+                save_path.mkdir(parents=True, exist_ok=True)
+                dest = save_path / filename
+                dl = requests.get(public_url, timeout=180)
+                dl.raise_for_status()
+                dest.write_bytes(dl.content)
+                local_path = str(dest.resolve())
+            except (OSError, requests.RequestException):
+                local_path = None
+
+        _sb_store.record_generated_video_asset(
+            project_id=project_id,
+            public_url=public_url,
+            prompt=prompt,
+            provider=provider,
+        )
+        return public_url, local_path
+
+    if provider == "sora":
         video_bytes = _generate_sora(prompt, aspect_ratio=aspect_ratio, seconds=seconds)
     else:
         raise ValueError(f"Unknown video provider '{provider}'.  Use 'veo' or 'sora'.")
