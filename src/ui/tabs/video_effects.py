@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,7 @@ from typing import Optional
 import streamlit as st
 
 from src.ui.state import PROJECTS_ROOT, active_project_id, slugify_project_id
+from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.effects_config import (
     GlobalEffectsConfig,
     SceneEffectsConfig,
@@ -58,6 +60,49 @@ def _effects_clips_dir() -> Path:
     d = _project_dir() / _EFFECTS_CLIPS_SUBDIR
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _scene_videos_dir(project_id: str) -> Path:
+    d = PROJECTS_ROOT / slugify_project_id(project_id) / "assets" / "videos"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _apply_effects_clips_to_scene_editor(scenes: list, project_id: str, clips_dir: Path) -> tuple[int, int]:
+    """Copy scene-matched effects clips into canonical scene-video slots.
+
+    This makes rendered effects clips immediately visible in the Scene Editor's
+    "AI video clip" section by assigning `scene.video_path` for each matching scene.
+    """
+    assigned = 0
+    missing = 0
+    videos_dir = _scene_videos_dir(project_id)
+
+    for idx, scene in enumerate(scenes, start=1):
+        src = clips_dir / f"s{idx:02d}_effects.mp4"
+        if not src.exists():
+            missing += 1
+            continue
+        dest = videos_dir / f"s{idx:02d}.mp4"
+        shutil.copy2(src, dest)
+
+        scene.video_path = str(dest.resolve())
+        scene.video_url = None
+        scene.video_object_path = None
+        scene.video_loop = False
+        scene.video_muted = True
+        scene.video_volume = 0.0
+        assigned += 1
+
+    if assigned > 0:
+        sync_timeline_for_project(
+            project_path=_project_dir(),
+            project_id=project_id,
+            title=str(st.session_state.get("project_title", "") or ""),
+            session_scenes=scenes,
+            meta_overrides={"transition_types": st.session_state.get("scene_transition_types", [])},
+        )
+    return assigned, missing
 
 
 # ── Global Defaults panel ─────────────────────────────────────────────────────
@@ -870,7 +915,7 @@ def tab_video_effects() -> None:
     st.divider()
 
     # ── Save config button ────────────────────────────────────────────────────
-    save_col, render_col = st.columns([1, 2])
+    save_col, apply_col, render_col = st.columns([1, 1.3, 1.7])
     with save_col:
         if st.button("💾 Save config", use_container_width=True):
             ok_g = save_global_config(global_cfg, project_id)
@@ -879,6 +924,13 @@ def tab_video_effects() -> None:
                 st.success("Effects config saved.")
             else:
                 st.error("Could not save config (check logs).")
+
+    with apply_col:
+        apply_to_scene_editor_btn = st.button(
+            "🎞️ Apply rendered clips to Scene Editor",
+            use_container_width=True,
+            help="Copies s01/s02/... effects clips into canonical scene video slots so each scene shows its matching video in the Scene Editor.",
+        )
 
     with render_col:
         render_btn = st.button(
@@ -891,6 +943,22 @@ def tab_video_effects() -> None:
                 "marks scenes as ready for final assembly."
             ),
         )
+
+    if apply_to_scene_editor_btn:
+        clips_dir = _effects_clips_dir()
+        assigned, missing = _apply_effects_clips_to_scene_editor(
+            scenes=scenes,
+            project_id=project_id,
+            clips_dir=clips_dir,
+        )
+        if assigned == 0:
+            st.warning("No rendered effects clips found to apply. Render clips first.")
+        elif missing == 0:
+            st.success(f"Applied {assigned} rendered clip(s) to their matching scenes.")
+        else:
+            st.warning(
+                f"Applied {assigned} clip(s). {missing} scene(s) had no rendered effects clip and were left unchanged."
+            )
 
     if render_btn:
         # Auto-save config first.
