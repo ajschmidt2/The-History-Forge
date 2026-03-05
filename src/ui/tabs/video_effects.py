@@ -669,7 +669,7 @@ def _render_assign_clips_section(
                     cached_thumb = st.session_state.get(thumb_key, "")
                     if cached_thumb:
                         try:
-                            st.image(cached_thumb, use_container_width=True)
+                            st.image(cached_thumb, width="stretch")
                         except Exception:
                             pass
 
@@ -766,7 +766,7 @@ def _render_assign_clips_section(
                             st.caption(f"✓ {picked}")
 
             with row_cols[2]:
-                if st.button("Assign", key=f"clip_assign_btn_s{scene_num:02d}", use_container_width=True):
+                if st.button("Assign", key=f"clip_assign_btn_s{scene_num:02d}", width="stretch"):
                     if picked == "None assigned":
                         if _sb.is_configured():
                             _sb.remove_clip_assignment(project_id, scene_num)
@@ -917,7 +917,7 @@ def tab_video_effects() -> None:
     # ── Save config button ────────────────────────────────────────────────────
     save_col, apply_col, render_col = st.columns([1, 1.3, 1.7])
     with save_col:
-        if st.button("💾 Save config", use_container_width=True):
+        if st.button("💾 Save config", width="stretch"):
             ok_g = save_global_config(global_cfg, project_id)
             ok_s = save_scene_configs(updated_scene_cfgs, project_id)
             if ok_g or ok_s:
@@ -928,7 +928,7 @@ def tab_video_effects() -> None:
     with apply_col:
         apply_to_scene_editor_btn = st.button(
             "🎞️ Apply rendered clips to Scene Editor",
-            use_container_width=True,
+            width="stretch",
             help="Copies s01/s02/... effects clips into canonical scene video slots so each scene shows its matching video in the Scene Editor.",
         )
 
@@ -936,7 +936,7 @@ def tab_video_effects() -> None:
         render_btn = st.button(
             "🎬 Apply Effects & Render Clips",
             type="primary",
-            use_container_width=True,
+            width="stretch",
             help=(
                 "Renders each scene image through the effects chain, saves clips "
                 "locally under assets/effects_clips/, uploads to Supabase, and "

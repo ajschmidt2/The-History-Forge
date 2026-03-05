@@ -1,5 +1,6 @@
 from pathlib import Path
 import io
+import hashlib
 
 import streamlit as st
 from PIL import Image, UnidentifiedImageError
@@ -13,6 +14,11 @@ from src.ui.timeline_sync import sync_timeline_for_project
 
 MAX_UPLOAD_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_UPLOAD_IMAGE_PIXELS = 40_000_000
+
+
+def _upload_fingerprint(name: str, payload: bytes) -> str:
+    digest = hashlib.sha256(payload).hexdigest()
+    return f"{name}:{len(payload)}:{digest}"
 
 
 def _normalize_uploaded_image_bytes(image_bytes: bytes) -> tuple[bytes | None, str | None]:
@@ -122,6 +128,17 @@ def tab_create_images() -> None:
         help="When uploaded, files are assigned to scenes in order: first file -> Scene 1, second -> Scene 2, etc.",
     )
     if bulk_uploads:
+        bulk_fingerprints: list[str] = []
+        for upload in bulk_uploads:
+            payload = upload.getvalue()
+            bulk_fingerprints.append(_upload_fingerprint(upload.name, payload))
+        current_bulk_signature = "|".join(bulk_fingerprints)
+        last_bulk_signature = str(st.session_state.get("bulk_scene_upload_signature", ""))
+        if current_bulk_signature == last_bulk_signature:
+            st.caption("Bulk uploads already applied. Upload different files to re-apply.")
+            bulk_uploads = []
+
+    if bulk_uploads:
         applied = 0
         failed_uploads: list[str] = []
         for scene, upload in zip(st.session_state.scenes, bulk_uploads):
@@ -140,6 +157,7 @@ def tab_create_images() -> None:
                 applied += 1
             except Exception as exc:  # noqa: BLE001 - avoid breaking whole bulk upload on one file
                 failed_uploads.append(f"Scene {scene.index:02d}: {exc}")
+        st.session_state["bulk_scene_upload_signature"] = current_bulk_signature
         _sync_project_timeline_from_session_scenes()
         if applied:
             st.success(f"Applied {applied} uploaded image(s) to scenes and saved them to assets/images.")
@@ -217,6 +235,11 @@ def tab_create_images() -> None:
             if uploaded_scene_image is not None:
                 try:
                     upload_bytes = uploaded_scene_image.getvalue()
+                    upload_signature = _upload_fingerprint(uploaded_scene_image.name, upload_bytes)
+                    signature_key = f"scene_upload_signature_{s.index}"
+                    if st.session_state.get(signature_key) == upload_signature:
+                        st.caption("This upload was already applied. Choose a different file to replace it.")
+                        continue
                     normalized_bytes, validation_error = _normalize_uploaded_image_bytes(upload_bytes)
                     if validation_error:
                         st.error(validation_error)
@@ -225,6 +248,7 @@ def tab_create_images() -> None:
                         st.error("Uploaded file could not be processed.")
                         continue
                     sync_warning = _save_scene_image_bytes(s, normalized_bytes)
+                    st.session_state[signature_key] = upload_signature
                     _sync_project_timeline_from_session_scenes()
                     st.success(f"Uploaded image applied to scene {s.index:02d}.")
                     if sync_warning:

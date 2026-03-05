@@ -66,7 +66,7 @@ def _render_effects_clip_for_scene(scene: "Scene", project_id: str) -> None:
     cached_thumb = st.session_state.get(thumb_key, "")
     if cached_thumb:
         try:
-            st.image(cached_thumb, use_container_width=True)
+            st.image(cached_thumb, width="stretch")
         except Exception:
             pass
 
@@ -88,11 +88,11 @@ def _render_effects_clip_for_scene(scene: "Scene", project_id: str) -> None:
     action_cols = st.columns(2)
     with action_cols[0]:
         change_key = f"scene_change_clip_{scene_num}_{getattr(scene, 'scene_id', '')}"
-        if st.button("🔁 Change Clip", key=change_key, use_container_width=True):
+        if st.button("🔁 Change Clip", key=change_key, width="stretch"):
             st.info("Go to the **✨ Video Effects** tab → Assign Clips to Scenes to change the clip.")
     with action_cols[1]:
         remove_key = f"scene_remove_clip_{scene_num}_{getattr(scene, 'scene_id', '')}"
-        if st.button("🗑️ Remove Clip", key=remove_key, use_container_width=True):
+        if st.button("🗑️ Remove Clip", key=remove_key, width="stretch"):
             if _sb_store.is_configured():
                 _sb_store.remove_clip_assignment(project_id, scene_num)
                 _load_scene_clip_assignments.clear()
