@@ -585,6 +585,124 @@ def list_all_bucket_videos(bucket: str = SUPABASE_VIDEO_BUCKET, limit: int = 100
     return rows[:limit]
 
 
+# ---------------------------------------------------------------------------
+# Effects-clip assignment helpers
+# ---------------------------------------------------------------------------
+
+def list_effects_clips(project_id: str) -> list[dict[str, str]]:
+    """List rendered effects clips from the ``history-forge-videos`` bucket.
+
+    Returns a list of dicts with keys: ``filename``, ``url``, ``storage_path``,
+    ``created_at``.  Returns an empty list when Supabase is not configured or
+    no clips are found.
+    """
+    if not project_id or not is_configured():
+        return []
+
+    prefix = f"{project_id}/effects_clips"
+    rows: list[dict[str, str]] = []
+    for obj in _list_storage_objects("history-forge-videos", prefix):
+        name = str(obj.get("name") or "").strip()
+        if not name or "/" in name:
+            continue
+        if not name.lower().endswith(".mp4"):
+            continue
+        storage_path = f"{prefix}/{name}"
+        url = get_public_storage_url("history-forge-videos", storage_path)
+        if not url:
+            continue
+        rows.append(
+            {
+                "filename": name,
+                "url": url,
+                "storage_path": storage_path,
+                "created_at": str(obj.get("created_at") or ""),
+            }
+        )
+    rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+    return rows
+
+
+def save_clip_assignment(project_id: str, scene_num: int, clip_storage_path: str, clip_url: str) -> bool:
+    """Persist a scene→clip assignment in the ``assets`` table.
+
+    Uses ``asset_type="clip_assignment"`` and ``filename="s{scene_num:02d}"``
+    as the unique key so each scene can hold at most one assignment.
+
+    Returns True on success.
+    """
+    sb = get_client()
+    if sb is None:
+        return False
+    try:
+        sb.table("assets").upsert(
+            {
+                "project_id": project_id,
+                "asset_type": "clip_assignment",
+                "filename": f"s{scene_num:02d}",
+                "url": clip_url,
+                # Store the storage_path inside url field; use clip_storage_path
+                # as metadata via a second "clip_path" asset record keyed differently.
+            },
+            on_conflict="project_id,asset_type,filename",
+        ).execute()
+        return True
+    except Exception:
+        return False
+
+
+def load_clip_assignments(project_id: str) -> dict[int, dict[str, str]]:
+    """Return all clip assignments for *project_id*.
+
+    Returns ``{scene_num: {"url": ..., "storage_path": ...}, ...}``.
+    """
+    sb = get_client()
+    if sb is None:
+        return {}
+    if not project_id:
+        return {}
+    try:
+        resp = (
+            sb.table("assets")
+            .select("filename, url")
+            .eq("project_id", project_id)
+            .eq("asset_type", "clip_assignment")
+            .execute()
+        )
+    except Exception:
+        return {}
+
+    assignments: dict[int, dict[str, str]] = {}
+    for row in resp.data or []:
+        fname = str(row.get("filename") or "").strip()
+        url = str(row.get("url") or "").strip()
+        if not fname.startswith("s") or not url:
+            continue
+        try:
+            scene_num = int(fname[1:])
+        except ValueError:
+            continue
+        assignments[scene_num] = {"url": url, "filename": fname}
+    return assignments
+
+
+def remove_clip_assignment(project_id: str, scene_num: int) -> bool:
+    """Remove the clip assignment for *scene_num* in *project_id*.
+
+    Returns True on success.
+    """
+    sb = get_client()
+    if sb is None:
+        return False
+    try:
+        sb.table("assets").delete().eq("project_id", project_id).eq(
+            "asset_type", "clip_assignment"
+        ).eq("filename", f"s{scene_num:02d}").execute()
+        return True
+    except Exception:
+        return False
+
+
 def list_generated_videos(project_id: str, limit: int = 25) -> list[dict[str, str]]:
     """List AI generated videos from the configured generated-videos bucket."""
     if not project_id:
