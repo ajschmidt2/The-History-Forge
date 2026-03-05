@@ -22,6 +22,7 @@ from src.ui.tabs.paste_script import tab_paste_script
 from src.ui.tabs.prompts import tab_create_prompts
 from src.ui.tabs.scenes import tab_create_scenes
 from src.ui.tabs.thumbnail import tab_thumbnail_title
+from src.ui.tabs.video_effects import tab_video_effects
 from src.ui.tabs.video_studio import tab_video_compile
 from src.ui.tabs.voiceover import tab_voiceover
 
@@ -99,6 +100,7 @@ def main() -> None:
             "🖼️ Images",
             "🎙️ Voiceover",
             "📦 Export",
+            "✨ Video Effects",
             "🎬 Video Studio",
             "🖼️ Title + Thumbnail",
             "🎥 AI Video Generator",
@@ -120,10 +122,12 @@ def main() -> None:
     with tabs[6]:
         tab_export()
     with tabs[7]:
-        tab_video_compile()
+        tab_video_effects()
     with tabs[8]:
-        tab_thumbnail_title()
+        tab_video_compile()
     with tabs[9]:
+        tab_thumbnail_title()
+    with tabs[10]:
         tab_ai_video_generator()
 
     save_project_state(active_project_id())
