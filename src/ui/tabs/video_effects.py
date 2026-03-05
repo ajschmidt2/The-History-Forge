@@ -596,6 +596,10 @@ def _render_assign_clips_section(
         assignments: dict[int, dict] = _cached_clip_assignments(project_id)
     else:
         assignments = {}
+    # Merge session-local assignments so selectbox reflects them even when
+    # the Supabase save failed. Supabase values take precedence.
+    local_sess_assignments: dict = st.session_state.get("local_clip_assignments", {})
+    merged_assignments: dict[int, dict] = {**local_sess_assignments, **assignments}
 
     # ── Clip Library grid ──────────────────────────────────────────────────
     with st.expander(f"🎞️ Clip Library ({len(all_clips)} clip(s))", expanded=True):
@@ -653,11 +657,19 @@ def _render_assign_clips_section(
     clip_by_name = {c["filename"]: c for c in all_clips}
 
     def _find_assigned_clip_name(scene_num: int) -> str:
-        """Return the clip filename currently assigned to this scene, or 'None assigned'."""
-        info = assignments.get(scene_num)
+        """Return the clip filename currently assigned to this scene, or 'None assigned'.
+
+        Checks merged_assignments which includes both Supabase and session-local
+        assignments so the selectbox reflects assignments even when Supabase save failed.
+        """
+        info = merged_assignments.get(scene_num)
         if not info:
             return "None assigned"
         stored_url = info.get("url", "")
+        stored_fname = info.get("filename", "")
+        # Direct filename match (set when stored in session state)
+        if stored_fname and stored_fname in [c["filename"] for c in all_clips]:
+            return stored_fname
         if not stored_url:
             return "None assigned"
         for c in all_clips:
@@ -713,30 +725,76 @@ def _render_assign_clips_section(
                     if picked == "None assigned":
                         if _sb.is_configured():
                             _sb.remove_clip_assignment(project_id, scene_num)
+                        # Also remove from session state
+                        sess_del = dict(st.session_state.get("local_clip_assignments", {}))
+                        sess_del.pop(scene_num, None)
+                        st.session_state["local_clip_assignments"] = sess_del
                         _cached_clip_assignments.clear()
                         st.toast(f"Removed assignment for Scene {scene_num}.")
                     else:
                         chosen = clip_by_name.get(picked, {})
-                        clip_url_to_save = str(chosen.get("url") or chosen.get("local_path") or "")
+                        clip_url_to_save = str(chosen.get("url") or "")
+                        local_path_str = str(chosen.get("local_path") or "")
                         storage_path = str(chosen.get("storage_path") or "")
-                        if not clip_url_to_save:
-                            st.error("No URL found for this clip. Render and upload it first.")
+
+                        # If no Supabase URL yet but clip exists locally, try uploading it now.
+                        if not clip_url_to_save and local_path_str and _sb.is_configured():
+                            local_path_obj = Path(local_path_str)
+                            if local_path_obj.exists():
+                                with st.spinner("Uploading clip to Supabase…"):
+                                    try:
+                                        storage_path = f"{project_id}/effects_clips/{local_path_obj.name}"
+                                        clip_bytes = local_path_obj.read_bytes()
+                                        uploaded_url = _sb._upload_bytes(
+                                            "history-forge-videos",
+                                            storage_path,
+                                            clip_bytes,
+                                            "video/mp4",
+                                        )
+                                        if uploaded_url:
+                                            clip_url_to_save = str(uploaded_url)
+                                            _sb.record_asset(
+                                                project_id, "effects_clip",
+                                                local_path_obj.name, clip_url_to_save,
+                                            )
+                                            _cached_effects_clips.clear()
+                                    except Exception as _upload_exc:
+                                        log.warning(
+                                            "[effects_tab] On-the-fly upload failed for %s: %s",
+                                            local_path_str, _upload_exc,
+                                        )
+
+                        # Use Supabase URL if available; fall back to local path for session storage.
+                        effective_url = clip_url_to_save or local_path_str
+
+                        if not effective_url:
+                            st.error("No URL or local file found for this clip. Render clips first.")
                         elif _sb.is_configured():
                             ok = _sb.save_clip_assignment(
-                                project_id, scene_num, storage_path, clip_url_to_save
+                                project_id, scene_num, storage_path, effective_url
                             )
                             _cached_clip_assignments.clear()
                             if ok:
                                 st.toast(f"✓ '{picked}' assigned to Scene {scene_num}.")
                             else:
+                                # Supabase save failed — persist in session state so the
+                                # assignment is at least usable for the rest of this session.
+                                sess_assignments = dict(st.session_state.get("local_clip_assignments", {}))
+                                sess_assignments[scene_num] = {
+                                    "url": effective_url,
+                                    "filename": picked,
+                                }
+                                st.session_state["local_clip_assignments"] = sess_assignments
                                 st.warning(
-                                    "Supabase save failed — assignment visible this session only."
+                                    "Supabase save failed — assignment stored in session only "
+                                    "(will not persist after page refresh). "
+                                    "Check Supabase Diagnostics for details."
                                 )
                         else:
                             # Supabase not configured; store in session state only
                             sess_assignments = dict(st.session_state.get("local_clip_assignments", {}))
                             sess_assignments[scene_num] = {
-                                "url": clip_url_to_save,
+                                "url": effective_url,
                                 "filename": picked,
                             }
                             st.session_state["local_clip_assignments"] = sess_assignments

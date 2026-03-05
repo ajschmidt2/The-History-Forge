@@ -631,9 +631,27 @@ def save_clip_assignment(project_id: str, scene_num: int, clip_storage_path: str
 
     Returns True on success.
     """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+
+    if not clip_url:
+        _logger.warning("[supabase] save_clip_assignment: clip_url is empty for scene %d", scene_num)
+        return False
+
     sb = get_client()
     if sb is None:
+        _logger.warning("[supabase] save_clip_assignment: Supabase client unavailable for scene %d", scene_num)
         return False
+
+    # Ensure the project row exists before writing to assets (FK constraint).
+    try:
+        sb.table("projects").upsert(
+            {"id": project_id, "title": project_id},
+            on_conflict="id",
+        ).execute()
+    except Exception as _proj_exc:
+        _logger.warning("[supabase] save_clip_assignment: could not upsert project %r: %s", project_id, _proj_exc)
+
     try:
         sb.table("assets").upsert(
             {
@@ -641,13 +659,15 @@ def save_clip_assignment(project_id: str, scene_num: int, clip_storage_path: str
                 "asset_type": "clip_assignment",
                 "filename": f"s{scene_num:02d}",
                 "url": clip_url,
-                # Store the storage_path inside url field; use clip_storage_path
-                # as metadata via a second "clip_path" asset record keyed differently.
             },
             on_conflict="project_id,asset_type,filename",
         ).execute()
         return True
-    except Exception:
+    except Exception as exc:
+        _logger.warning(
+            "[supabase] save_clip_assignment failed for scene %d (project=%r): %s",
+            scene_num, project_id, exc,
+        )
         return False
 
 
