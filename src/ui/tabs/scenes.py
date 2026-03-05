@@ -272,13 +272,37 @@ def _scene_widget_key(prefix: str, scene: Scene) -> str:
     return f"{prefix}{scene.index}_{getattr(scene, 'scene_id', '')}"
 
 
+def _coerce_transition_types(raw: object, needed: int) -> list[str]:
+    values = raw if isinstance(raw, list) else []
+    normalized: list[str] = []
+    for item in values[: max(0, needed)]:
+        candidate = str(item or "fade").strip().lower()
+        normalized.append(candidate if candidate in _TRANSITION_OPTIONS else "fade")
+    if len(normalized) < needed:
+        normalized.extend(["fade"] * (needed - len(normalized)))
+    return normalized
+
+
 def _normalize_scene_transitions(scene_count: int) -> list[str]:
     needed = max(0, scene_count - 1)
-    current = st.session_state.get("scene_transition_types", [])
-    transitions = [str(item or "fade") for item in current] if isinstance(current, list) else []
-    transitions = [item if item in _TRANSITION_OPTIONS else "fade" for item in transitions[:needed]]
-    if len(transitions) < needed:
-        transitions.extend(["fade"] * (needed - len(transitions)))
+    list_values = st.session_state.get("scene_transition_types", [])
+    transitions = _coerce_transition_types(list_values, needed)
+
+    # Rehydrate from per-boundary widget state if present, then sanitize.
+    for i in range(needed):
+        widget_key = f"scene_transition_{i + 1}"
+        if widget_key in st.session_state:
+            candidate = str(st.session_state.get(widget_key) or "fade").strip().lower()
+            transitions[i] = candidate if candidate in _TRANSITION_OPTIONS else "fade"
+            st.session_state[widget_key] = transitions[i]
+
+    # Drop stale widget keys when scene count shrinks.
+    stale_keys = [k for k in st.session_state.keys() if k.startswith("scene_transition_")]
+    for key in stale_keys:
+        suffix = key.removeprefix("scene_transition_")
+        if suffix.isdigit() and int(suffix) > needed:
+            del st.session_state[key]
+
     st.session_state.scene_transition_types = transitions
     return transitions
 
