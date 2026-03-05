@@ -99,7 +99,12 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
     return media_files
 
 
-def _apply_scene_media_assignments(timeline: Timeline, session_scenes: list[Any] | None, project_path: Path) -> None:
+def _apply_scene_media_assignments(
+    timeline: Timeline,
+    session_scenes: list[Any] | None,
+    project_path: Path,
+    effects_clips_by_index: dict[int, Path] | None = None,
+) -> None:
     if not session_scenes:
         return
 
@@ -115,7 +120,13 @@ def _apply_scene_media_assignments(timeline: Timeline, session_scenes: list[Any]
         timeline_scene = timeline.scenes[target_pos]
         scene_id = f"s{idx:02d}"
 
-        if getattr(session_scene, "video_path", None) and Path(session_scene.video_path).exists():
+        # Effects clips (assigned via the Video Effects tab) take highest priority.
+        # They replace the original scene image/video in the compiled media list
+        # but are not stored on the session_scene object, so they must be passed in
+        # explicitly to avoid being overwritten with a fallback image path.
+        if effects_clips_by_index and idx in effects_clips_by_index:
+            media_path = str(effects_clips_by_index[idx])
+        elif getattr(session_scene, "video_path", None) and Path(session_scene.video_path).exists():
             media_path = str(Path(session_scene.video_path).resolve())
         elif getattr(session_scene, "video_object_path", None):
             media_path = f"storage://generated-videos/{session_scene.video_object_path}"
@@ -275,6 +286,15 @@ def sync_timeline_for_project(
             music_volume_db = -18.0
 
 
+    # Build an index of effects clips from media_files so _apply_scene_media_assignments
+    # can give them the highest priority (they are not stored on session_scene objects).
+    effects_clips_by_index: dict[int, Path] = {}
+    for mf in media_files:
+        if "effects_clips" in str(mf):
+            scene_num = _scene_number_from_path(mf)
+            if scene_num is not None:
+                effects_clips_by_index[scene_num] = mf
+
     scene_excerpts: list[str] = []
     scene_video_options: dict[int, dict[str, float | bool]] = {}
     if session_scenes:
@@ -314,7 +334,7 @@ def sync_timeline_for_project(
     )
 
     _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
-    _apply_scene_media_assignments(timeline, session_scenes, project_path)
+    _apply_scene_media_assignments(timeline, session_scenes, project_path, effects_clips_by_index=effects_clips_by_index)
 
     normalized_captions = _normalize_scene_captions(scene_captions, len(media_files))
     if len(timeline.scenes) != len(normalized_captions):
@@ -343,7 +363,7 @@ def sync_timeline_for_project(
             scene_video_options=scene_video_options,
         )
         _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
-        _apply_scene_media_assignments(timeline, session_scenes, project_path)
+        _apply_scene_media_assignments(timeline, session_scenes, project_path, effects_clips_by_index=effects_clips_by_index)
     if len(timeline.scenes) != len(normalized_captions):
         raise ValueError(
             f"Caption mapping mismatch: {len(timeline.scenes)} timeline scenes vs {len(normalized_captions)} captions. "
