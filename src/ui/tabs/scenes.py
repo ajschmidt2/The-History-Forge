@@ -13,6 +13,96 @@ from src.video.utils import get_media_duration
 import src.supabase_storage as _sb_store
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_scene_clip_assignments(project_id: str) -> dict[int, dict]:
+    """Load clip assignments from Supabase with 1-minute TTL."""
+    if not _sb_store.is_configured():
+        return {}
+    return _sb_store.load_clip_assignments(project_id)
+
+
+def _get_assigned_clip_info(scene_num: int, project_id: str) -> dict | None:
+    """Return clip info dict for the given scene, or None if unassigned."""
+    # Check Supabase assignments
+    try:
+        assignments = _load_scene_clip_assignments(project_id)
+        info = assignments.get(scene_num)
+        if info and info.get("url"):
+            return info
+    except Exception:
+        pass
+    # Also check session-local assignments (fallback when Supabase not configured)
+    local = st.session_state.get("local_clip_assignments", {})
+    return local.get(scene_num)
+
+
+def _render_effects_clip_for_scene(scene: "Scene", project_id: str) -> None:
+    """Show the effects clip assigned to *scene* in the Scene Editor panel."""
+    scene_num = getattr(scene, "index", None)
+    if not isinstance(scene_num, int) or scene_num <= 0:
+        st.caption("No clip assigned — go to **✨ Video Effects** tab to assign one.")
+        return
+
+    clip_info = _get_assigned_clip_info(scene_num, project_id)
+
+    if not clip_info:
+        st.caption("No clip assigned — go to **✨ Video Effects** tab to assign one.")
+        return
+
+    clip_url = str(clip_info.get("url") or "")
+    clip_fname = str(clip_info.get("filename") or "")
+
+    # Also check if there's a local copy
+    from src.ui.state import PROJECTS_ROOT, slugify_project_id
+    local_clip = PROJECTS_ROOT / slugify_project_id(project_id) / "assets" / "effects_clips" / clip_fname
+    video_src = str(local_clip) if local_clip.exists() else clip_url
+
+    if not video_src:
+        st.caption("Assigned clip URL is missing — re-assign in the **✨ Video Effects** tab.")
+        return
+
+    # Thumbnail (from session cache)
+    thumb_key = f"hf_clip_thumb_{project_id}_{clip_fname}"
+    cached_thumb = st.session_state.get(thumb_key, "")
+    if cached_thumb:
+        try:
+            st.image(cached_thumb, use_container_width=True)
+        except Exception:
+            pass
+
+    try:
+        st.video(video_src)
+    except Exception:
+        st.caption(f"Could not load clip preview: {clip_fname}")
+
+    # Duration + effects info
+    if local_clip.exists():
+        try:
+            dur = float(get_media_duration(str(local_clip)))
+            st.caption(f"Duration: {dur:.1f}s  |  File: {clip_fname}")
+        except Exception:
+            st.caption(f"File: {clip_fname}")
+    else:
+        st.caption(f"Clip: {clip_fname} (cloud)")
+
+    action_cols = st.columns(2)
+    with action_cols[0]:
+        change_key = f"scene_change_clip_{scene_num}_{getattr(scene, 'scene_id', '')}"
+        if st.button("🔁 Change Clip", key=change_key, use_container_width=True):
+            st.info("Go to the **✨ Video Effects** tab → Assign Clips to Scenes to change the clip.")
+    with action_cols[1]:
+        remove_key = f"scene_remove_clip_{scene_num}_{getattr(scene, 'scene_id', '')}"
+        if st.button("🗑️ Remove Clip", key=remove_key, use_container_width=True):
+            if _sb_store.is_configured():
+                _sb_store.remove_clip_assignment(project_id, scene_num)
+                _load_scene_clip_assignments.clear()
+            local_sess = dict(st.session_state.get("local_clip_assignments", {}))
+            local_sess.pop(scene_num, None)
+            st.session_state["local_clip_assignments"] = local_sess
+            st.toast(f"Removed clip from Scene {scene_num}.")
+            st.rerun()
+
+
 def _saved_videos_for_project(project_id: str) -> list[Path]:
     """Return locally saved AI-generated .mp4 files for *project_id*, newest first."""
     d = Path("data/projects") / project_id / "assets/videos"
@@ -544,6 +634,12 @@ def tab_create_scenes() -> None:
                 st.image(str(saved), width="stretch")
             else:
                 st.caption("No image selected yet.")
+
+        # ------------------------------------------------------------------
+        # Effects clip assigned to this scene (from Video Effects tab)
+        # ------------------------------------------------------------------
+        st.markdown("#### 🎬 Assigned Effects Clip")
+        _render_effects_clip_for_scene(selected, project_id=active_project_id())
 
         # ------------------------------------------------------------------
         # AI video clip assigned to this scene

@@ -15,6 +15,7 @@ Layout
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -480,6 +481,264 @@ def _apply_and_upload_clips(
     return results
 
 
+# ── Clip assignment helpers ────────────────────────────────────────────────────
+
+def _clip_effects_badges(
+    clip_filename: str,
+    global_cfg: GlobalEffectsConfig,
+    scene_cfgs: list[SceneEffectsConfig],
+) -> list[str]:
+    """Derive human-readable effect labels for a clip based on its scene configs."""
+    m = re.match(r"s(\d+)_", clip_filename)
+    if not m:
+        return []
+    scene_num = int(m.group(1))
+    if scene_num <= 0 or scene_num > len(scene_cfgs):
+        resolved = resolve_config(global_cfg)
+    else:
+        resolved = resolve_config(global_cfg, scene_cfgs[scene_num - 1])
+
+    badges: list[str] = []
+    if resolved.get("ken_burns_enabled"):
+        direction = str(resolved.get("ken_burns_direction") or "").replace("-", " ").title()
+        badges.append(f"Ken Burns ({direction})")
+    if resolved.get("color_grade_enabled"):
+        style = str(resolved.get("color_grade_style") or "warm").title()
+        badges.append(f"{style} Grade")
+    if resolved.get("film_grain_enabled"):
+        intensity = str(resolved.get("film_grain_intensity") or "medium").title()
+        badges.append(f"Film Grain ({intensity})")
+    if resolved.get("fade_enabled"):
+        badges.append("Fade")
+    return badges
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_effects_clips(project_id: str) -> list[dict]:
+    """Load effects clips from Supabase with a 2-minute TTL."""
+    import src.supabase_storage as _sb
+    return _sb.list_effects_clips(project_id)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_clip_assignments(project_id: str) -> dict[int, dict]:
+    """Load clip assignments from Supabase with a 1-minute TTL."""
+    import src.supabase_storage as _sb
+    return _sb.load_clip_assignments(project_id)
+
+
+def _render_assign_clips_section(
+    scenes: list,
+    project_id: str,
+    global_cfg: GlobalEffectsConfig,
+    scene_cfgs: list[SceneEffectsConfig],
+    clips_dir: Path,
+) -> None:
+    """Render the '📎 Assign Clips to Scenes' section at the bottom of the tab."""
+    import src.supabase_storage as _sb
+    from src.video.utils import get_media_duration
+    from src.video.clip_thumbnail import get_clip_thumbnail_url
+
+    st.divider()
+    st.subheader("📎 Assign Clips to Scenes")
+    st.caption(
+        "Assign a rendered effects clip to each scene. "
+        "One clip can be reused across multiple scenes."
+    )
+
+    # ── Build clip inventory ───────────────────────────────────────────────
+    # Merge local clips and Supabase clips; local entries enriched with URLs.
+    clip_map: dict[str, dict] = {}
+
+    for local_clip in sorted(clips_dir.glob("s??_effects.mp4")):
+        fname = local_clip.name
+        clip_map[fname] = {
+            "filename": fname,
+            "url": None,
+            "local_path": str(local_clip),
+            "storage_path": None,
+        }
+
+    if _sb.is_configured():
+        for clip in _cached_effects_clips(project_id):
+            fname = clip.get("filename", "")
+            if not fname:
+                continue
+            if fname in clip_map:
+                clip_map[fname]["url"] = clip.get("url")
+                clip_map[fname]["storage_path"] = clip.get("storage_path")
+            else:
+                clip_map[fname] = {
+                    "filename": fname,
+                    "url": clip.get("url"),
+                    "local_path": None,
+                    "storage_path": clip.get("storage_path"),
+                }
+
+    all_clips = sorted(clip_map.values(), key=lambda c: c["filename"])
+
+    if not all_clips:
+        st.info(
+            "No rendered clips found. Use **🎬 Apply Effects & Render Clips** above "
+            "to process your scene images first, then return here to assign them."
+        )
+        return
+
+    # ── Load existing assignments ──────────────────────────────────────────
+    if _sb.is_configured():
+        assignments: dict[int, dict] = _cached_clip_assignments(project_id)
+    else:
+        assignments = {}
+
+    # ── Clip Library grid ──────────────────────────────────────────────────
+    with st.expander(f"🎞️ Clip Library ({len(all_clips)} clip(s))", expanded=True):
+        lib_cols = st.columns(min(3, max(1, len(all_clips))))
+        for idx, clip in enumerate(all_clips):
+            fname = clip["filename"]
+            local_path = clip.get("local_path")
+            clip_url = clip.get("url")
+            col = lib_cols[idx % 3]
+            with col:
+                # Thumbnail (extracted via FFmpeg, cached in session state + Supabase)
+                if _sb.is_configured():
+                    thumb_key = f"hf_clip_thumb_{project_id}_{fname}"
+                    if thumb_key not in st.session_state:
+                        source = local_path or clip_url
+                        if source:
+                            with st.spinner(f"Extracting thumbnail…"):
+                                thumb_url = get_clip_thumbnail_url(source, project_id, fname)
+                            st.session_state[thumb_key] = thumb_url or ""
+                        else:
+                            st.session_state[thumb_key] = ""
+                    cached_thumb = st.session_state.get(thumb_key, "")
+                    if cached_thumb:
+                        try:
+                            st.image(cached_thumb, use_container_width=True)
+                        except Exception:
+                            pass
+
+                # Inline video player
+                video_src = local_path or clip_url
+                if video_src:
+                    try:
+                        st.video(video_src)
+                    except Exception:
+                        st.caption(f"Preview unavailable")
+
+                st.markdown(f"**{fname}**")
+
+                # Duration (local only; fast)
+                if local_path and Path(local_path).exists():
+                    try:
+                        dur = float(get_media_duration(local_path))
+                        st.caption(f"Duration: {dur:.1f}s")
+                    except Exception:
+                        pass
+
+                # Effects badges
+                badges = _clip_effects_badges(fname, global_cfg, scene_cfgs)
+                if badges:
+                    st.caption("Effects: " + " · ".join(badges))
+
+    st.markdown("### Scene assignments")
+
+    clip_options = ["None assigned"] + [c["filename"] for c in all_clips]
+    clip_by_name = {c["filename"]: c for c in all_clips}
+
+    def _find_assigned_clip_name(scene_num: int) -> str:
+        """Return the clip filename currently assigned to this scene, or 'None assigned'."""
+        info = assignments.get(scene_num)
+        if not info:
+            return "None assigned"
+        stored_url = info.get("url", "")
+        if not stored_url:
+            return "None assigned"
+        for c in all_clips:
+            if c.get("url") and c["url"] == stored_url:
+                return c["filename"]
+            # fuzzy match by filename in URL (handles URL variations)
+            if c["filename"] in stored_url:
+                return c["filename"]
+        return "None assigned"
+
+    for idx, scene in enumerate(scenes):
+        scene_num = idx + 1
+        scene_label = getattr(scene, "title", None) or f"Scene {scene_num}"
+        raw_excerpt = str(getattr(scene, "script_excerpt", "") or "")
+        excerpt_display = raw_excerpt[:90] + ("…" if len(raw_excerpt) > 90 else "")
+
+        current_clip_name = _find_assigned_clip_name(scene_num)
+        default_idx = clip_options.index(current_clip_name) if current_clip_name in clip_options else 0
+
+        with st.container():
+            row_cols = st.columns([3, 4, 1])
+            with row_cols[0]:
+                st.markdown(f"**Scene {scene_num}:** {scene_label}")
+                if excerpt_display:
+                    st.caption(excerpt_display)
+            with row_cols[1]:
+                picked = st.selectbox(
+                    f"Clip for scene {scene_num}",
+                    clip_options,
+                    index=default_idx,
+                    key=f"clip_assign_pick_s{scene_num:02d}",
+                    label_visibility="collapsed",
+                )
+                # Inline confirmation: show thumbnail + duration for picked clip
+                if picked != "None assigned":
+                    chosen = clip_by_name.get(picked, {})
+                    preview_src = chosen.get("local_path") or chosen.get("url")
+                    if preview_src:
+                        try:
+                            st.video(preview_src)
+                        except Exception:
+                            pass
+                    lp = chosen.get("local_path")
+                    if lp and Path(lp).exists():
+                        try:
+                            dur = float(get_media_duration(lp))
+                            st.caption(f"✓ {picked} · {dur:.1f}s")
+                        except Exception:
+                            st.caption(f"✓ {picked}")
+
+            with row_cols[2]:
+                if st.button("Assign", key=f"clip_assign_btn_s{scene_num:02d}", use_container_width=True):
+                    if picked == "None assigned":
+                        if _sb.is_configured():
+                            _sb.remove_clip_assignment(project_id, scene_num)
+                        _cached_clip_assignments.clear()
+                        st.toast(f"Removed assignment for Scene {scene_num}.")
+                    else:
+                        chosen = clip_by_name.get(picked, {})
+                        clip_url_to_save = str(chosen.get("url") or chosen.get("local_path") or "")
+                        storage_path = str(chosen.get("storage_path") or "")
+                        if not clip_url_to_save:
+                            st.error("No URL found for this clip. Render and upload it first.")
+                        elif _sb.is_configured():
+                            ok = _sb.save_clip_assignment(
+                                project_id, scene_num, storage_path, clip_url_to_save
+                            )
+                            _cached_clip_assignments.clear()
+                            if ok:
+                                st.toast(f"✓ '{picked}' assigned to Scene {scene_num}.")
+                            else:
+                                st.warning(
+                                    "Supabase save failed — assignment visible this session only."
+                                )
+                        else:
+                            # Supabase not configured; store in session state only
+                            sess_assignments = dict(st.session_state.get("local_clip_assignments", {}))
+                            sess_assignments[scene_num] = {
+                                "url": clip_url_to_save,
+                                "filename": picked,
+                            }
+                            st.session_state["local_clip_assignments"] = sess_assignments
+                            st.toast(f"✓ '{picked}' assigned to Scene {scene_num} (session only — Supabase not configured).")
+                    st.rerun()
+
+        st.divider()
+
+
 # ── Main tab entry point ───────────────────────────────────────────────────────
 
 def tab_video_effects() -> None:
@@ -621,3 +880,12 @@ def tab_video_effects() -> None:
             with cols[i % 3]:
                 st.caption(clip.stem)
                 st.video(str(clip))
+
+    # ── Assign Clips to Scenes ────────────────────────────────────────────────
+    _render_assign_clips_section(
+        scenes=scenes,
+        project_id=project_id,
+        global_cfg=global_cfg,
+        scene_cfgs=updated_scene_cfgs,
+        clips_dir=clips_dir,
+    )

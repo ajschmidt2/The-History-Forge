@@ -18,11 +18,80 @@ import src.supabase_storage as _sb_store
 from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_schema import CaptionStyle, Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists, get_ffmpeg_exe
-from src.ui.state import active_project_id
+from src.ui.state import active_project_id, PROJECTS_ROOT, slugify_project_id
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.ui.caption_format import format_caption
 
 MUSIC_LIBRARY_ROOT = Path("data/music_library")
+
+
+# ---------------------------------------------------------------------------
+# Effects-clip assignment helpers for Video Studio
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_effects_clip_assignments(project_id: str) -> dict[int, dict]:
+    """Return scene→clip mapping from Supabase (1-minute TTL)."""
+    if not _sb_store.is_configured():
+        return {}
+    return _sb_store.load_clip_assignments(project_id)
+
+
+def _get_effects_clip_for_scene(
+    scene_num: int,
+    project_id: str,
+    project_path: Path,
+) -> Path | None:
+    """Return the local path of the effects clip assigned to *scene_num*, if any.
+
+    Falls back to a locally-rendered clip at
+    ``assets/effects_clips/s{scene_num:02d}_effects.mp4`` even when not
+    formally assigned in Supabase.  Returns ``None`` when no clip exists.
+    """
+    # Prefer session-local assignments (Supabase not configured)
+    local_sess: dict = st.session_state.get("local_clip_assignments", {})
+    info: dict | None = local_sess.get(scene_num)
+
+    # Try Supabase assignment
+    if not info and _sb_store.is_configured():
+        assignments = _load_effects_clip_assignments(project_id)
+        info = assignments.get(scene_num)
+
+    if info:
+        clip_url = str(info.get("url") or "")
+        # Derive expected local filename from URL / filename field
+        clip_fname = str(info.get("filename") or "")
+        if not clip_fname and clip_url:
+            clip_fname = Path(clip_url).name
+        if clip_fname:
+            local_clip = project_path / "assets" / "effects_clips" / clip_fname
+            if local_clip.exists() and local_clip.stat().st_size > 0:
+                return local_clip
+        # URL-based clip (not local): return None so caller uses URL
+        if clip_url:
+            return None  # caller must handle URL path
+
+    # No formal assignment — check if a default effects clip exists for this scene
+    default_clip = project_path / "assets" / "effects_clips" / f"s{scene_num:02d}_effects.mp4"
+    if default_clip.exists() and default_clip.stat().st_size > 0:
+        return None  # exists but not assigned; don't auto-use
+
+    return None
+
+
+def _get_effects_clip_url_for_scene(scene_num: int, project_id: str) -> str | None:
+    """Return the URL (or local path string) of the assigned clip for *scene_num*."""
+    local_sess: dict = st.session_state.get("local_clip_assignments", {})
+    info: dict | None = local_sess.get(scene_num)
+
+    if not info and _sb_store.is_configured():
+        assignments = _load_effects_clip_assignments(project_id)
+        info = assignments.get(scene_num)
+
+    if not info:
+        return None
+
+    return str(info.get("url") or "") or None
 
 
 def _list_music_tracks(directory: Path) -> list[Path]:
@@ -311,6 +380,32 @@ def _resolve_scene_video_path(project_path: Path, raw_path: str) -> Path | None:
 
 def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: Path) -> list[Path]:
     scenes = st.session_state.get("scenes", [])
+    active_pid = active_project_id()
+
+    # Load effects-clip assignments once for all scenes
+    if _sb_store.is_configured():
+        clip_assignments = _load_effects_clip_assignments(active_pid)
+    else:
+        clip_assignments = {}
+    local_clip_assignments: dict = st.session_state.get("local_clip_assignments", {})
+
+    effects_clips_dir = project_path / "assets" / "effects_clips"
+
+    def _resolve_effects_clip(scene_idx: int) -> Path | None:
+        """Return the local path of an assigned effects clip, or None."""
+        info = clip_assignments.get(scene_idx) or local_clip_assignments.get(scene_idx)
+        if not info:
+            return None
+        clip_url = str(info.get("url") or "")
+        clip_fname = str(info.get("filename") or "")
+        if not clip_fname and clip_url:
+            clip_fname = Path(clip_url).name
+        if clip_fname:
+            local_clip = effects_clips_dir / clip_fname
+            if local_clip.exists() and local_clip.stat().st_size > 0:
+                return local_clip
+        return None
+
     if scenes:
         images_by_index = {
             _scene_number_from_path(path): path
@@ -322,25 +417,37 @@ def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: P
             idx = getattr(scene, "index", None)
             if not isinstance(idx, int) or idx <= 0:
                 continue
+
+            # 1. Check for an assigned effects clip (highest priority)
+            effects_clip = _resolve_effects_clip(idx)
+            if effects_clip is not None:
+                import logging as _log
+                _log.getLogger(__name__).info(
+                    "[video_studio] Scene %d: using assigned effects clip %s", idx, effects_clip.name
+                )
+                selected.append(effects_clip)
+                continue
+
+            # 2. Check for AI-generated video clip on the scene object
             video_path = str(getattr(scene, "video_path", "") or "")
             resolved_video = _resolve_scene_video_path(project_path, video_path)
             if resolved_video is not None:
                 scene.video_path = str(resolved_video)
                 selected.append(resolved_video)
                 continue
-            # For cloud-only video clips (video_object_path set, no local file yet),
-            # append a canonical image placeholder so the scene count stays correct.
-            # _apply_scene_media_assignments will later replace this with storage://.
+
+            # 3. Cloud-only video clips (video_object_path set, no local file yet)
             video_object_path = str(getattr(scene, "video_object_path", "") or "")
             if video_object_path:
                 selected.append(images_dir / f"s{idx:02d}.png")
                 continue
+
+            # 4. Fallback: static image
             fallback = images_by_index.get(idx)
             if fallback and fallback.exists():
                 selected.append(fallback)
+
         if selected:
-            # Keep media in explicit scene order so subtitle previews and scene
-            # timing always match what the Scene Editor shows.
             return selected
     images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
     videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}])
@@ -538,26 +645,43 @@ def _collect_scene_captions(
         scene_duration_seconds = float((scene_duration_by_index or {}).get(display_scene_number, default_scene_duration))
         with st.expander(f"Scene {display_scene_number}: {media_path.name}"):
             st.caption(f"Scene duration: {scene_duration_seconds:.2f}s")
-            if media_path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
-                if media_path.exists():
-                    try:
-                        st.video(str(media_path))
-                    except Exception:
-                        st.caption(f"Could not load video: {media_path.name}")
-                else:
-                    st.caption(f"Video file not found on disk: {media_path.name}")
-                st.caption(f"Subtitle preview: {preview_caption or '(No subtitle)'}")
-            else:
+
+            # Check if an effects clip is assigned for this scene
+            _active_project = active_project_id()
+            _effects_clip_url = _get_effects_clip_url_for_scene(display_scene_number, _active_project)
+            _active_project_path = Path("data/projects") / _active_project
+
+            if _effects_clip_url:
+                # Show the assigned effects clip instead of the static image
+                st.caption("🎬 Showing assigned effects clip (subtitle will sit over this):")
                 try:
-                    preview_bytes = _render_subtitle_preview(
-                        media_path,
-                        preview_caption,
-                        caption_style=caption_style,
-                        burn_captions=burn_captions,
-                    )
-                    st.image(preview_bytes, width="stretch")
-                except Exception as _preview_exc:
-                    st.caption(f"Preview unavailable ({media_path.name}): {_preview_exc}")
+                    st.video(_effects_clip_url)
+                except Exception:
+                    st.caption(f"Could not load effects clip — falling back to static image.")
+                    _effects_clip_url = None  # trigger fallback below
+
+            if not _effects_clip_url:
+                # Fallback: original behaviour (static image or video)
+                if media_path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}:
+                    if media_path.exists():
+                        try:
+                            st.video(str(media_path))
+                        except Exception:
+                            st.caption(f"Could not load video: {media_path.name}")
+                    else:
+                        st.caption(f"Video file not found on disk: {media_path.name}")
+                    st.caption(f"Subtitle preview: {preview_caption or '(No subtitle)'}")
+                else:
+                    try:
+                        preview_bytes = _render_subtitle_preview(
+                            media_path,
+                            preview_caption,
+                            caption_style=caption_style,
+                            burn_captions=burn_captions,
+                        )
+                        st.image(preview_bytes, width="stretch")
+                    except Exception as _preview_exc:
+                        st.caption(f"Preview unavailable ({media_path.name}): {_preview_exc}")
             edited_caption = st.text_area(
                 "Subtitle for this scene",
                 height=90,
@@ -639,6 +763,41 @@ def tab_video_compile() -> None:
     cols[0].metric("Scene media", len(media_files))
     cols[1].metric("Voiceover files", len(audio_files))
     cols[2].metric("Music files", len(music_files))
+
+    # ── Effects clip assignment summary ────────────────────────────────────
+    scenes_list = st.session_state.get("scenes", [])
+    if scenes_list:
+        clip_assignments_summary = _load_effects_clip_assignments(project_name)
+        local_clip_sess: dict = st.session_state.get("local_clip_assignments", {})
+        all_scene_assignments = {**local_clip_sess, **clip_assignments_summary}
+        effects_clips_dir = project_path / "assets" / "effects_clips"
+        clip_used: list[str] = []
+        clip_fallback: list[str] = []
+        for scene in scenes_list:
+            s_idx = getattr(scene, "index", None)
+            if not isinstance(s_idx, int):
+                continue
+            s_label = getattr(scene, "title", None) or f"Scene {s_idx}"
+            info = all_scene_assignments.get(s_idx)
+            if info:
+                clip_fname = str(info.get("filename") or "") or Path(str(info.get("url", ""))).name
+                local_clip = effects_clips_dir / clip_fname if clip_fname else None
+                if local_clip and local_clip.exists():
+                    clip_used.append(f"Scene {s_idx} ({s_label}): {clip_fname} ✓")
+                else:
+                    clip_used.append(f"Scene {s_idx} ({s_label}): {clip_fname} (cloud)")
+            else:
+                clip_fallback.append(f"Scene {s_idx} ({s_label})")
+        if clip_used or clip_fallback:
+            with st.expander(f"🎬 Effects clips in assembly ({len(clip_used)}/{len(scenes_list)} scenes with clips)", expanded=False):
+                if clip_used:
+                    st.markdown("**Using assigned effects clip:**")
+                    for line in clip_used:
+                        st.caption(f"  • {line}")
+                if clip_fallback:
+                    st.markdown("**Using static image (no clip assigned):**")
+                    for line in clip_fallback:
+                        st.caption(f"  • {line}")
 
     if _sb_store.is_configured() and st.button("Refresh assets from Supabase", width="stretch", key="video_pull_assets"):
         fetched = _sb_store.pull_project_assets(project_name, project_path)
