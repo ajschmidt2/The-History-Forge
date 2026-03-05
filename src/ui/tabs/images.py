@@ -9,6 +9,22 @@ from src.ui.state import active_project_id, scenes_ready
 from src.ui.timeline_sync import sync_timeline_for_project
 
 
+MAX_UPLOAD_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+def _validate_uploaded_image_bytes(image_bytes: bytes) -> str | None:
+    if not image_bytes:
+        return "Uploaded file is empty."
+    if len(image_bytes) > MAX_UPLOAD_IMAGE_BYTES:
+        max_mb = MAX_UPLOAD_IMAGE_BYTES // (1024 * 1024)
+        return f"Uploaded file is too large (max {max_mb}MB)."
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return None
+    return "Uploaded file is not a valid PNG or JPEG image."
+
+
 def _save_scene_image_bytes(scene: Scene, image_bytes: bytes) -> None:
     scene.image_bytes = image_bytes
     scene.image_variations = [image_bytes]
@@ -79,11 +95,23 @@ def tab_create_images() -> None:
     )
     if bulk_uploads:
         applied = 0
+        failed_uploads: list[str] = []
         for scene, upload in zip(st.session_state.scenes, bulk_uploads):
-            _save_scene_image_bytes(scene, upload.getvalue())
-            applied += 1
+            try:
+                upload_bytes = upload.getvalue()
+                validation_error = _validate_uploaded_image_bytes(upload_bytes)
+                if validation_error:
+                    failed_uploads.append(f"Scene {scene.index:02d}: {validation_error}")
+                    continue
+                _save_scene_image_bytes(scene, upload_bytes)
+                applied += 1
+            except Exception as exc:  # noqa: BLE001 - avoid breaking whole bulk upload on one file
+                failed_uploads.append(f"Scene {scene.index:02d}: {exc}")
         _sync_project_timeline_from_session_scenes()
-        st.success(f"Applied {applied} uploaded image(s) to scenes and saved them to assets/images.")
+        if applied:
+            st.success(f"Applied {applied} uploaded image(s) to scenes and saved them to assets/images.")
+        if failed_uploads:
+            st.warning("Some uploads were skipped:\n- " + "\n- ".join(failed_uploads))
         st.rerun()
 
     if st.button("Generate images for all scenes", type="primary", width="stretch"):
@@ -154,9 +182,17 @@ def tab_create_images() -> None:
                 key=f"scene_upload_{s.index}",
             )
             if uploaded_scene_image is not None:
-                _save_scene_image_bytes(s, uploaded_scene_image.getvalue())
-                _sync_project_timeline_from_session_scenes()
-                st.success(f"Uploaded image applied to scene {s.index:02d}.")
+                try:
+                    upload_bytes = uploaded_scene_image.getvalue()
+                    validation_error = _validate_uploaded_image_bytes(upload_bytes)
+                    if validation_error:
+                        st.error(validation_error)
+                        continue
+                    _save_scene_image_bytes(s, upload_bytes)
+                    _sync_project_timeline_from_session_scenes()
+                    st.success(f"Uploaded image applied to scene {s.index:02d}.")
+                except Exception as exc:  # noqa: BLE001 - keep upload errors scoped to a scene
+                    st.error(f"Could not apply uploaded image: {exc}")
                 st.rerun()
 
             if len(s.image_variations) > 1:
