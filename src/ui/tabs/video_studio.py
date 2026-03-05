@@ -80,7 +80,11 @@ def _get_effects_clip_for_scene(
 
 
 def _get_effects_clip_url_for_scene(scene_num: int, project_id: str) -> str | None:
-    """Return the URL (or local path string) of the assigned clip for *scene_num*."""
+    """Return a playable source (local path or URL) for the assigned clip of *scene_num*.
+
+    Prefers a local file so ``st.video()`` works reliably without a network request.
+    Falls back to the stored URL (Supabase public URL or local path string).
+    """
     local_sess: dict = st.session_state.get("local_clip_assignments", {})
     info: dict | None = local_sess.get(scene_num)
 
@@ -91,7 +95,25 @@ def _get_effects_clip_url_for_scene(scene_num: int, project_id: str) -> str | No
     if not info:
         return None
 
-    return str(info.get("url") or "") or None
+    clip_url = str(info.get("url") or "") or None
+    clip_fname = str(info.get("filename") or "")
+    if not clip_fname and clip_url:
+        from pathlib import Path as _Path
+        clip_fname = _Path(clip_url).name
+
+    # Prefer local file if it exists — more reliable for st.video()
+    if clip_fname:
+        local_clip = PROJECTS_ROOT / slugify_project_id(project_id) / "assets" / "effects_clips" / clip_fname
+        if local_clip.exists() and local_clip.stat().st_size > 0:
+            return str(local_clip)
+        # clip_url might itself be a local path (stored when Supabase upload failed)
+        if clip_url and not clip_url.startswith(("http://", "https://")):
+            from pathlib import Path as _Path
+            alt = _Path(clip_url)
+            if alt.exists() and alt.stat().st_size > 0:
+                return str(alt)
+
+    return clip_url
 
 
 def _list_music_tracks(directory: Path) -> list[Path]:
@@ -392,7 +414,16 @@ def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: P
     effects_clips_dir = project_path / "assets" / "effects_clips"
 
     def _resolve_effects_clip(scene_idx: int) -> Path | None:
-        """Return the local path of an assigned effects clip, or None."""
+        """Return the local path of an assigned effects clip, or None.
+
+        Resolution order:
+        1. Local file in effects_clips dir (fastest, most reliable).
+        2. clip_url is itself a local path (stored when Supabase upload failed).
+        3. Download from Supabase public URL into effects_clips dir.
+        """
+        import logging as _log
+        _log_inst = _log.getLogger(__name__)
+
         info = clip_assignments.get(scene_idx) or local_clip_assignments.get(scene_idx)
         if not info:
             return None
@@ -400,10 +431,37 @@ def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: P
         clip_fname = str(info.get("filename") or "")
         if not clip_fname and clip_url:
             clip_fname = Path(clip_url).name
-        if clip_fname:
-            local_clip = effects_clips_dir / clip_fname
-            if local_clip.exists() and local_clip.stat().st_size > 0:
-                return local_clip
+        if not clip_fname:
+            return None
+
+        # 1. Local file already exists
+        local_clip = effects_clips_dir / clip_fname
+        if local_clip.exists() and local_clip.stat().st_size > 0:
+            return local_clip
+
+        # 2. URL is a local path (stored when Supabase bucket upload failed)
+        if clip_url and not clip_url.startswith(("http://", "https://")):
+            alt = Path(clip_url)
+            if alt.exists() and alt.stat().st_size > 0:
+                return alt
+
+        # 3. Download from Supabase URL
+        if clip_url.startswith(("http://", "https://")):
+            try:
+                from urllib.request import urlopen
+                effects_clips_dir.mkdir(parents=True, exist_ok=True)
+                with urlopen(clip_url, timeout=60) as resp:  # noqa: S310
+                    local_clip.write_bytes(resp.read())
+                if local_clip.exists() and local_clip.stat().st_size > 0:
+                    _log_inst.info(
+                        "[video_studio] Downloaded effects clip %s from Supabase", clip_fname
+                    )
+                    return local_clip
+            except Exception as exc:
+                _log_inst.warning(
+                    "[video_studio] Could not download effects clip %s: %s", clip_fname, exc
+                )
+
         return None
 
     if scenes:
