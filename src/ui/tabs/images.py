@@ -1,6 +1,8 @@
 from pathlib import Path
+import io
 
 import streamlit as st
+from PIL import Image, UnidentifiedImageError
 
 from utils import Scene, generate_image_for_scene
 from src.storage import record_asset
@@ -10,22 +12,44 @@ from src.ui.timeline_sync import sync_timeline_for_project
 
 
 MAX_UPLOAD_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_UPLOAD_IMAGE_PIXELS = 40_000_000
 
 
-def _validate_uploaded_image_bytes(image_bytes: bytes) -> str | None:
+def _normalize_uploaded_image_bytes(image_bytes: bytes) -> tuple[bytes | None, str | None]:
     if not image_bytes:
-        return "Uploaded file is empty."
+        return None, "Uploaded file is empty."
     if len(image_bytes) > MAX_UPLOAD_IMAGE_BYTES:
         max_mb = MAX_UPLOAD_IMAGE_BYTES // (1024 * 1024)
-        return f"Uploaded file is too large (max {max_mb}MB)."
-    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-        return None
-    if image_bytes.startswith(b"\xff\xd8\xff"):
-        return None
-    return "Uploaded file is not a valid PNG or JPEG image."
+        return None, f"Uploaded file is too large (max {max_mb}MB)."
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            image_format = str(img.format or "").upper()
+            if image_format not in {"PNG", "JPEG"}:
+                return None, "Uploaded file is not a valid PNG or JPEG image."
+
+            width, height = img.size
+            if width <= 0 or height <= 0:
+                return None, "Uploaded image has invalid dimensions."
+            if width * height > MAX_UPLOAD_IMAGE_PIXELS:
+                return None, "Uploaded image is too large in resolution."
+
+            # Always normalize to PNG bytes so local filename/content-type stay consistent.
+            converted = img.convert("RGBA") if image_format == "PNG" else img.convert("RGB")
+            out = io.BytesIO()
+            converted.save(out, format="PNG", optimize=True)
+            normalized = out.getvalue()
+            if not normalized:
+                return None, "Uploaded file could not be processed."
+            if len(normalized) > MAX_UPLOAD_IMAGE_BYTES:
+                max_mb = MAX_UPLOAD_IMAGE_BYTES // (1024 * 1024)
+                return None, f"Processed image is too large (max {max_mb}MB)."
+            return normalized, None
+    except (UnidentifiedImageError, OSError):
+        return None, "Uploaded file is not a valid PNG or JPEG image."
 
 
-def _save_scene_image_bytes(scene: Scene, image_bytes: bytes) -> None:
+def _save_scene_image_bytes(scene: Scene, image_bytes: bytes) -> str | None:
     scene.image_bytes = image_bytes
     scene.image_variations = [image_bytes]
     scene.primary_image_index = 0
@@ -36,7 +60,11 @@ def _save_scene_image_bytes(scene: Scene, image_bytes: bytes) -> None:
     destination = images_dir / f"s{scene.index:02d}.png"
     destination.write_bytes(image_bytes)
     record_asset(active_project_id(), "image", destination)
-    _sb_store.upload_image(active_project_id(), destination.name, destination)
+    try:
+        _sb_store.upload_image(active_project_id(), destination.name, destination)
+    except Exception:  # noqa: BLE001 - cloud sync must never block local scene update
+        return "Saved locally, but cloud upload failed."
+    return None
 
 
 
@@ -99,11 +127,16 @@ def tab_create_images() -> None:
         for scene, upload in zip(st.session_state.scenes, bulk_uploads):
             try:
                 upload_bytes = upload.getvalue()
-                validation_error = _validate_uploaded_image_bytes(upload_bytes)
+                normalized_bytes, validation_error = _normalize_uploaded_image_bytes(upload_bytes)
                 if validation_error:
                     failed_uploads.append(f"Scene {scene.index:02d}: {validation_error}")
                     continue
-                _save_scene_image_bytes(scene, upload_bytes)
+                if normalized_bytes is None:
+                    failed_uploads.append(f"Scene {scene.index:02d}: Uploaded file could not be processed.")
+                    continue
+                sync_warning = _save_scene_image_bytes(scene, normalized_bytes)
+                if sync_warning:
+                    failed_uploads.append(f"Scene {scene.index:02d}: {sync_warning}")
                 applied += 1
             except Exception as exc:  # noqa: BLE001 - avoid breaking whole bulk upload on one file
                 failed_uploads.append(f"Scene {scene.index:02d}: {exc}")
@@ -184,13 +217,18 @@ def tab_create_images() -> None:
             if uploaded_scene_image is not None:
                 try:
                     upload_bytes = uploaded_scene_image.getvalue()
-                    validation_error = _validate_uploaded_image_bytes(upload_bytes)
+                    normalized_bytes, validation_error = _normalize_uploaded_image_bytes(upload_bytes)
                     if validation_error:
                         st.error(validation_error)
                         continue
-                    _save_scene_image_bytes(s, upload_bytes)
+                    if normalized_bytes is None:
+                        st.error("Uploaded file could not be processed.")
+                        continue
+                    sync_warning = _save_scene_image_bytes(s, normalized_bytes)
                     _sync_project_timeline_from_session_scenes()
                     st.success(f"Uploaded image applied to scene {s.index:02d}.")
+                    if sync_warning:
+                        st.warning(sync_warning)
                 except Exception as exc:  # noqa: BLE001 - keep upload errors scoped to a scene
                     st.error(f"Could not apply uploaded image: {exc}")
                 st.rerun()
