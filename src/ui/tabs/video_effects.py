@@ -460,16 +460,23 @@ def _apply_and_upload_clips(
             results.append(out_path)
             status_container.success(f"✓ Scene {scene_num} rendered.")
 
-            # Upload to Supabase.
+            # Upload to Supabase and record the asset.
             try:
                 storage_path = f"{project_id}/effects_clips/s{scene_num:02d}_effects.mp4"
                 clip_bytes = out_path.read_bytes()
-                _sb._upload_bytes(
+                clip_url = _sb._upload_bytes(
                     "history-forge-videos",
                     storage_path,
                     clip_bytes,
                     "video/mp4",
                 )
+                if clip_url:
+                    _sb.record_asset(
+                        project_id,
+                        "effects_clip",
+                        out_path.name,
+                        clip_url,
+                    )
             except Exception as exc:
                 log.warning("[effects_tab] Supabase upload failed for scene %d: %s", scene_num, exc)
         else:
@@ -843,6 +850,11 @@ def tab_video_effects() -> None:
             scene_cfgs=updated_scene_cfgs,
             clips_dir=clips_dir,
         )
+
+        # Bust the effects-clip cache so the Assign section below
+        # immediately shows the freshly-uploaded clips with their URLs.
+        _cached_effects_clips.clear()
+        _cached_clip_assignments.clear()
 
         # ── Summary ──────────────────────────────────────────────────────────
         ok_count = sum(1 for c in rendered_clips if c is not None)

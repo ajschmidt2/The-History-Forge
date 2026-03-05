@@ -1,5 +1,6 @@
 import streamlit as st
 
+from src.supabase_storage import upload_script
 from src.ui.state import active_project_id, clear_downstream, save_project_state
 
 
@@ -27,5 +28,9 @@ def tab_paste_script() -> None:
         st.session_state.script_text = st.session_state.script_text_input
         clear_downstream("script")
         save_project_state(active_project_id())
+        try:
+            upload_script(active_project_id(), st.session_state.script_text_input)
+        except Exception:
+            pass
         st.toast("Script loaded.")
         st.rerun()
