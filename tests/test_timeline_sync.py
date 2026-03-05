@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from src.ui.timeline_sync import (
     _apply_manual_scene_durations,
+    _apply_scene_media_assignments,
     _has_custom_transition,
     _media_files_from_session_scenes,
     _resolve_scene_video_path,
@@ -96,6 +97,49 @@ def test_media_files_from_session_scenes_prefers_video_clip_over_image(tmp_path)
 
 def test_scene_number_from_path_ignores_timestamp_suffix() -> None:
     assert _scene_number_from_path(Path("s03_1736628831.mp4")) == 3
+
+
+def test_apply_scene_media_assignments_effects_clip_takes_priority(tmp_path) -> None:
+    """Effects clips supplied via effects_clips_by_index must override session-scene fallback images."""
+    project_path = tmp_path / "project"
+    effects_clips_dir = project_path / "assets" / "effects_clips"
+    effects_clips_dir.mkdir(parents=True, exist_ok=True)
+    clip = effects_clips_dir / "s01_effects.mp4"
+    clip.write_bytes(b"clip")
+
+    timeline = _timeline()
+    session_scenes = [
+        SimpleNamespace(
+            index=1,
+            estimated_duration_sec=3.0,
+            video_path=None,
+            video_object_path=None,
+            video_url=None,
+            video_loop=False,
+            video_muted=True,
+            video_volume=0.0,
+        ),
+        SimpleNamespace(
+            index=2,
+            estimated_duration_sec=3.0,
+            video_path=None,
+            video_object_path=None,
+            video_url=None,
+            video_loop=False,
+            video_muted=True,
+            video_volume=0.0,
+        ),
+    ]
+    effects_clips_by_index = {1: clip}
+
+    _apply_scene_media_assignments(
+        timeline, session_scenes, project_path, effects_clips_by_index=effects_clips_by_index
+    )
+
+    assert timeline.scenes[0].image_path == str(clip), "scene 1 must use the effects clip"
+    assert "effects_clips" in timeline.scenes[0].image_path
+    # Scene 2 has no effects clip — should fall back to the default image path
+    assert "s02.png" in timeline.scenes[1].image_path
 
 
 def test_media_files_from_session_scenes_video_clip_stays_in_position(tmp_path) -> None:
