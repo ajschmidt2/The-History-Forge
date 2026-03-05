@@ -682,7 +682,12 @@ def load_clip_assignments(project_id: str) -> dict[int, dict[str, str]]:
             scene_num = int(fname[1:])
         except ValueError:
             continue
-        assignments[scene_num] = {"url": url, "filename": fname}
+        # Derive the actual clip filename from the URL so callers can resolve
+        # the local file (e.g. "s01_effects.mp4"). The `filename` column stores
+        # the scene key ("s01"), not the clip filename, so we extract it from
+        # the storage URL path instead.
+        clip_filename = Path(url).name if url else fname
+        assignments[scene_num] = {"url": url, "filename": clip_filename}
     return assignments
 
 
