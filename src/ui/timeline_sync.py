@@ -130,8 +130,6 @@ def _apply_scene_media_assignments(
             media_path = str(Path(session_scene.video_path).resolve())
         elif getattr(session_scene, "video_object_path", None):
             media_path = f"storage://generated-videos/{session_scene.video_object_path}"
-        elif getattr(session_scene, "video_url", None) and str(getattr(session_scene, "video_url", "")).startswith(("http://", "https://")):
-            media_path = str(session_scene.video_url)
         else:
             media_path = str(project_path / "assets/images" / f"{scene_id}.png")
 

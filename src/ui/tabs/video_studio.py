@@ -218,13 +218,29 @@ def _validate_render_preflight(
         st.error(f"Render output directory is not writable: {output_dir}")
         return False
 
-    expected_paths = {str(path) for path in media_files}
+    def _resolve_for_comparison(p: str) -> str:
+        if p.startswith(("storage://", "http://", "https://")):
+            return p
+        return str(Path(p).resolve())
+
+    expected_paths = {_resolve_for_comparison(str(path)) for path in media_files}
     timeline_paths = [scene.image_path for scene in timeline.scenes]
     if len(timeline_paths) != len(media_files) or any(
-        path not in expected_paths and not path.startswith("storage://")
+        _resolve_for_comparison(path) not in expected_paths
+        and not path.startswith(("storage://", "http://", "https://"))
         for path in timeline_paths
     ):
-        st.error("timeline.json is out of sync with project media. Click Generate timeline.json to resync.")
+        mismatched = [
+            path for path in timeline_paths
+            if _resolve_for_comparison(path) not in expected_paths
+            and not path.startswith(("storage://", "http://", "https://"))
+        ]
+        st.error(
+            "timeline.json is out of sync with project media. "
+            "Click Generate timeline.json to resync."
+        )
+        if mismatched:
+            st.caption(f"Unmatched timeline paths ({len(mismatched)}): {mismatched[:3]}")
         return False
 
     return True

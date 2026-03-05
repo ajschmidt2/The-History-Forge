@@ -142,6 +142,47 @@ def test_apply_scene_media_assignments_effects_clip_takes_priority(tmp_path) -> 
     assert "s02.png" in timeline.scenes[1].image_path
 
 
+def test_apply_scene_media_assignments_video_url_falls_back_to_image(tmp_path) -> None:
+    """Scenes with only video_url (HTTP) but no local video should use the image fallback,
+    not the HTTP URL, because ffmpeg cannot consume HTTP URLs in this pipeline."""
+    project_path = tmp_path / "project"
+    timeline = _timeline()
+    session_scenes = [
+        SimpleNamespace(
+            index=1,
+            estimated_duration_sec=3.0,
+            video_path=None,
+            video_object_path=None,
+            video_url="https://cdn.example.com/s01.mp4",
+            video_loop=False,
+            video_muted=True,
+            video_volume=0.0,
+        ),
+        SimpleNamespace(
+            index=2,
+            estimated_duration_sec=3.0,
+            video_path=None,
+            video_object_path=None,
+            video_url=None,
+            video_loop=False,
+            video_muted=True,
+            video_volume=0.0,
+        ),
+    ]
+
+    _apply_scene_media_assignments(timeline, session_scenes, project_path)
+
+    # Both scenes should use the image fallback (s01.png / s02.png),
+    # not the HTTP URL which ffmpeg cannot use.
+    assert timeline.scenes[0].image_path.endswith("s01.png"), (
+        f"Expected image fallback, got: {timeline.scenes[0].image_path}"
+    )
+    assert not timeline.scenes[0].image_path.startswith("http"), (
+        "HTTP URL must not be written to timeline.image_path"
+    )
+    assert "s02.png" in timeline.scenes[1].image_path
+
+
 def test_media_files_from_session_scenes_video_clip_stays_in_position(tmp_path) -> None:
     """A video clip assigned to scene 2 must appear at index 1 in the output list,
     not get shuffled to the end the way a naïve filesystem sort would move it."""
