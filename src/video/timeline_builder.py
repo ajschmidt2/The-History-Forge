@@ -103,9 +103,6 @@ def build_default_timeline(
 
     voiceover_duration = get_media_duration(voiceover_path) if voiceover_path else 0.0
     scene_count = len(image_list)
-    if aspect_ratio == "9:16" and scene_count > 18:
-        image_list = image_list[:18]
-        scene_count = len(image_list)
 
     if include_voiceover:
         excerpts = list(scene_excerpts or [])

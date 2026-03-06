@@ -36,7 +36,7 @@ def _media_sort_key(path: Path) -> tuple[int, int, str]:
 
 
 def _normalize_media_files(media_files: list[Path], aspect_ratio: str) -> list[Path]:
-    """Deduplicate and enforce timeline scene-count limits in a stable order."""
+    """Deduplicate media inputs while preserving stable scene order."""
     ordered_unique: list[Path] = []
     seen: set[str] = set()
     for media_path in media_files:
@@ -46,8 +46,6 @@ def _normalize_media_files(media_files: list[Path], aspect_ratio: str) -> list[P
         seen.add(normalized)
         ordered_unique.append(media_path)
 
-    if str(aspect_ratio or "16:9") == "9:16" and len(ordered_unique) > 18:
-        return ordered_unique[:18]
     return ordered_unique
 
 
