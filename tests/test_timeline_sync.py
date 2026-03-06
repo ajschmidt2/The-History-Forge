@@ -6,6 +6,8 @@ from src.ui.timeline_sync import (
     _apply_scene_media_assignments,
     _has_custom_transition,
     _media_files_from_session_scenes,
+    _normalize_media_files,
+    sync_timeline_for_project,
     _resolve_scene_video_path,
     _scene_number_from_path,
 )
@@ -206,3 +208,42 @@ def test_media_files_from_session_scenes_video_clip_stays_in_position(tmp_path) 
 
     assert len(media_files) == 3
     assert media_files[1] == video.resolve(), "video clip must stay at scene-2 position"
+
+
+def test_normalize_media_files_dedupes_and_clamps_portrait_scene_count() -> None:
+    media_files = [Path(f"s{i:02d}.png") for i in range(1, 21)] + [Path("s05.png")]
+
+    normalized = _normalize_media_files(media_files, "9:16")
+
+    assert len(normalized) == 18
+    assert normalized[0] == Path("s01.png")
+    assert normalized[-1] == Path("s18.png")
+
+
+def test_sync_timeline_for_project_uses_built_scene_count_for_caption_mapping(tmp_path) -> None:
+    project_path = tmp_path / "project"
+    images_dir = project_path / "assets" / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    media_files = []
+    for i in range(1, 21):
+        img = images_dir / f"s{i:02d}.png"
+        img.write_bytes(b"image")
+        media_files.append(img)
+
+    captions = [f"Caption {i}" for i in range(1, 21)]
+
+    timeline_path = sync_timeline_for_project(
+        project_path=project_path,
+        project_id="p1",
+        title="Demo",
+        media_files=media_files,
+        scene_captions=captions,
+        meta_overrides={"aspect_ratio": "9:16", "include_voiceover": False},
+    )
+
+    assert timeline_path is not None
+    timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
+    assert len(timeline.scenes) == 18
+    assert [scene.caption for scene in timeline.scenes[:3]] == ["Caption 1", "Caption 2", "Caption 3"]
+    assert timeline.scenes[-1].caption == "Caption 18"

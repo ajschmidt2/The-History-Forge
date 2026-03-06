@@ -35,6 +35,22 @@ def _media_sort_key(path: Path) -> tuple[int, int, str]:
     return (1, 10**9, path.name.lower())
 
 
+def _normalize_media_files(media_files: list[Path], aspect_ratio: str) -> list[Path]:
+    """Deduplicate and enforce timeline scene-count limits in a stable order."""
+    ordered_unique: list[Path] = []
+    seen: set[str] = set()
+    for media_path in media_files:
+        normalized = str(media_path)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered_unique.append(media_path)
+
+    if str(aspect_ratio or "16:9") == "9:16" and len(ordered_unique) > 18:
+        return ordered_unique[:18]
+    return ordered_unique
+
+
 
 
 def _persist_scene_video_url(project_path: Path, scene_index: int, video_url: str) -> Path | None:
@@ -237,8 +253,6 @@ def sync_timeline_for_project(
             media_files = _media_files_from_session_scenes(project_path, session_scenes)
         if not media_files:
             media_files = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}], key=_media_sort_key)
-    if not media_files:
-        return None
 
     existing_meta: dict[str, Any] = {}
     if timeline_path.exists():
@@ -249,6 +263,10 @@ def sync_timeline_for_project(
 
     merged_meta = {**existing_meta, **(meta_overrides or {})}
     aspect_ratio = str(merged_meta.get("aspect_ratio", "16:9"))
+    media_files = _normalize_media_files(media_files or [], aspect_ratio)
+    if not media_files:
+        return None
+
     fps = int(merged_meta.get("fps", 30))
     burn_captions = bool(merged_meta.get("burn_captions", True))
     crossfade = bool(merged_meta.get("crossfade", False))
@@ -334,39 +352,7 @@ def sync_timeline_for_project(
     _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
     _apply_scene_media_assignments(timeline, session_scenes, project_path, effects_clips_by_index=effects_clips_by_index)
 
-    normalized_captions = _normalize_scene_captions(scene_captions, len(media_files))
-    if len(timeline.scenes) != len(normalized_captions):
-        timeline = build_default_timeline(
-            project_id=project_id,
-            title=title,
-            images=media_files,
-            voiceover_path=audio_files[0] if include_voiceover else None,
-            aspect_ratio=aspect_ratio,
-            fps=fps,
-            burn_captions=burn_captions,
-            caption_style=caption_style,
-            music_path=music_files[0] if include_music else None,
-            music_volume_db=music_volume_db,
-            include_voiceover=include_voiceover,
-            include_music=include_music,
-            enable_motion=enable_motion,
-            crossfade=effective_crossfade,
-            crossfade_duration=crossfade_duration,
-            transition_types=transition_types,
-            scene_duration=float(scene_duration) if scene_duration is not None else None,
-            scene_excerpts=scene_excerpts,
-            narration_wpm=narration_wpm,
-            narration_min_sec=narration_min_sec,
-            narration_max_sec=narration_max_sec,
-            scene_video_options=scene_video_options,
-        )
-        _apply_manual_scene_durations(timeline, session_scenes, lock_total_duration_to_timeline=include_voiceover)
-        _apply_scene_media_assignments(timeline, session_scenes, project_path, effects_clips_by_index=effects_clips_by_index)
-    if len(timeline.scenes) != len(normalized_captions):
-        raise ValueError(
-            f"Caption mapping mismatch: {len(timeline.scenes)} timeline scenes vs {len(normalized_captions)} captions. "
-            "Regenerate timeline and verify scene media ordering."
-        )
+    normalized_captions = _normalize_scene_captions(scene_captions, len(timeline.scenes))
 
     caption_max_lines, caption_max_chars = _caption_wrap_settings(aspect_ratio, caption_style.font_size)
 
