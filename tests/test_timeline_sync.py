@@ -210,14 +210,14 @@ def test_media_files_from_session_scenes_video_clip_stays_in_position(tmp_path) 
     assert media_files[1] == video.resolve(), "video clip must stay at scene-2 position"
 
 
-def test_normalize_media_files_dedupes_and_clamps_portrait_scene_count() -> None:
+def test_normalize_media_files_dedupes_without_clamping_scene_count() -> None:
     media_files = [Path(f"s{i:02d}.png") for i in range(1, 21)] + [Path("s05.png")]
 
     normalized = _normalize_media_files(media_files, "9:16")
 
-    assert len(normalized) == 18
+    assert len(normalized) == 20
     assert normalized[0] == Path("s01.png")
-    assert normalized[-1] == Path("s18.png")
+    assert normalized[-1] == Path("s20.png")
 
 
 def test_sync_timeline_for_project_uses_built_scene_count_for_caption_mapping(tmp_path) -> None:
@@ -244,6 +244,6 @@ def test_sync_timeline_for_project_uses_built_scene_count_for_caption_mapping(tm
 
     assert timeline_path is not None
     timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
-    assert len(timeline.scenes) == 18
+    assert len(timeline.scenes) == 20
     assert [scene.caption for scene in timeline.scenes[:3]] == ["Caption 1", "Caption 2", "Caption 3"]
-    assert timeline.scenes[-1].caption == "Caption 18"
+    assert timeline.scenes[-1].caption == "Caption 20"
