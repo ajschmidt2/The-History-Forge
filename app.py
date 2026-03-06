@@ -25,6 +25,7 @@ from src.ui.tabs.thumbnail import tab_thumbnail_title
 from src.ui.tabs.video_effects import tab_video_effects
 from src.ui.tabs.video_studio import tab_video_compile
 from src.ui.tabs.voiceover import tab_voiceover
+from src.ui.tabs.youtube_upload import tab_youtube_upload
 
 
 def _load_ui_state_module():
@@ -104,6 +105,7 @@ def main() -> None:
             "🎬 Video Studio",
             "🖼️ Title + Thumbnail",
             "🎥 AI Video Generator",
+            "📺 YouTube Upload",
         ]
     )
 
@@ -129,6 +131,8 @@ def main() -> None:
         tab_thumbnail_title()
     with tabs[10]:
         tab_ai_video_generator()
+    with tabs[11]:
+        tab_youtube_upload()
 
     save_project_state(active_project_id())
 
