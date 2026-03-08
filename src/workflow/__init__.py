@@ -3,8 +3,11 @@
 from src.workflow.models import PIPELINE_STEPS, ProjectManifest, StepStatus, WorkflowState, WorkflowStatus
 from src.workflow.runner import WorkflowRunner
 from src.workflow.services import (
+    FullWorkflowOptions,
+    FullWorkflowResult,
     PipelineOptions,
     StepResult,
+    run_full_workflow,
     run_generate_images,
     run_generate_prompts,
     run_generate_script,
@@ -29,7 +32,10 @@ __all__ = [
     "WorkflowStatus",
     "WorkflowRunner",
     "PipelineOptions",
+    "FullWorkflowOptions",
+    "FullWorkflowResult",
     "StepResult",
+    "run_full_workflow",
     "run_generate_script",
     "run_split_scenes",
     "run_generate_prompts",
