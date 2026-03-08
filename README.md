@@ -266,14 +266,15 @@ The app now includes a hardened **Automation** tab designed for full pipeline ru
 
 ### What is automated
 
-- Script generation
-- Scene splitting + per-scene prompting
-- Canonical asset sync (`s01.png`, `s01.mp4`, per-scene metadata files)
-- Image generation
-- Optional AI video generation for selected scenes only
-- Voiceover generation + duration fit
-- Timeline rebuild from current media truth on disk
-- Final render preflight and render
+Automation now runs in this exact order (starting from an existing script):
+
+1. Generate voiceover first
+2. Split script into the selected number of scenes
+3. Auto-apply scene narrative/subtitle text
+4. Generate prompts from scene title + excerpt + visual intent + narration, including selected image style and aspect ratio
+5. Generate images
+6. Optionally apply video effects (Ken Burns motion for image-based scenes)
+7. Final compile using scene visuals, voiceover, optional subtitles, and optional background music
 
 Automation intentionally stops at render and does **not** auto-upload to YouTube.
 
@@ -314,7 +315,7 @@ Per project (`data/projects/<project_id>/`), automation uses:
 1. Launch app: `streamlit run app.py`
 2. Choose/create a project.
 3. Open **Automation** tab.
-4. Configure toggles (voiceover/music/AI-video/overwrite).
+4. In **Automation**, set: aspect ratio, image style, number of scenes, video effects on/off, background music on/off + track selection (project/shared library), and subtitles on/off.
 5. Click **Run Full Workflow**.
 6. If interrupted or partial, click **Resume Missing Steps**.
 7. If media references drift, click **Regenerate Missing Scene Assets** then **Rebuild Timeline from Disk Truth**.

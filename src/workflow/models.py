@@ -9,12 +9,14 @@ from typing import Any
 
 PIPELINE_STEPS: tuple[str, ...] = (
     "script",
+    "voiceover",
     "scenes",
+    "narrative",
     "prompts",
     "images",
-    "voiceover",
     "ai_video",
     "music",
+    "effects",
     "timeline",
     "render",
 )

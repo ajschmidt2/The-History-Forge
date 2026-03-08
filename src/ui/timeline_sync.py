@@ -276,6 +276,7 @@ def sync_timeline_for_project(
     include_voiceover_requested = bool(merged_meta.get("include_voiceover", True))
     include_music_requested = bool(merged_meta.get("include_music", False))
     enable_motion = bool(merged_meta.get("enable_motion", True))
+    selected_music_track = str(merged_meta.get("selected_music_track", "") or "").strip()
     narration_wpm = float(merged_meta.get("narration_wpm", 160))
     narration_min_sec = float(merged_meta.get("narration_min_sec", 1.5))
     narration_max_sec = float(merged_meta.get("narration_max_sec", 12.0))
@@ -290,9 +291,17 @@ def sync_timeline_for_project(
     music_files = sorted([p for p in music_dir.glob("*.*") if p.suffix.lower() in {".wav", ".mp3"}])
 
     include_voiceover = include_voiceover_requested and bool(audio_files)
-    include_music = include_music_requested and bool(music_files)
 
-    music_volume_db = -18.0
+    selected_music_path: Path | None = None
+    if selected_music_track:
+        candidate = Path(selected_music_track).expanduser()
+        if not candidate.is_absolute():
+            candidate = (project_path / candidate).resolve()
+        if candidate.exists():
+            selected_music_path = candidate
+    include_music = include_music_requested and bool(selected_music_path or music_files)
+
+    music_volume_db = -6.0
     if isinstance(merged_meta.get("music"), dict):
         try:
             music_volume_db = float((merged_meta.get("music") or {}).get("volume_db", -18.0))
@@ -331,7 +340,7 @@ def sync_timeline_for_project(
         fps=fps,
         burn_captions=burn_captions,
         caption_style=caption_style,
-        music_path=music_files[0] if include_music else None,
+        music_path=(selected_music_path or (music_files[0] if music_files else None)) if include_music else None,
         music_volume_db=music_volume_db,
         include_voiceover=include_voiceover,
         include_music=include_music,

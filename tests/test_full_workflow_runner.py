@@ -1,7 +1,5 @@
-from pathlib import Path
-
 from src.workflow.models import StepStatus
-from src.workflow.project_io import load_scenes, save_scenes
+from src.workflow.project_io import load_project_payload, save_project_payload, save_scenes
 from src.workflow.services import (
     FullWorkflowOptions,
     FullWorkflowResult,
@@ -14,26 +12,31 @@ from utils import Scene
 def test_run_full_workflow_stops_on_failed_critical_step(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
+    project_id = "wf-critical"
+    payload = load_project_payload(project_id)
+    payload["script_text"] = "Existing script."
+    save_project_payload(project_id, payload)
+
     monkeypatch.setattr(
-        "src.workflow.services.run_generate_script",
-        lambda project_id, options=None: StepResult(project_id, "script", StepStatus.COMPLETED),
+        "src.workflow.services.run_generate_voiceover",
+        lambda project_id, options=None: StepResult(project_id, "voiceover", StepStatus.COMPLETED),
     )
     monkeypatch.setattr(
         "src.workflow.services.run_split_scenes",
         lambda project_id, options=None: StepResult(project_id, "scenes", StepStatus.FAILED, message="scene split failed"),
     )
 
-    result = run_full_workflow("wf-critical", FullWorkflowOptions(mode="full_auto"))
+    result = run_full_workflow(project_id, FullWorkflowOptions(mode="full_auto", overwrite_scenes=True, overwrite_prompts=True, overwrite_images=True, overwrite_timeline=True, overwrite_render=True, overwrite_voiceover=True))
 
     assert isinstance(result, FullWorkflowResult)
     assert result.failed_step == "scenes"
-    assert "script" in result.completed_steps
+    assert "voiceover" in result.completed_steps
     assert "scene split failed" in " ".join(result.warnings)
 
 
-def test_run_full_workflow_ai_video_falls_back_to_images(tmp_path, monkeypatch):
+def test_run_full_workflow_runs_new_automation_order(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    project_id = "wf-ai-fallback"
+    project_id = "wf-new-order"
 
     scenes = [
         Scene(index=1, title="S1", script_excerpt="One", visual_intent="V1", image_prompt="Prompt 1"),
@@ -41,39 +44,21 @@ def test_run_full_workflow_ai_video_falls_back_to_images(tmp_path, monkeypatch):
     ]
     save_scenes(project_id, scenes)
 
-    videos_dir = Path("data/projects") / project_id / "assets/videos"
+    payload = load_project_payload(project_id)
+    payload["script_text"] = "Script text"
+    save_project_payload(project_id, payload)
 
-    def _fake_generate_video(prompt, provider, project_id, aspect_ratio="16:9", save_dir=None, seconds=8):
-        if "Prompt 2" in prompt:
-            raise RuntimeError("provider timeout")
-        save_path = Path(save_dir or videos_dir)
-        save_path.mkdir(parents=True, exist_ok=True)
-        target = save_path / "s01.mp4"
-        target.write_bytes(b"video-bytes")
-        return "https://example.com/video.mp4", str(target)
+    execution_order: list[str] = []
 
-    def _fake_step_exists(pid, step):
-        return step in {"script", "scenes", "prompts", "images", "voiceover", "voiceover_timing", "timeline"}
+    monkeypatch.setattr("src.workflow.services.run_generate_voiceover", lambda project_id, options=None: execution_order.append("voiceover") or StepResult(project_id, "voiceover", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_split_scenes", lambda project_id, options=None: execution_order.append("scenes") or StepResult(project_id, "scenes", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_apply_scene_narrative", lambda project_id, options=None: execution_order.append("narrative") or StepResult(project_id, "narrative", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_generate_prompts", lambda project_id, options=None: execution_order.append("prompts") or StepResult(project_id, "prompts", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_generate_images", lambda project_id, options=None: execution_order.append("images") or StepResult(project_id, "images", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_apply_video_effects", lambda project_id, options=None: execution_order.append("effects") or StepResult(project_id, "effects", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_render_video", lambda project_id, options=None: execution_order.append("render") or StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": "renders/final.mp4"}))
 
-    monkeypatch.setattr("src.workflow.services.generate_video", _fake_generate_video)
-    monkeypatch.setattr("src.workflow.services._step_outputs_exist", _fake_step_exists)
-    monkeypatch.setattr(
-        "src.workflow.services.run_render_video",
-        lambda project_id, options=None: StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": "renders/final.mp4"}),
-    )
+    result = run_full_workflow(project_id, FullWorkflowOptions(mode="full_auto", overwrite_scenes=True, overwrite_prompts=True, overwrite_images=True, overwrite_timeline=True, overwrite_render=True, overwrite_voiceover=True))
 
-    result = run_full_workflow(
-        project_id,
-        FullWorkflowOptions(
-            mode="full_auto",
-            enable_ai_video=True,
-            ai_video_scene_indexes=[1, 2],
-        ),
-    )
-
-    refreshed = load_scenes(project_id)
     assert result.failed_step == ""
-    assert "ai_video" in result.completed_steps
-    assert "render" in result.completed_steps
-    assert any("using image fallback" in warning for warning in result.warnings)
-    assert any(str(getattr(scene, "video_path", "")).endswith("s01.mp4") for scene in refreshed)
+    assert execution_order == ["voiceover", "scenes", "narrative", "prompts", "images", "effects", "render"]

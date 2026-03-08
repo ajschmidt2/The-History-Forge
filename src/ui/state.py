@@ -292,6 +292,13 @@ def save_project_state(project_id: str) -> None:
         "variations_per_scene": int(st.session_state.get("variations_per_scene", 1) or 1),
         "num_images": int(st.session_state.get("num_images", st.session_state.get("max_scenes", 8)) or 8),
         "max_scenes": int(st.session_state.get("max_scenes", 8) or 8),
+        "scene_count": int(st.session_state.get("scene_count", st.session_state.get("max_scenes", 8)) or 8),
+        "image_style": str(st.session_state.get("image_style", st.session_state.get("visual_style", "Photorealistic cinematic")) or "Photorealistic cinematic"),
+        "enable_video_effects": bool(st.session_state.get("enable_video_effects", True)),
+        "enable_music": bool(st.session_state.get("enable_music", st.session_state.get("include_music", False))),
+        "selected_music_track": str(st.session_state.get("selected_music_track", "") or ""),
+        "enable_subtitles": bool(st.session_state.get("enable_subtitles", True)),
+        "music_volume_relative_to_voiceover": float(st.session_state.get("music_volume_relative_to_voiceover", 0.5) or 0.5),
         "scene_wpm": int(st.session_state.get("scene_wpm", 160) or 160),
         "estimated_total_runtime_sec": float(st.session_state.get("estimated_total_runtime_sec", 0.0) or 0.0),
         "scene_transition_types": st.session_state.get("scene_transition_types", []),
@@ -384,6 +391,13 @@ def load_project_state(project_id: str) -> None:
     st.session_state.variations_per_scene = int(raw.get("variations_per_scene", 1) or 1)
     st.session_state.num_images = int(raw.get("num_images", raw.get("max_scenes", 8)) or 8)
     st.session_state.max_scenes = int(raw.get("max_scenes", 8) or 8)
+    st.session_state.scene_count = int(raw.get("scene_count", st.session_state.max_scenes) or st.session_state.max_scenes)
+    st.session_state.image_style = str(raw.get("image_style", st.session_state.visual_style) or st.session_state.visual_style)
+    st.session_state.enable_video_effects = bool(raw.get("enable_video_effects", True))
+    st.session_state.enable_music = bool(raw.get("enable_music", raw.get("include_music", False)))
+    st.session_state.selected_music_track = str(raw.get("selected_music_track", "") or "")
+    st.session_state.enable_subtitles = bool(raw.get("enable_subtitles", True))
+    st.session_state.music_volume_relative_to_voiceover = float(raw.get("music_volume_relative_to_voiceover", 0.5) or 0.5)
     st.session_state.scene_wpm = int(raw.get("scene_wpm", 160) or 160)
     st.session_state.estimated_total_runtime_sec = float(raw.get("estimated_total_runtime_sec", 0.0) or 0.0)
     raw_transitions = raw.get("scene_transition_types", [])
@@ -445,6 +459,13 @@ def init_state() -> None:
     st.session_state.setdefault("variations_per_scene", 1)
 
     st.session_state.setdefault("max_scenes", 8)
+    st.session_state.setdefault("scene_count", st.session_state.get("max_scenes", 8))
+    st.session_state.setdefault("image_style", st.session_state.get("visual_style", "Photorealistic cinematic"))
+    st.session_state.setdefault("enable_video_effects", True)
+    st.session_state.setdefault("enable_music", False)
+    st.session_state.setdefault("selected_music_track", "")
+    st.session_state.setdefault("enable_subtitles", True)
+    st.session_state.setdefault("music_volume_relative_to_voiceover", 0.5)
     st.session_state.setdefault("num_images", 8)
     st.session_state.setdefault("scene_wpm", 160)
     st.session_state.setdefault("estimated_total_runtime_sec", 0.0)

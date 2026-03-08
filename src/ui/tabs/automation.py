@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from collections import deque
 from pathlib import Path
+
+MUSIC_LIBRARY_ROOT = Path("data/music_library")
 from typing import Any
 
 import streamlit as st
@@ -45,6 +47,12 @@ def _count_files(folder: Path, suffixes: tuple[str, ...]) -> int:
     return sum(1 for path in folder.glob("*") if path.is_file() and path.suffix.lower() in valid)
 
 
+
+
+def _list_music_tracks(folder: Path) -> list[Path]:
+    if not folder.exists():
+        return []
+    return sorted([p for p in folder.glob("*.*") if p.suffix.lower() in {".mp3", ".wav", ".m4a"}], key=lambda p: p.name.lower())
 def _reset_step(project_id: str, step_name: str) -> None:
     state = load_workflow_state(project_id)
     state.step_statuses[step_name] = StepStatus.NOT_STARTED
@@ -158,34 +166,82 @@ def tab_automation(project_id: str) -> None:
         st.info("AI video is enabled but some scenes are still image-based. Fallback: render now with images, then regenerate selected scenes with AI video and rerender.")
 
     st.markdown("#### Automation Settings")
+    project_music_tracks = _list_music_tracks(project_path / "assets/music")
+    shared_music_tracks = _list_music_tracks(MUSIC_LIBRARY_ROOT)
+
     col_settings_1, col_settings_2 = st.columns(2)
     with col_settings_1:
-        use_web_research = st.toggle("Use web research", value=bool(payload.get("use_web_research", False)))
-        generate_images = st.toggle("Generate images", value=bool(payload.get("automation_generate_images", True)))
-        generate_voiceover = st.toggle("Generate voiceover", value=bool(payload.get("automation_generate_voiceover", True)))
-        generate_ai_video = st.toggle("Generate AI video for selected scenes", value=bool(payload.get("automation_enable_ai_video", False)))
+        aspect_ratio = st.selectbox(
+            "Aspect Ratio",
+            options=["16:9", "9:16"],
+            index=0 if str(payload.get("aspect_ratio", "16:9")) == "16:9" else 1,
+        )
+        image_style = st.text_input(
+            "Image Style",
+            value=str(payload.get("image_style", payload.get("visual_style", "Photorealistic cinematic")) or "Photorealistic cinematic"),
+            help="Example: Photorealistic cinematic, Realistic, Vintage painted, Documentary still",
+        )
+        scene_count = st.number_input(
+            "Number of Scenes",
+            min_value=1,
+            max_value=75,
+            value=int(payload.get("scene_count", payload.get("max_scenes", 8)) or 8),
+            step=1,
+        )
+        enable_video_effects = st.toggle("Video Effects", value=bool(payload.get("enable_video_effects", True)))
     with col_settings_2:
-        include_music = st.toggle("Include music", value=bool(payload.get("include_music", False)))
-        include_captions = st.toggle("Include captions", value=bool(payload.get("automation_include_captions", True)))
+        enable_music = st.toggle("Background Music", value=bool(payload.get("enable_music", payload.get("include_music", False))))
+        enable_subtitles = st.toggle("Subtitles", value=bool(payload.get("enable_subtitles", payload.get("automation_include_captions", True))))
+        generate_voiceover = st.toggle("Generate voiceover", value=bool(payload.get("automation_generate_voiceover", True)))
         overwrite_existing = st.toggle("Overwrite existing assets", value=bool(payload.get("automation_overwrite_existing", False)))
-        include_voiceover = st.toggle("Include voiceover in timeline/render", value=bool(payload.get("include_voiceover", True)))
+
+    combined_music_choices: list[tuple[str, str]] = []
+    for track in project_music_tracks:
+        combined_music_choices.append((f"Project · {track.name}", str(track)))
+    for track in shared_music_tracks:
+        combined_music_choices.append((f"Shared · {track.name}", str(track)))
+
+    selected_music_track = str(payload.get("selected_music_track", "") or "")
+    if enable_music:
+        if combined_music_choices:
+            labels = [label for label, _ in combined_music_choices]
+            values = [value for _, value in combined_music_choices]
+            selected_index = values.index(selected_music_track) if selected_music_track in values else 0
+            selected_label = st.selectbox("Background Music Selection", options=labels, index=selected_index)
+            selected_music_track = values[labels.index(selected_label)]
+        else:
+            st.warning("Background music is enabled, but no project/shared music tracks were found.")
+            selected_music_track = ""
+    else:
+        selected_music_track = ""
 
     if st.button("Save automation settings", width="stretch"):
-        payload["use_web_research"] = use_web_research
-        payload["include_music"] = include_music
-        payload["include_voiceover"] = include_voiceover
-        payload["automation_generate_images"] = generate_images
-        payload["automation_generate_voiceover"] = generate_voiceover
-        payload["automation_enable_ai_video"] = generate_ai_video
-        payload["automation_include_captions"] = include_captions
-        payload["automation_overwrite_existing"] = overwrite_existing
+        payload["aspect_ratio"] = aspect_ratio
+        payload["image_style"] = image_style
+        payload["visual_style"] = image_style
+        payload["scene_count"] = int(scene_count)
+        payload["max_scenes"] = int(scene_count)
+        payload["enable_video_effects"] = bool(enable_video_effects)
+        payload["enable_music"] = bool(enable_music)
+        payload["include_music"] = bool(enable_music)
+        payload["selected_music_track"] = selected_music_track
+        payload["enable_subtitles"] = bool(enable_subtitles)
+        payload["automation_generate_voiceover"] = bool(generate_voiceover)
+        payload["automation_overwrite_existing"] = bool(overwrite_existing)
+        payload["music_volume_relative_to_voiceover"] = 0.5
         save_project_payload(project_id, payload)
         st.success("Automation settings saved.")
-
+    include_voiceover = bool(payload.get("include_voiceover", True))
     pipeline_options = PipelineOptions(
-        use_web_research=use_web_research,
-        include_music=include_music,
+        include_music=enable_music,
+        include_subtitles=enable_subtitles,
         include_voiceover=include_voiceover,
+        number_of_scenes=int(scene_count),
+        aspect_ratio=aspect_ratio,
+        visual_style=image_style,
+        enable_video_effects=enable_video_effects,
+        selected_music_track=selected_music_track,
+        music_volume_relative_to_voiceover=0.5,
         voice_id=str(payload.get("voice_id", "") or ""),
         allow_silent_render=not include_voiceover,
     )
@@ -194,6 +250,9 @@ def tab_automation(project_id: str) -> None:
     c_full, c_resume, c_timeline, c_render = st.columns(4)
     c_assets, c_rebuild = st.columns(2)
     if c_full.button("Run Full Workflow", width="stretch"):
+        if enable_music and not selected_music_track:
+            st.error("Background music is enabled but no track is selected.")
+            return
         result = run_full_workflow(
             project_id,
             FullWorkflowOptions(
@@ -201,12 +260,10 @@ def tab_automation(project_id: str) -> None:
                 overwrite_script=overwrite_existing,
                 overwrite_scenes=overwrite_existing,
                 overwrite_prompts=overwrite_existing,
-                overwrite_images=overwrite_existing and generate_images,
+                overwrite_images=overwrite_existing,
                 overwrite_voiceover=overwrite_existing and generate_voiceover,
-                overwrite_ai_video=overwrite_existing and generate_ai_video,
                 overwrite_timeline=overwrite_existing,
                 overwrite_render=overwrite_existing,
-                enable_ai_video=generate_ai_video,
                 pipeline=pipeline_options,
             ),
         )
@@ -222,7 +279,6 @@ def tab_automation(project_id: str) -> None:
             project_id,
             FullWorkflowOptions(
                 mode="resume_missing",
-                enable_ai_video=generate_ai_video,
                 pipeline=pipeline_options,
             ),
         )
