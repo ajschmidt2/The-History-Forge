@@ -15,6 +15,7 @@ from src.config import streamlit_secrets_detected
 from src.config.validate import validate_runtime_config
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.ui.tabs.ai_video_generator import tab_ai_video_generator
+from src.ui.tabs.automation import tab_automation
 from src.ui.tabs.export import tab_export
 from src.ui.tabs.generate_script import tab_generate_script
 from src.ui.tabs.images import tab_create_images
@@ -103,6 +104,7 @@ def main() -> None:
             "📦 Export",
             "✨ Video Effects",
             "🎬 Video Studio",
+            "⚙️ Automation",
             "🖼️ Title + Thumbnail",
             "🎥 AI Video Generator",
             "📺 YouTube Upload",
@@ -128,10 +130,12 @@ def main() -> None:
     with tabs[8]:
         tab_video_compile()
     with tabs[9]:
-        tab_thumbnail_title()
+        tab_automation(active_project_id())
     with tabs[10]:
-        tab_ai_video_generator()
+        tab_thumbnail_title()
     with tabs[11]:
+        tab_ai_video_generator()
+    with tabs[12]:
         tab_youtube_upload()
 
     save_project_state(active_project_id())
