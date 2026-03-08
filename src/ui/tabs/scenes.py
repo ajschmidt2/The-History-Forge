@@ -5,11 +5,13 @@ from urllib.request import urlopen
 
 import streamlit as st
 
-from utils import Scene, split_script_into_scenes
+from utils import Scene
 
 from src.ui.state import active_project_id, clear_downstream, scenes_ready, script_ready
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.utils import get_media_duration
+from src.workflow import PipelineOptions, StepStatus, run_split_scenes
+from src.workflow.project_io import load_scenes
 import src.supabase_storage as _sb_store
 
 
@@ -505,29 +507,21 @@ def tab_create_scenes() -> None:
         )
 
     if create_scenes_clicked:
-        script_for_splitter = (
-            str(st.session_state.get("generated_script_text_input", "") or "").strip()
-            or str(st.session_state.get("script_text_input", "") or "").strip()
-            or str(st.session_state.get("script_text", "") or "").strip()
-        )
-        st.write("DEBUG max_scenes:", st.session_state.max_scenes)
-        st.write("DEBUG script length:", len(script_for_splitter))
         with st.spinner("Splitting script..."):
-            st.session_state.scenes = split_script_into_scenes(
-                script_for_splitter,
-                max_scenes=int(st.session_state.max_scenes),
-                outline=_outline_payload(),
-                wpm=int(st.session_state.scene_wpm),
+            result = run_split_scenes(
+                active_project_id(),
+                PipelineOptions(number_of_scenes=int(st.session_state.max_scenes)),
             )
+        if result.status != StepStatus.COMPLETED:
+            st.error(result.message or "Could not split scenes.")
+            return
+        st.session_state.scenes = load_scenes(active_project_id())
         clear_downstream("scenes")
         st.session_state.scene_transition_types = ["fade"] * max(0, len(st.session_state.scenes) - 1)
         st.session_state.storyboard_selected_pos = 0
         _recompute_estimated_runtime()
         _sync_timeline_from_scenes()
         st.toast(f"Created {len(st.session_state.scenes)} scenes.")
-        st.caption(f"Split debug: {len(st.session_state.scenes)} scene(s)")
-        for debug_scene in st.session_state.scenes:
-            st.write(debug_scene.index, debug_scene.title, str(debug_scene.script_excerpt or "")[:60])
         st.rerun()
 
     if reset_scenes_clicked:

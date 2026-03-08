@@ -10,6 +10,8 @@ from src.storage import record_asset
 import src.supabase_storage as _sb_store
 from src.ui.state import active_project_id, scenes_ready
 from src.ui.timeline_sync import sync_timeline_for_project
+from src.workflow import PipelineOptions, StepStatus, run_generate_images
+from src.workflow.project_io import load_scenes
 
 
 MAX_UPLOAD_IMAGE_BYTES = 20 * 1024 * 1024
@@ -166,56 +168,30 @@ def tab_create_images() -> None:
         st.rerun()
 
     if st.button("Generate images for all scenes", type="primary", width="stretch"):
-        scene_failures: list[str] = []
-        generated_count = 0
-        cache: dict[str, bytes] = st.session_state.get("generated_image_cache", {})
         with st.spinner("Generating images..."):
-            selected_scenes = st.session_state.scenes[: int(st.session_state.num_images)]
-            for s in selected_scenes:
-                if not (s.image_prompt or "").strip():
-                    s.image_prompt = f"Create a cinematic historical visual for: {s.title}."
-
-                s.image_variations = []
-                s.image_error = ""
-                for variation_index in range(int(st.session_state.variations_per_scene)):
-                    cache_key = (
-                        f"{(s.image_prompt or '').strip()}|{st.session_state.aspect_ratio}|"
-                        f"{st.session_state.visual_style}|{variation_index}"
-                    )
-                    cached_bytes = cache.get(cache_key)
-                    if cached_bytes:
-                        s.image_variations.append(cached_bytes)
-                        continue
-                    try:
-                        updated = generate_image_for_scene(
-                            s,
-                            aspect_ratio=st.session_state.aspect_ratio,
-                            visual_style=st.session_state.visual_style,
-                        )
-                    except Exception as exc:  # noqa: BLE001 - keep per-scene error handling resilient
-                        s.image_error = f"Image generation failed: {exc}"
-                        scene_failures.append(f"Scene {s.index:02d}")
-                        break
-                    if updated.image_bytes:
-                        cache[cache_key] = updated.image_bytes
-                        s.image_variations.append(updated.image_bytes)
-
-                s.primary_image_index = 0
-                s.image_bytes = s.image_variations[0] if s.image_variations else None
-                if s.image_bytes:
-                    _save_scene_image_bytes(s, s.image_bytes)
-                    generated_count += 1
-
-        st.session_state.generated_image_cache = cache
-
-        _sync_project_timeline_from_session_scenes()
-
-        if scene_failures:
-            st.warning(
-                f"Generated images for {generated_count} scene(s). Failed: {', '.join(scene_failures)}."
+            result = run_generate_images(
+                active_project_id(),
+                PipelineOptions(
+                    number_of_scenes=int(st.session_state.num_images),
+                    variations_per_scene=int(st.session_state.variations_per_scene),
+                    aspect_ratio=st.session_state.aspect_ratio,
+                    visual_style=st.session_state.visual_style,
+                    tone=st.session_state.tone,
+                ),
             )
-        else:
-            st.toast("Image generation complete. Images auto-saved to assets/images.")
+        if result.status != StepStatus.COMPLETED:
+            st.warning(result.message or "Image generation failed.")
+        st.session_state.scenes = load_scenes(active_project_id())
+        for scene in st.session_state.scenes:
+            image_path = Path("data/projects") / active_project_id() / "assets/images" / f"s{scene.index:02d}.png"
+            if image_path.exists():
+                try:
+                    scene.image_bytes = image_path.read_bytes()
+                    scene.image_variations = [scene.image_bytes]
+                except OSError:
+                    scene.image_bytes = None
+        _sync_project_timeline_from_session_scenes()
+        st.toast("Image generation complete. Images auto-saved to assets/images.")
         st.rerun()
 
     st.divider()
