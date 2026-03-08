@@ -3,7 +3,16 @@ from pathlib import Path
 
 from src.workflow.models import StepStatus
 from src.workflow.project_io import load_scenes, save_project_payload
-from src.workflow.services import PipelineOptions, run_split_scenes, run_sync_timeline
+from src.workflow.services import (
+    FullWorkflowOptions,
+    PipelineOptions,
+    StepResult,
+    run_full_workflow,
+    run_generate_script,
+    run_generate_voiceover,
+    run_split_scenes,
+    run_sync_timeline,
+)
 
 
 def test_run_split_scenes_persists_scene_json(tmp_path, monkeypatch):
@@ -85,3 +94,68 @@ def test_run_sync_timeline_fills_missing_durations(tmp_path, monkeypatch):
 
     refreshed = load_scenes(project_id)
     assert all(float(scene.estimated_duration_sec) > 0 for scene in refreshed)
+
+
+def test_run_generate_script_uses_existing_script_text(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-existing-script"
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "script_text": "Preloaded script text",
+            "topic": "",
+        },
+    )
+
+    result = run_generate_script(project_id, PipelineOptions())
+    assert result.status == StepStatus.SKIPPED
+    assert "Existing script text" in result.message
+
+    script_path = Path("data/projects") / project_id / "script.txt"
+    assert script_path.exists()
+    assert script_path.read_text(encoding="utf-8") == "Preloaded script text"
+
+
+def test_run_generate_voiceover_skips_when_silent_fallback_enabled_without_voice_id(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-voiceover-silent"
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "script_text": "Narration to synthesize.",
+        },
+    )
+
+    result = run_generate_voiceover(project_id, PipelineOptions(allow_silent_render=True, include_voiceover=True))
+    assert result.status == StepStatus.SKIPPED
+    assert "silent render" in result.message
+
+
+def test_run_full_workflow_skips_voiceover_timing_for_silent_render_without_voiceover(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    monkeypatch.setattr(
+        "src.workflow.services._step_outputs_exist",
+        lambda project_id, step: step in {"script", "scenes", "prompts", "images"},
+    )
+    monkeypatch.setattr(
+        "src.workflow.services.run_generate_voiceover",
+        lambda project_id, options=None: StepResult(project_id, "voiceover", StepStatus.SKIPPED, message="no voice"),
+    )
+    monkeypatch.setattr(
+        "src.workflow.services.run_sync_timeline",
+        lambda project_id, options=None: StepResult(project_id, "timeline", StepStatus.COMPLETED, outputs={"timeline_path": "timeline.json"}),
+    )
+    monkeypatch.setattr(
+        "src.workflow.services.run_render_video",
+        lambda project_id, options=None: StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": "renders/final.mp4"}),
+    )
+
+    result = run_full_workflow(
+        "svc-full-silent",
+        FullWorkflowOptions(pipeline=PipelineOptions(allow_silent_render=True, include_voiceover=True)),
+    )
+    assert result.failed_step == ""
+    assert "voiceover_timing" in result.skipped_steps
