@@ -64,6 +64,9 @@ def _scene_to_dict(scene: Any) -> dict[str, Any]:
         "video_loop": bool(getattr(scene, "video_loop", False)),
         "video_muted": bool(getattr(scene, "video_muted", True)),
         "video_volume": float(getattr(scene, "video_volume", 0.0) or 0.0),
+        "active_media_type": str(getattr(scene, "active_media_type", "") or ""),
+        "asset_paths": dict(getattr(scene, "asset_paths", {}) or {}),
+        "asset_urls": dict(getattr(scene, "asset_urls", {}) or {}),
     }
 
 
@@ -98,6 +101,9 @@ def _scene_from_dict(raw: object) -> Any | None:
         scene.video_volume = float(raw.get("video_volume", 0.0) or 0.0)
     except (TypeError, ValueError):
         scene.video_volume = 0.0
+    scene.active_media_type = str(raw.get("active_media_type", "") or "")
+    scene.asset_paths = raw.get("asset_paths", {}) if isinstance(raw.get("asset_paths"), dict) else {}
+    scene.asset_urls = raw.get("asset_urls", {}) if isinstance(raw.get("asset_urls"), dict) else {}
     return scene
 
 

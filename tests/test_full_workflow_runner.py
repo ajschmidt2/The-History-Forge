@@ -48,7 +48,7 @@ def test_run_full_workflow_ai_video_falls_back_to_images(tmp_path, monkeypatch):
             raise RuntimeError("provider timeout")
         save_path = Path(save_dir or videos_dir)
         save_path.mkdir(parents=True, exist_ok=True)
-        target = save_path / "scene01.mp4"
+        target = save_path / "s01.mp4"
         target.write_bytes(b"video-bytes")
         return "https://example.com/video.mp4", str(target)
 
@@ -76,4 +76,4 @@ def test_run_full_workflow_ai_video_falls_back_to_images(tmp_path, monkeypatch):
     assert "ai_video" in result.completed_steps
     assert "render" in result.completed_steps
     assert any("using image fallback" in warning for warning in result.warnings)
-    assert any(str(getattr(scene, "video_path", "")).endswith("scene01.mp4") for scene in refreshed)
+    assert any(str(getattr(scene, "video_path", "")).endswith("s01.mp4") for scene in refreshed)
