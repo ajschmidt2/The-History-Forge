@@ -190,7 +190,11 @@ def _run_ai_video_step(project_id: str, options: FullWorkflowOptions) -> StepRes
 def _step_outputs_exist(project_id: str, step: str) -> bool:
     project_path = project_dir(project_id)
     if step == "script":
-        return bool((project_path / "script.txt").exists() and (project_path / "script.txt").read_text(encoding="utf-8").strip())
+        script_path = project_path / "script.txt"
+        if script_path.exists() and script_path.read_text(encoding="utf-8").strip():
+            return True
+        payload = load_project_payload(project_id)
+        return bool(str(payload.get("script_text", "") or "").strip())
     if step == "scenes":
         return bool(load_scenes(project_id))
     if step == "prompts":
@@ -251,6 +255,16 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
         steps = [s for s in steps if s[0] in {"timeline", "render"}]
 
     for step_name, overwrite, handler in steps:
+        if step_name in {"voiceover", "voiceover_timing"} and not cfg.pipeline.include_voiceover:
+            result.skipped_steps.append(step_name)
+            logger.info("step=%s status=skipped reason=disabled", step_name)
+            continue
+
+        if step_name == "voiceover_timing" and cfg.pipeline.allow_silent_render and not _step_outputs_exist(project_id, "voiceover"):
+            result.skipped_steps.append(step_name)
+            logger.info("step=%s status=skipped reason=missing_voiceover_silent_fallback", step_name)
+            continue
+
         if step_name == "ai_video" and not cfg.enable_ai_video:
             result.skipped_steps.append(step_name)
             logger.info("step=%s status=skipped reason=disabled", step_name)
@@ -315,6 +329,13 @@ def run_generate_script(project_id: str, options: PipelineOptions | None = None)
     ensure_project_files(project_id)
     load_workflow_state(project_id)
     payload, cfg = _load_options(project_id, options)
+    existing_script = str(payload.get("script_text", "") or "").strip()
+    if existing_script:
+        script_path = project_dir(project_id) / "script.txt"
+        if not script_path.exists() or not script_path.read_text(encoding="utf-8").strip():
+            script_path.write_text(existing_script, encoding="utf-8")
+        return StepResult(project_id, "script", StepStatus.SKIPPED, message="Existing script text found.")
+
     topic = str(payload.get("topic", "") or "").strip()
     if not topic:
         return StepResult(project_id, "script", StepStatus.FAILED, message="Project topic is empty.")
@@ -443,13 +464,27 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
 def run_generate_voiceover(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     ensure_project_files(project_id)
     payload, cfg = _load_options(project_id, options)
+    if not cfg.include_voiceover:
+        return StepResult(project_id, "voiceover", StepStatus.SKIPPED, message="Voiceover is disabled.")
+
     script_text = str(payload.get("script_text", "") or "").strip()
     if not script_text:
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message="Script text is missing.")
 
+    voice_id = str(cfg.voice_id or payload.get("voice_id", "") or "").strip()
+    if not voice_id:
+        if cfg.allow_silent_render:
+            return StepResult(
+                project_id,
+                "voiceover",
+                StepStatus.SKIPPED,
+                message="Voice ID is missing; skipping voiceover because silent render is enabled.",
+            )
+        return StepResult(project_id, "voiceover", StepStatus.FAILED, message="Voice ID is required.")
+
     update_step_status(project_id, "voiceover", StepStatus.IN_PROGRESS)
     try:
-        audio, err = generate_voiceover(script_text, voice_id=cfg.voice_id or payload.get("voice_id", ""), output_format="mp3")
+        audio, err = generate_voiceover(script_text, voice_id=voice_id, output_format="mp3")
     except Exception as exc:  # noqa: BLE001
         update_step_status(project_id, "voiceover", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message=str(exc))
