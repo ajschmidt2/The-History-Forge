@@ -14,6 +14,7 @@ import src.supabase_storage as _sb_store
 from src.config import get_secret
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.storage import delete_project_records
+from src.workflow import get_project_manifest, load_workflow_state
 
 
 def _load_forge_utils():
@@ -169,6 +170,8 @@ def ensure_project_exists(project_id: str) -> Path:
     (project_dir / "assets/music").mkdir(parents=True, exist_ok=True)
     (project_dir / "assets/thumbnails").mkdir(parents=True, exist_ok=True)
     (project_dir / "assets/videos").mkdir(parents=True, exist_ok=True)
+    get_project_manifest(normalized)
+    load_workflow_state(normalized)
     return project_dir
 
 
@@ -301,11 +304,15 @@ def save_project_state(project_id: str) -> None:
     script = payload["script_text"]
     if script:
         (PROJECTS_ROOT / normalized / "script.txt").write_text(script, encoding="utf-8")
+    get_project_manifest(normalized)
+    load_workflow_state(normalized)
 
 
 def load_project_state(project_id: str) -> None:
     normalized = slugify_project_id(project_id)
     ensure_project_exists(normalized)
+    get_project_manifest(normalized)
+    load_workflow_state(normalized)
 
     state_path = _project_state_path(normalized)
     _clear_scene_widget_state()
