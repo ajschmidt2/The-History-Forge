@@ -15,6 +15,7 @@ from src.video.ffmpeg_render import render_video_from_timeline
 from src.video.timeline_builder import compute_scene_durations
 from src.video.timeline_schema import Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists, get_media_duration
+from src.workflow.assets import preflight_report, sync_scene_asset_metadata
 from src.workflow.models import StepStatus
 from src.workflow.project_io import (
     ensure_project_files,
@@ -50,6 +51,7 @@ class PipelineOptions:
     reading_level: str = "General"
     pacing: str = "Balanced"
     allow_silent_render: bool = False
+    allow_captionless_render: bool = True
     voice_id: str = ""
 
 
@@ -96,7 +98,7 @@ def _workflow_logger(project_id: str) -> logging.Logger:
 
 
 def _scene_duration_fit_to_voiceover(project_id: str) -> StepResult:
-    scenes = load_scenes(project_id)
+    scenes = sync_scene_asset_metadata(project_id)
     if not scenes:
         return StepResult(project_id, "voiceover_timing", StepStatus.FAILED, message="No scenes available for timing sync.")
 
@@ -174,6 +176,7 @@ def _run_ai_video_step(project_id: str, options: FullWorkflowOptions) -> StepRes
             warnings.append(f"Scene {scene.index}: AI video failed ({exc}); using image fallback.")
 
     save_scenes(project_id, scenes)
+    sync_scene_asset_metadata(project_id, scenes)
     status = StepStatus.COMPLETED if generated > 0 else StepStatus.SKIPPED
     return StepResult(
         project_id,
@@ -366,6 +369,7 @@ def run_split_scenes(project_id: str, options: PipelineOptions | None = None) ->
     try:
         scenes = split_script_into_scenes(script_text, max_scenes=cfg.number_of_scenes, wpm=int(payload.get("scene_wpm", 160) or 160))
         save_scenes(project_id, scenes)
+        sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001
         update_step_status(project_id, "scenes", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "scenes", StepStatus.FAILED, message=str(exc))
@@ -391,6 +395,7 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
             objects=payload.get("object_registry", []),
         )
         save_scenes(project_id, scenes)
+        sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001
         update_step_status(project_id, "prompts", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "prompts", StepStatus.FAILED, message=str(exc))
@@ -426,6 +431,7 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
                     pass
                 generated += 1
         save_scenes(project_id, scenes)
+        sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001
         update_step_status(project_id, "images", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "images", StepStatus.FAILED, message=str(exc), outputs={"generated": generated})
@@ -468,7 +474,7 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
 def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     ensure_project_files(project_id)
     payload, cfg = _load_options(project_id, options)
-    scenes = load_scenes(project_id)
+    scenes = sync_scene_asset_metadata(project_id)
     if not scenes:
         return StepResult(project_id, "timeline", StepStatus.FAILED, message="No scenes available.")
 
@@ -523,6 +529,12 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
         return StepResult(project_id, "render", StepStatus.FAILED, message="timeline.json is missing")
 
     update_step_status(project_id, "render", StepStatus.IN_PROGRESS)
+    preflight = preflight_report(project_id)
+    if preflight["issues"]["invalid_timeline_references"]:
+        msg = "Render preflight failed: invalid timeline references. Rebuild timeline from disk."
+        update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
+        return StepResult(project_id, "render", StepStatus.FAILED, message=msg, outputs={"preflight": preflight})
+
     try:
         timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
@@ -545,6 +557,20 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
             timeline_path.parent.mkdir(parents=True, exist_ok=True)
             timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
 
+    warnings: list[str] = []
+    if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
+        if not Path(timeline.meta.music.path).exists():
+            timeline.meta.include_music = False
+            timeline.meta.music = None
+            warnings.append("Music file missing; continuing without music.")
+    if timeline.meta.burn_captions:
+        try:
+            from src.video.captions import write_ass_file
+            _ = write_ass_file
+        except Exception:
+            timeline.meta.burn_captions = False
+            warnings.append("Caption pipeline unavailable; continuing without burned captions.")
+
     output_path = project_dir(project_id) / "renders" / "final.mp4"
     log_path = project_dir(project_id) / "renders" / "render_logs" / "ffmpeg_last.log"
     report_path = project_dir(project_id) / "renders" / "render_report.json"
@@ -556,8 +582,20 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
         except Exception:
             pass
     except (FFmpegNotFoundError, Exception) as exc:  # noqa: BLE001
-        update_step_status(project_id, "render", StepStatus.FAILED, error=str(exc))
-        return StepResult(project_id, "render", StepStatus.FAILED, message=str(exc))
+        if cfg.allow_captionless_render and timeline.meta.burn_captions:
+            try:
+                timeline.meta.burn_captions = False
+                fallback_timeline_path = project_dir(project_id) / "renders" / "timeline.no_captions.json"
+                fallback_timeline_path.parent.mkdir(parents=True, exist_ok=True)
+                fallback_timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+                render_video_from_timeline(fallback_timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=1280)
+                warnings.append(f"Caption render failed ({exc}); continued without burned captions.")
+            except Exception as retry_exc:  # noqa: BLE001
+                update_step_status(project_id, "render", StepStatus.FAILED, error=str(retry_exc))
+                return StepResult(project_id, "render", StepStatus.FAILED, message=str(retry_exc), outputs={"warnings": warnings, "preflight": preflight})
+        else:
+            update_step_status(project_id, "render", StepStatus.FAILED, error=str(exc))
+            return StepResult(project_id, "render", StepStatus.FAILED, message=str(exc), outputs={"warnings": warnings, "preflight": preflight})
 
     update_step_status(project_id, "render", StepStatus.COMPLETED)
-    return StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": str(output_path)})
+    return StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": str(output_path), "warnings": warnings, "preflight": preflight})

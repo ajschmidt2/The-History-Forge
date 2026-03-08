@@ -1,6 +1,7 @@
 """Workflow orchestration package."""
 
 from src.workflow.models import PIPELINE_STEPS, ProjectManifest, StepStatus, WorkflowState, WorkflowStatus
+from src.workflow.assets import preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets, sync_scene_asset_metadata
 from src.workflow.runner import WorkflowRunner
 from src.workflow.services import (
     FullWorkflowOptions,
@@ -48,4 +49,8 @@ __all__ = [
     "reset_downstream_steps",
     "save_workflow_state",
     "update_step_status",
+    "sync_scene_asset_metadata",
+    "regenerate_missing_scene_assets",
+    "rebuild_timeline_from_disk",
+    "preflight_report",
 ]

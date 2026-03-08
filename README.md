@@ -259,3 +259,63 @@ Remove incorrect variants such as `MODEL=...` or `OPENAI_MODEL=sk-proj-...`.
 
 
 For canonical secrets setup examples, see `docs/SECRETS.md`.
+
+## Automated workflow (deterministic + resumable)
+
+The app now includes a hardened **Automation** tab designed for full pipeline runs that are deterministic, resumable, and recoverable without background workers.
+
+### What is automated
+
+- Script generation
+- Scene splitting + per-scene prompting
+- Canonical asset sync (`s01.png`, `s01.mp4`, per-scene metadata files)
+- Image generation
+- Optional AI video generation for selected scenes only
+- Voiceover generation + duration fit
+- Timeline rebuild from current media truth on disk
+- Final render preflight and render
+
+Automation intentionally stops at render and does **not** auto-upload to YouTube.
+
+### New automation behaviors
+
+- **Canonical naming**: scene media is normalized to stable file names (`assets/images/sNN.png`, `assets/videos/sNN.mp4`).
+- **Durable scene metadata**: each scene gets metadata including index/id/title/excerpt/visual intent/prompt/duration/active media type and asset paths.
+- **Fallback media selection**:
+  - if scene video is missing, render falls back to the scene image
+  - if music is missing, render continues without music
+  - if AI video generation fails, image-based flow continues
+  - if caption burn fails and captionless fallback is enabled, render continues without burned captions
+- **Preflight checks** report actionable issues for missing images, missing voiceover, invalid timeline references, empty media, and stale/mismatched scene paths.
+
+### Resume / retry / recovery
+
+Use the Automation tab controls:
+
+- **Run Full Workflow**: full deterministic pass
+- **Resume Missing Steps**: skip completed artifacts and continue from missing outputs
+- **Regenerate Missing Scene Assets**: repair canonical scene asset references and identify missing scene files only
+- **Rebuild Timeline from Disk Truth**: reconstruct timeline from current scene/media state
+- **Render Final Video**: render after preflight validation
+
+### Project state files
+
+Per project (`data/projects/<project_id>/`), automation uses:
+
+- `workflow_state.json`: step statuses, retries, timestamps, last error
+- `project_manifest.json`: canonical project-level paths
+- `project_state.json`: user/project configuration payload
+- `scenes.json`: durable scene records
+- `assets/scene_meta/sNN.json`: per-scene canonical metadata
+- `timeline.json`: timeline used for final render
+
+### How to run full automation in the app
+
+1. Launch app: `streamlit run app.py`
+2. Choose/create a project.
+3. Open **Automation** tab.
+4. Configure toggles (voiceover/music/AI-video/overwrite).
+5. Click **Run Full Workflow**.
+6. If interrupted or partial, click **Resume Missing Steps**.
+7. If media references drift, click **Regenerate Missing Scene Assets** then **Rebuild Timeline from Disk Truth**.
+8. Click **Render Final Video** to produce `data/projects/<project_id>/renders/final.mp4`.

@@ -9,6 +9,7 @@ import streamlit as st
 
 from src.workflow import PIPELINE_STEPS, reset_downstream_steps
 from src.workflow.models import StepStatus
+from src.workflow.assets import preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets
 from src.workflow.project_io import load_project_payload, load_scenes, project_dir, save_project_payload
 from src.workflow.services import (
     FullWorkflowOptions,
@@ -139,6 +140,15 @@ def tab_automation(project_id: str) -> None:
     if missing:
         st.warning("\n".join(f"• {item}" for item in missing))
 
+
+    st.markdown("#### Render Preflight")
+    preflight = preflight_report(project_id)
+    if preflight["ok"]:
+        st.success("Preflight passed. Timeline/media references look healthy.")
+    else:
+        st.warning(f"Preflight found {preflight['issue_count']} issue(s).")
+        st.json(preflight)
+
     image_based = sum(1 for scene in scenes if not (getattr(scene, "video_path", "") or getattr(scene, "video_url", "")))
     video_based = len(scenes) - image_based
     st.caption(f"Scene media mix: {image_based} image-based, {video_based} video-based.")
@@ -182,6 +192,7 @@ def tab_automation(project_id: str) -> None:
 
     st.markdown("#### Controls")
     c_full, c_resume, c_timeline, c_render = st.columns(4)
+    c_assets, c_rebuild = st.columns(2)
     if c_full.button("Run Full Workflow", width="stretch"):
         result = run_full_workflow(
             project_id,
@@ -226,6 +237,18 @@ def tab_automation(project_id: str) -> None:
             st.success("Timeline rebuilt.")
         else:
             st.error(result.message or "Timeline rebuild failed.")
+
+
+    if c_assets.button("Regenerate Missing Scene Assets", width="stretch"):
+        regen = regenerate_missing_scene_assets(project_id)
+        st.info(f"Missing assets report: {regen}")
+
+    if c_rebuild.button("Rebuild Timeline from Disk Truth", width="stretch"):
+        try:
+            rebuilt_path = rebuild_timeline_from_disk(project_id)
+            st.success(f"Timeline rebuilt from disk: {rebuilt_path}")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Timeline rebuild failed: {exc}")
 
     if c_render.button("Render Final Video", width="stretch"):
         result = run_render_video(project_id, pipeline_options)
