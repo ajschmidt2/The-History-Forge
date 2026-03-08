@@ -1,6 +1,8 @@
 import streamlit as st
 
-from src.ui.state import clear_downstream, scenes_ready
+from src.ui.state import active_project_id, clear_downstream, scenes_ready
+from src.workflow import PipelineOptions, StepStatus, run_generate_prompts
+from src.workflow.project_io import load_scenes
 
 _MAX_CHARACTERS = 5
 _MAX_OBJECTS = 14
@@ -149,18 +151,20 @@ def tab_create_prompts() -> None:
         )
 
     if generate_prompts_clicked:
-        from utils import generate_prompts_for_scenes
-
         with st.spinner("Generating prompts..."):
-            st.session_state.scenes = generate_prompts_for_scenes(
-                st.session_state.scenes,
-                tone=st.session_state.tone,
-                style=st.session_state.visual_style,
-                characters=st.session_state.get("character_registry", []),
-                objects=st.session_state.get("object_registry", []),
+            result = run_generate_prompts(
+                active_project_id(),
+                PipelineOptions(
+                    tone=st.session_state.tone,
+                    visual_style=st.session_state.visual_style,
+                ),
             )
-            for s in st.session_state.scenes:
-                st.session_state[f"prompt_{s.index}"] = s.image_prompt
+        if result.status != StepStatus.COMPLETED:
+            st.error(result.message or "Prompt generation failed.")
+            return
+        st.session_state.scenes = load_scenes(active_project_id())
+        for s in st.session_state.scenes:
+            st.session_state[f"prompt_{s.index}"] = s.image_prompt
         clear_downstream("prompts")
         st.toast("Prompts generated.")
         st.rerun()
