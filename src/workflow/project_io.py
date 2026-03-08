@@ -67,6 +67,8 @@ def _scene_to_dict(scene: Any) -> dict[str, Any]:
         "active_media_type": str(getattr(scene, "active_media_type", "") or ""),
         "asset_paths": dict(getattr(scene, "asset_paths", {}) or {}),
         "asset_urls": dict(getattr(scene, "asset_urls", {}) or {}),
+        "narration_text": str(getattr(scene, "narration_text", "") or ""),
+        "subtitle_text": str(getattr(scene, "subtitle_text", "") or ""),
     }
 
 
@@ -104,6 +106,8 @@ def _scene_from_dict(raw: object) -> Any | None:
     scene.active_media_type = str(raw.get("active_media_type", "") or "")
     scene.asset_paths = raw.get("asset_paths", {}) if isinstance(raw.get("asset_paths"), dict) else {}
     scene.asset_urls = raw.get("asset_urls", {}) if isinstance(raw.get("asset_urls"), dict) else {}
+    scene.narration_text = str(raw.get("narration_text", "") or "")
+    scene.subtitle_text = str(raw.get("subtitle_text", "") or "")
     return scene
 
 

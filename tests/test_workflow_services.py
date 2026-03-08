@@ -133,29 +133,30 @@ def test_run_generate_voiceover_skips_when_silent_fallback_enabled_without_voice
     assert "silent render" in result.message
 
 
-def test_run_full_workflow_skips_voiceover_timing_for_silent_render_without_voiceover(tmp_path, monkeypatch):
+def test_run_full_workflow_skips_existing_steps_for_resume(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     monkeypatch.setattr(
         "src.workflow.services._step_outputs_exist",
-        lambda project_id, step: step in {"script", "scenes", "prompts", "images"},
+        lambda project_id, step: step in {"scenes", "narrative", "prompts", "images", "effects"},
     )
     monkeypatch.setattr(
         "src.workflow.services.run_generate_voiceover",
         lambda project_id, options=None: StepResult(project_id, "voiceover", StepStatus.SKIPPED, message="no voice"),
     )
     monkeypatch.setattr(
-        "src.workflow.services.run_sync_timeline",
-        lambda project_id, options=None: StepResult(project_id, "timeline", StepStatus.COMPLETED, outputs={"timeline_path": "timeline.json"}),
-    )
-    monkeypatch.setattr(
         "src.workflow.services.run_render_video",
         lambda project_id, options=None: StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": "renders/final.mp4"}),
     )
 
+    from src.workflow.project_io import save_project_payload
+
+    project_id = "svc-full-resume"
+    save_project_payload(project_id, {"project_id": project_id, "script_text": "Existing"})
     result = run_full_workflow(
-        "svc-full-silent",
+        project_id,
         FullWorkflowOptions(pipeline=PipelineOptions(allow_silent_render=True, include_voiceover=True)),
     )
     assert result.failed_step == ""
-    assert "voiceover_timing" in result.skipped_steps
+    assert "scenes" in result.skipped_steps
+    assert "render" in result.completed_steps

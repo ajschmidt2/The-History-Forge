@@ -8,6 +8,8 @@ from typing import Any
 
 from src.workflow.models import PIPELINE_STEPS
 from src.workflow.services import (
+    run_apply_scene_narrative,
+    run_apply_video_effects,
     run_generate_images,
     run_generate_prompts,
     run_generate_script,
@@ -43,12 +45,14 @@ def automation_steps() -> list[WorkflowStep]:
 
     mapping: dict[str, WorkflowStepHandler] = {
         "script": lambda project_id: run_generate_script(project_id).outputs,
+        "voiceover": lambda project_id: run_generate_voiceover(project_id).outputs,
         "scenes": lambda project_id: run_split_scenes(project_id).outputs,
+        "narrative": lambda project_id: run_apply_scene_narrative(project_id).outputs,
         "prompts": lambda project_id: run_generate_prompts(project_id).outputs,
         "images": lambda project_id: run_generate_images(project_id).outputs,
-        "voiceover": lambda project_id: run_generate_voiceover(project_id).outputs,
         "ai_video": noop_step_handler,
         "music": noop_step_handler,
+        "effects": lambda project_id: run_apply_video_effects(project_id).outputs,
         "timeline": lambda project_id: run_sync_timeline(project_id).outputs,
         "render": lambda project_id: run_render_video(project_id).outputs,
     }

@@ -46,12 +46,15 @@ class PipelineOptions:
     aspect_ratio: str = "16:9"
     include_voiceover: bool = True
     include_music: bool = False
-    use_ai_video_selected_only: bool = False
     visual_style: str = "Photorealistic cinematic"
     reading_level: str = "General"
     pacing: str = "Balanced"
     allow_silent_render: bool = False
     allow_captionless_render: bool = True
+    include_subtitles: bool = True
+    enable_video_effects: bool = True
+    selected_music_track: str = ""
+    music_volume_relative_to_voiceover: float = 0.5
     voice_id: str = ""
 
 
@@ -189,14 +192,13 @@ def _run_ai_video_step(project_id: str, options: FullWorkflowOptions) -> StepRes
 
 def _step_outputs_exist(project_id: str, step: str) -> bool:
     project_path = project_dir(project_id)
-    if step == "script":
-        script_path = project_path / "script.txt"
-        if script_path.exists() and script_path.read_text(encoding="utf-8").strip():
-            return True
-        payload = load_project_payload(project_id)
-        return bool(str(payload.get("script_text", "") or "").strip())
+    if step == "voiceover":
+        return (project_path / "assets/audio/voiceover.mp3").exists()
     if step == "scenes":
         return bool(load_scenes(project_id))
+    if step == "narrative":
+        scenes = load_scenes(project_id)
+        return bool(scenes) and all(bool(str(getattr(scene, "narration_text", "") or "").strip()) for scene in scenes)
     if step == "prompts":
         scenes = load_scenes(project_id)
         return bool(scenes) and all((getattr(scene, "image_prompt", "") or "").strip() for scene in scenes)
@@ -206,25 +208,11 @@ def _step_outputs_exist(project_id: str, step: str) -> bool:
             return False
         images_dir = project_path / "assets/images"
         return all((images_dir / f"s{int(scene.index):02d}.png").exists() for scene in scenes)
-    if step == "voiceover":
-        return (project_path / "assets/audio/voiceover.mp3").exists()
-    if step == "voiceover_timing":
-        scenes = load_scenes(project_id)
-        return bool(scenes) and all(float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0) > 0 for scene in scenes)
-    if step == "timeline":
-        timeline_path = project_path / "timeline.json"
-        if not timeline_path.exists():
-            return False
-        try:
-            Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
-            return True
-        except Exception:
-            return False
+    if step == "effects":
+        payload = load_project_payload(project_id)
+        return "enable_video_effects" in payload
     if step == "render":
         return (project_path / "renders/final.mp4").exists()
-    if step == "ai_video":
-        scenes = load_scenes(project_id)
-        return any((getattr(scene, "video_path", "") or "").strip() for scene in scenes)
     return False
 
 
@@ -239,33 +227,30 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
     if mode not in {"full_auto", "resume_missing", "rerender_only"}:
         raise ValueError(f"Unsupported workflow mode: {cfg.mode}")
 
-    steps: list[tuple[str, bool, Any]] = [
-        ("script", cfg.overwrite_script, lambda: run_generate_script(project_id, cfg.pipeline)),
-        ("scenes", cfg.overwrite_scenes, lambda: run_split_scenes(project_id, cfg.pipeline)),
-        ("prompts", cfg.overwrite_prompts, lambda: run_generate_prompts(project_id, cfg.pipeline)),
-        ("images", cfg.overwrite_images, lambda: run_generate_images(project_id, cfg.pipeline)),
-        ("voiceover", cfg.overwrite_voiceover, lambda: run_generate_voiceover(project_id, cfg.pipeline)),
-        ("voiceover_timing", cfg.overwrite_voiceover, lambda: _scene_duration_fit_to_voiceover(project_id)),
-        ("ai_video", cfg.overwrite_ai_video, lambda: _run_ai_video_step(project_id, cfg)),
-        ("timeline", cfg.overwrite_timeline, lambda: run_sync_timeline(project_id, cfg.pipeline)),
-        ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
-    ]
-
     if mode == "rerender_only":
-        steps = [s for s in steps if s[0] in {"timeline", "render"}]
+        steps: list[tuple[str, bool, Any]] = [
+            ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
+        ]
+    else:
+        steps = [
+            ("voiceover", cfg.overwrite_voiceover, lambda: run_generate_voiceover(project_id, cfg.pipeline)),
+            ("scenes", cfg.overwrite_scenes, lambda: run_split_scenes(project_id, cfg.pipeline)),
+            ("narrative", cfg.overwrite_scenes, lambda: run_apply_scene_narrative(project_id, cfg.pipeline)),
+            ("prompts", cfg.overwrite_prompts, lambda: run_generate_prompts(project_id, cfg.pipeline)),
+            ("images", cfg.overwrite_images, lambda: run_generate_images(project_id, cfg.pipeline)),
+            ("effects", cfg.overwrite_timeline, lambda: run_apply_video_effects(project_id, cfg.pipeline)),
+            ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
+        ]
+
+    payload = load_project_payload(project_id)
+    script_text = str(payload.get("script_text", "") or "").strip()
+    if not script_text and mode != "rerender_only":
+        result.failed_step = "voiceover"
+        result.warnings.append("Script text is required before running full automation.")
+        return result
 
     for step_name, overwrite, handler in steps:
-        if step_name in {"voiceover", "voiceover_timing"} and not cfg.pipeline.include_voiceover:
-            result.skipped_steps.append(step_name)
-            logger.info("step=%s status=skipped reason=disabled", step_name)
-            continue
-
-        if step_name == "voiceover_timing" and cfg.pipeline.allow_silent_render and not _step_outputs_exist(project_id, "voiceover"):
-            result.skipped_steps.append(step_name)
-            logger.info("step=%s status=skipped reason=missing_voiceover_silent_fallback", step_name)
-            continue
-
-        if step_name == "ai_video" and not cfg.enable_ai_video:
+        if step_name == "voiceover" and not cfg.pipeline.include_voiceover:
             result.skipped_steps.append(step_name)
             logger.info("step=%s status=skipped reason=disabled", step_name)
             continue
@@ -290,10 +275,6 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
             result.completed_steps.append(step_name)
             logger.info("step=%s status=completed", step_name)
 
-        for warning in step_result.outputs.get("warnings", []) if isinstance(step_result.outputs, dict) else []:
-            result.warnings.append(str(warning))
-            logger.warning("step=%s warning=%s", step_name, warning)
-
     final_path = project_dir(project_id) / "renders/final.mp4"
     if final_path.exists():
         result.final_output_path = str(final_path)
@@ -314,14 +295,21 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
     merged = options or PipelineOptions()
     merged.tone = payload.get("tone", merged.tone) or merged.tone
     merged.audience = payload.get("audience", merged.audience) or merged.audience
-    merged.number_of_scenes = int(payload.get("max_scenes", merged.number_of_scenes) or merged.number_of_scenes)
+    merged.number_of_scenes = int(payload.get("scene_count", payload.get("max_scenes", merged.number_of_scenes)) or merged.number_of_scenes)
     merged.variations_per_scene = int(payload.get("variations_per_scene", merged.variations_per_scene) or merged.variations_per_scene)
     merged.aspect_ratio = payload.get("aspect_ratio", merged.aspect_ratio) or merged.aspect_ratio
     merged.visual_style = payload.get("visual_style", merged.visual_style) or merged.visual_style
     merged.reading_level = payload.get("reading_level", merged.reading_level) or merged.reading_level
     merged.pacing = payload.get("pacing", merged.pacing) or merged.pacing
     merged.include_voiceover = bool(payload.get("include_voiceover", merged.include_voiceover))
-    merged.include_music = bool(payload.get("include_music", merged.include_music))
+    merged.include_music = bool(payload.get("enable_music", payload.get("include_music", merged.include_music)))
+    merged.include_subtitles = bool(payload.get("enable_subtitles", merged.include_subtitles))
+    merged.enable_video_effects = bool(payload.get("enable_video_effects", merged.enable_video_effects))
+    merged.selected_music_track = str(payload.get("selected_music_track", merged.selected_music_track) or "")
+    try:
+        merged.music_volume_relative_to_voiceover = float(payload.get("music_volume_relative_to_voiceover", merged.music_volume_relative_to_voiceover) or merged.music_volume_relative_to_voiceover)
+    except (TypeError, ValueError):
+        merged.music_volume_relative_to_voiceover = 0.5
     return payload, merged
 
 
@@ -399,6 +387,39 @@ def run_split_scenes(project_id: str, options: PipelineOptions | None = None) ->
     return StepResult(project_id, "scenes", StepStatus.COMPLETED, outputs={"scene_count": len(scenes)})
 
 
+
+def run_apply_scene_narrative(project_id: str, options: PipelineOptions | None = None) -> StepResult:
+    ensure_project_files(project_id)
+    scenes = load_scenes(project_id)
+    if not scenes:
+        return StepResult(project_id, "narrative", StepStatus.FAILED, message="No scenes available.")
+
+    update_step_status(project_id, "narrative", StepStatus.IN_PROGRESS)
+    try:
+        for scene in scenes:
+            excerpt = str(getattr(scene, "script_excerpt", "") or "").strip()
+            title = str(getattr(scene, "title", "") or "").strip()
+            narration = excerpt or title or f"Scene {int(getattr(scene, 'index', 0) or 0)}"
+            scene.narration_text = narration
+            scene.subtitle_text = narration
+        save_scenes(project_id, scenes)
+        sync_scene_asset_metadata(project_id, scenes)
+    except Exception as exc:  # noqa: BLE001
+        update_step_status(project_id, "narrative", StepStatus.FAILED, error=str(exc))
+        return StepResult(project_id, "narrative", StepStatus.FAILED, message=str(exc))
+
+    update_step_status(project_id, "narrative", StepStatus.COMPLETED)
+    return StepResult(project_id, "narrative", StepStatus.COMPLETED, outputs={"scene_count": len(scenes)})
+
+
+def run_apply_video_effects(project_id: str, options: PipelineOptions | None = None) -> StepResult:
+    ensure_project_files(project_id)
+    payload, cfg = _load_options(project_id, options)
+    payload["enable_video_effects"] = bool(cfg.enable_video_effects)
+    save_project_payload(project_id, payload)
+    update_step_status(project_id, "effects", StepStatus.COMPLETED)
+    return StepResult(project_id, "effects", StepStatus.COMPLETED, outputs={"enable_video_effects": bool(cfg.enable_video_effects)})
+
 def run_generate_prompts(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     ensure_project_files(project_id)
     payload, cfg = _load_options(project_id, options)
@@ -408,6 +429,9 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
 
     update_step_status(project_id, "prompts", StepStatus.IN_PROGRESS)
     try:
+        for scene in scenes:
+            narration_text = str(getattr(scene, "narration_text", "") or getattr(scene, "subtitle_text", "") or getattr(scene, "script_excerpt", "") or "").strip()
+            scene.narration_text = narration_text
         scenes = generate_prompts_for_scenes(
             scenes,
             tone=cfg.tone,
@@ -415,6 +439,20 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
             characters=payload.get("character_registry", []),
             objects=payload.get("object_registry", []),
         )
+        for scene in scenes:
+            scene_title = str(getattr(scene, "title", "") or "").strip()
+            scene_excerpt = str(getattr(scene, "script_excerpt", "") or "").strip()
+            scene_visual_intent = str(getattr(scene, "visual_intent", "") or "").strip()
+            narration_text = str(getattr(scene, "narration_text", "") or scene_excerpt).strip()
+            base_prompt = str(getattr(scene, "image_prompt", "") or "").strip()
+            scene.image_prompt = (
+                f"{base_prompt}\n"
+                f"Scene title: {scene_title}\n"
+                f"Scene excerpt: {scene_excerpt}\n"
+                f"Visual intent: {scene_visual_intent}\n"
+                f"Narration context: {narration_text}\n"
+                f"Aspect ratio: {cfg.aspect_ratio}."
+            ).strip()
         save_scenes(project_id, scenes)
         sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001
@@ -526,16 +564,30 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
 
     update_step_status(project_id, "timeline", StepStatus.IN_PROGRESS)
     project_path = project_dir(project_id)
+    scene_captions = [str(getattr(scene, "subtitle_text", "") or getattr(scene, "narration_text", "") or getattr(scene, "script_excerpt", "") or "") for scene in scenes]
+    music_volume_db = -6.0
+    try:
+        ratio = max(0.0, float(cfg.music_volume_relative_to_voiceover))
+        if ratio > 0:
+            import math
+            music_volume_db = 20.0 * math.log10(ratio)
+    except Exception:
+        music_volume_db = -6.0
     try:
         timeline_path = sync_timeline_for_project(
             project_path=project_path,
             project_id=project_id,
             title=str(payload.get("project_title", project_id) or project_id),
             session_scenes=scenes,
+            scene_captions=scene_captions,
             meta_overrides={
                 "aspect_ratio": cfg.aspect_ratio,
                 "include_voiceover": cfg.include_voiceover,
                 "include_music": cfg.include_music,
+                "burn_captions": cfg.include_subtitles,
+                "enable_motion": cfg.enable_video_effects,
+                "selected_music_track": cfg.selected_music_track,
+                "music": {"path": cfg.selected_music_track, "volume_db": music_volume_db},
                 "transition_types": payload.get("scene_transition_types", []),
             },
         )
@@ -591,6 +643,11 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
             timeline_path = project_dir(project_id) / "renders" / "timeline.silent.json"
             timeline_path.parent.mkdir(parents=True, exist_ok=True)
             timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+
+    if cfg.include_music and not str(cfg.selected_music_track or "").strip():
+        msg = "Background music is enabled but no track is selected."
+        update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
+        return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
 
     warnings: list[str] = []
     if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
