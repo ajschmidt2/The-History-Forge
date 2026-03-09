@@ -318,6 +318,7 @@ def tab_automation(project_id: str) -> None:
         options=provider_options,
         index=provider_options.index(tts_settings.provider),
         format_func=lambda p: "ElevenLabs" if p == TTS_PROVIDER_ELEVENLABS else "OpenAI",
+        key="automation_voice_provider",
     )
 
     selected_voice_id = str(payload.get("elevenlabs_voice_id", payload.get("voice_id", "")) or "")
@@ -333,6 +334,7 @@ def tab_automation(project_id: str) -> None:
             options=known_voice_ids,
             index=known_voice_ids.index(selected_voice_id) if selected_voice_id in known_voice_ids else 0,
             help="Automation resolves Voice ID in order: selected value, saved preference, then DEFAULT_VOICE_ID.",
+            key="automation_elevenlabs_voice_id",
         )
         resolved_voice_id, resolved_source = _resolve_voice_id(selected_voice_id, payload)
         st.caption(f"Resolved Voice ID: `{resolved_voice_id or 'None'}` ({resolved_source})")
@@ -343,12 +345,13 @@ def tab_automation(project_id: str) -> None:
             selected_openai_model = "gpt-4o-mini-tts"
         if selected_openai_voice not in voice_options:
             selected_openai_voice = "alloy"
-        selected_openai_model = st.selectbox("OpenAI TTS Model", options=model_options, index=model_options.index(selected_openai_model))
-        selected_openai_voice = st.selectbox("OpenAI Voice", options=voice_options, index=voice_options.index(selected_openai_voice))
+        selected_openai_model = st.selectbox("OpenAI TTS Model", options=model_options, index=model_options.index(selected_openai_model), key="automation_openai_tts_model")
+        selected_openai_voice = st.selectbox("OpenAI Voice", options=voice_options, index=voice_options.index(selected_openai_voice), key="automation_openai_tts_voice")
         selected_openai_instructions = st.text_area(
             "Speaking style instructions (optional)",
             value=selected_openai_instructions,
             help="Style/tone guidance, especially for gpt-4o-mini-tts.",
+            key="automation_openai_tts_instructions",
         )
 
     if st.button("Save automation settings", width="stretch"):
