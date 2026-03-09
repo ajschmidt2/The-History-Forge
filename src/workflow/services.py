@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,7 @@ class FullWorkflowOptions:
     ai_video_provider: str = "sora"
     ai_video_seconds: int = 8
     pipeline: PipelineOptions = field(default_factory=PipelineOptions)
+    progress_callback: Any | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(slots=True)
@@ -98,6 +100,43 @@ def _workflow_logger(project_id: str) -> logging.Logger:
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logger.addHandler(handler)
     return logger
+
+
+def _load_saved_voice_preference() -> str:
+    preferences_path = Path("data/user_preferences.json")
+    if not preferences_path.exists():
+        return ""
+    try:
+        payload = json.loads(preferences_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(payload.get("voice_id", "") or "").strip()
+
+
+def _resolve_voice_id(project_id: str, options_voice_id: str, payload: dict[str, Any], logger: logging.Logger) -> str:
+    selected_voice_id = str(options_voice_id or "").strip()
+    if selected_voice_id:
+        logger.info("voiceover setup: selected_voice_id=%s", selected_voice_id)
+        return selected_voice_id
+
+    payload_voice_id = str(payload.get("voice_id", "") or "").strip()
+    if payload_voice_id:
+        logger.info("voiceover setup: using project voice_id=%s", payload_voice_id)
+        return payload_voice_id
+
+    saved_voice_id = _load_saved_voice_preference()
+    if saved_voice_id:
+        logger.info("voiceover setup: using saved preference voice_id=%s", saved_voice_id)
+        return saved_voice_id
+
+    fallback = "r6YelDxIe1A40lDuW365"
+    if fallback:
+        logger.info("voiceover setup: using fallback DEFAULT_VOICE_ID=%s", fallback)
+    return fallback
+
+
+def _is_nonempty_file(path: Path) -> bool:
+    return path.exists() and path.is_file() and path.stat().st_size > 0
 
 
 def _scene_duration_fit_to_voiceover(project_id: str) -> StepResult:
@@ -193,7 +232,7 @@ def _run_ai_video_step(project_id: str, options: FullWorkflowOptions) -> StepRes
 def _step_outputs_exist(project_id: str, step: str) -> bool:
     project_path = project_dir(project_id)
     if step == "voiceover":
-        return (project_path / "assets/audio/voiceover.mp3").exists()
+        return _is_nonempty_file(project_path / "assets/audio/voiceover.mp3")
     if step == "scenes":
         return bool(load_scenes(project_id))
     if step == "narrative":
@@ -227,6 +266,8 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
     if mode not in {"full_auto", "resume_missing", "rerender_only"}:
         raise ValueError(f"Unsupported workflow mode: {cfg.mode}")
 
+    progress = cfg.progress_callback if callable(cfg.progress_callback) else None
+
     if mode == "rerender_only":
         steps: list[tuple[str, bool, Any]] = [
             ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
@@ -247,17 +288,35 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
     if not script_text and mode != "rerender_only":
         result.failed_step = "voiceover"
         result.warnings.append("Script text is required before running full automation.")
+        logger.error("step=voiceover status=failed error=missing_script")
+        if progress:
+            progress({"step": "voiceover", "status": StepStatus.FAILED, "index": 1, "total": len(steps), "message": result.warnings[-1]})
         return result
 
-    for step_name, overwrite, handler in steps:
+    total = len(steps)
+    for idx, (step_name, overwrite, handler) in enumerate(steps, start=1):
+        if progress:
+            progress({"step": step_name, "status": StepStatus.IN_PROGRESS, "index": idx, "total": total})
+
         if step_name == "voiceover" and not cfg.pipeline.include_voiceover:
             result.skipped_steps.append(step_name)
             logger.info("step=%s status=skipped reason=disabled", step_name)
+            if progress:
+                progress({"step": step_name, "status": StepStatus.SKIPPED, "index": idx, "total": total, "message": "disabled"})
             continue
 
-        if not overwrite and _step_outputs_exist(project_id, step_name):
-            result.skipped_steps.append(step_name)
-            logger.info("step=%s status=skipped reason=existing_outputs", step_name)
+        should_resume_existing = mode == "resume_missing" and not overwrite and _step_outputs_exist(project_id, step_name)
+        if should_resume_existing:
+            if step_name == "voiceover":
+                result.completed_steps.append(step_name)
+                logger.info("step=%s status=completed reason=reused_existing_output", step_name)
+                if progress:
+                    progress({"step": step_name, "status": StepStatus.COMPLETED, "index": idx, "total": total, "message": "reused_existing_output"})
+            else:
+                result.skipped_steps.append(step_name)
+                logger.info("step=%s status=skipped reason=existing_outputs", step_name)
+                if progress:
+                    progress({"step": step_name, "status": StepStatus.SKIPPED, "index": idx, "total": total, "message": "existing_outputs"})
             continue
 
         logger.info("step=%s status=started", step_name)
@@ -266,18 +325,31 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
             result.failed_step = step_name
             result.warnings.append(step_result.message)
             logger.error("step=%s status=failed error=%s", step_name, step_result.message)
-            return result
+            if progress:
+                progress({"step": step_name, "status": StepStatus.FAILED, "index": idx, "total": total, "message": step_result.message})
+            break
 
         if step_result.status == StepStatus.SKIPPED:
             result.skipped_steps.append(step_name)
-            logger.info("step=%s status=skipped message=%s", step_name, step_result.message)
+            logger.info("step=%s status=skipped reason=%s", step_name, step_result.message or "no_op")
         else:
             result.completed_steps.append(step_name)
             logger.info("step=%s status=completed", step_name)
 
+        if progress:
+            progress({"step": step_name, "status": step_result.status, "index": idx, "total": total, "message": step_result.message})
+
     final_path = project_dir(project_id) / "renders/final.mp4"
     if final_path.exists():
         result.final_output_path = str(final_path)
+
+    logger.info(
+        "run_summary completed_steps=%s skipped_steps=%s failed_step=%s final_render=%s",
+        ",".join(result.completed_steps),
+        ",".join(result.skipped_steps),
+        result.failed_step or "",
+        result.final_output_path or "",
+    )
     return result
 
 
@@ -310,6 +382,7 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
         merged.music_volume_relative_to_voiceover = float(payload.get("music_volume_relative_to_voiceover", merged.music_volume_relative_to_voiceover) or merged.music_volume_relative_to_voiceover)
     except (TypeError, ValueError):
         merged.music_volume_relative_to_voiceover = 0.5
+    merged.voice_id = str(merged.voice_id or payload.get("voice_id", "") or "").strip()
     return payload, merged
 
 
@@ -502,6 +575,7 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
 def run_generate_voiceover(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     ensure_project_files(project_id)
     payload, cfg = _load_options(project_id, options)
+    logger = _workflow_logger(project_id)
     if not cfg.include_voiceover:
         return StepResult(project_id, "voiceover", StepStatus.SKIPPED, message="Voiceover is disabled.")
 
@@ -509,7 +583,10 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
     if not script_text:
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message="Script text is missing.")
 
-    voice_id = str(cfg.voice_id or payload.get("voice_id", "") or "").strip()
+    output_path = project_dir(project_id) / "assets/audio/voiceover.mp3"
+    voice_id = _resolve_voice_id(project_id, cfg.voice_id, payload, logger)
+    logger.info("voiceover setup: script_detected=%s output_path=%s", bool(script_text), output_path)
+
     if not voice_id:
         if cfg.allow_silent_render:
             return StepResult(
@@ -519,6 +596,9 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
                 message="Voice ID is missing; skipping voiceover because silent render is enabled.",
             )
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message="Voice ID is required.")
+
+    if not output_path.parent.exists():
+        return StepResult(project_id, "voiceover", StepStatus.FAILED, message="Voiceover output directory is missing or not writable.")
 
     update_step_status(project_id, "voiceover", StepStatus.IN_PROGRESS)
     try:
@@ -532,7 +612,6 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
         update_step_status(project_id, "voiceover", StepStatus.FAILED, error=message)
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message=message)
 
-    output_path = project_dir(project_id) / "assets/audio/voiceover.mp3"
     output_path.write_bytes(audio)
     record_asset(project_id, "voiceover", output_path)
     try:
@@ -540,8 +619,11 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
     except Exception:
         pass
 
+    payload["voice_id"] = voice_id
+    save_project_payload(project_id, payload)
+    logger.info("voiceover using selected voice_id=%s", voice_id)
     update_step_status(project_id, "voiceover", StepStatus.COMPLETED)
-    return StepResult(project_id, "voiceover", StepStatus.COMPLETED, outputs={"voiceover_path": str(output_path)})
+    return StepResult(project_id, "voiceover", StepStatus.COMPLETED, outputs={"voiceover_path": str(output_path), "voice_id": voice_id})
 
 
 def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -> StepResult:

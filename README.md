@@ -320,3 +320,70 @@ Per project (`data/projects/<project_id>/`), automation uses:
 6. If interrupted or partial, click **Resume Missing Steps**.
 7. If media references drift, click **Regenerate Missing Scene Assets** then **Rebuild Timeline from Disk Truth**.
 8. Click **Render Final Video** to produce `data/projects/<project_id>/renders/final.mp4`.
+
+## Automation tab workflow (updated)
+
+The Automation tab now provides a live, step-by-step run experience for long jobs.
+
+### Live progress and diagnostics
+
+- A progress bar updates as each automation step transitions through `not_started`, `running`, `completed`, `skipped`, or `failed`.
+- The UI shows the current step label (for example: `Running step 1 of 7: Voiceover`).
+- A step checklist tracks: `voiceover`, `scenes`, `narrative`, `prompts`, `images`, `effects`, `render`.
+- Recent `workflow.log` lines are shown directly in the tab while runs execute.
+- The last error and final render path are displayed when available.
+
+### Pre-run automation settings
+
+Before running automation, the tab now persists these settings per project:
+
+- Aspect Ratio (`16:9` or `9:16`)
+- Visual Style (dropdown)
+- Number of Scenes
+- Video Effects (on/off)
+- Subtitles (on/off)
+- Background Music (on/off)
+- Background Music Selection (project + shared library)
+- Voice ID
+
+### Visual style dropdown
+
+Automation now uses a shared visual style list so style choices are consistent:
+
+- Photorealistic cinematic
+- Photorealistic
+- Documentary still
+- Vintage painted
+- Oil painting
+- Dramatic realism
+- Black and white archival
+- Stylized illustration
+- Historical engraving
+- Matte painting
+
+### Voice ID fallback behavior
+
+When voiceover is enabled, the workflow resolves Voice ID in this order:
+
+1. Automation tab selected Voice ID
+2. Saved user preference Voice ID
+3. `DEFAULT_VOICE_ID`
+
+The run logs which source was used, and the tab warns before execution if no valid voice could be resolved.
+
+### Automation step order
+
+Automation execution order is:
+
+1. Voiceover
+2. Scenes
+3. Narrative
+4. Prompts
+5. Images
+6. Effects
+7. Render
+
+Notes:
+- Narrative generation still runs even when subtitles are off (prompt quality depends on it).
+- If effects are off, motion effects are disabled in automated timeline/render metadata.
+- If music is enabled, selected music is passed into render metadata with default mix ratio of 50% vs. voiceover.
