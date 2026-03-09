@@ -10,7 +10,7 @@ import streamlit as st
 from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import DEFAULT_VOICE_ID
 from src.workflow import PIPELINE_STEPS, reset_downstream_steps
-from src.workflow.assets import preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets
+from src.workflow.assets import canonical_scene_image_path, preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets
 from src.workflow.models import StepStatus
 from src.workflow.project_io import load_project_payload, load_scenes, project_dir, save_project_payload
 from src.workflow.services import (
@@ -144,6 +144,63 @@ def _render_workflow_progress(project_id: str, progress_holder: Any, log_holder:
     final_render = project_dir(project_id) / "renders" / "final.mp4"
     if final_render.exists():
         output_holder.success(f"Final render path: {final_render}")
+
+
+def _render_post_run_video_section(project_id: str, final_render: Path) -> None:
+    st.markdown("#### Final Video")
+    if not final_render.exists():
+        st.info("Run **Render Final Video** (or full workflow) to preview and download the final MP4 here.")
+        return
+
+    video_bytes = final_render.read_bytes()
+    st.video(video_bytes)
+    st.write(f"Final render path: `{final_render}`")
+    st.download_button(
+        "⬇️ Download Final Video",
+        data=video_bytes,
+        file_name=f"{project_id}_final.mp4",
+        mime="video/mp4",
+        width="stretch",
+    )
+
+
+def _render_quick_scene_edits(project_id: str, scenes: list[Any]) -> None:
+    st.markdown("#### Continue Editing (Scenes / Images)")
+    if not scenes:
+        st.info("No scenes available yet. Generate scenes first, then edit here or in the **Scenes** and **Images** tabs.")
+        return
+
+    scene_labels = [f"Scene {scene.index}: {str(getattr(scene, 'title', '') or 'Untitled')}" for scene in scenes]
+    selected_label = st.selectbox("Scene to edit", options=scene_labels, key=f"automation_scene_editor_{project_id}")
+    selected_idx = scene_labels.index(selected_label)
+    selected = scenes[selected_idx]
+
+    edited_title = st.text_input("Title", value=str(getattr(selected, "title", "") or ""), key=f"automation_scene_title_{project_id}_{selected.index}")
+    edited_excerpt = st.text_area(
+        "Script excerpt",
+        value=str(getattr(selected, "script_excerpt", "") or ""),
+        key=f"automation_scene_excerpt_{project_id}_{selected.index}",
+        height=130,
+    )
+    edited_prompt = st.text_area(
+        "Image prompt",
+        value=str(getattr(selected, "image_prompt", "") or ""),
+        key=f"automation_scene_prompt_{project_id}_{selected.index}",
+        height=130,
+    )
+
+    image_path = canonical_scene_image_path(project_id, int(selected.index))
+    if image_path.exists():
+        st.image(str(image_path), caption=f"Current image · {image_path.name}", use_container_width=True)
+    else:
+        st.caption("No image file found for this scene yet.")
+
+    if st.button("Save scene edits", key=f"automation_save_scene_{project_id}_{selected.index}", width="stretch"):
+        selected.title = edited_title.strip()
+        selected.script_excerpt = edited_excerpt.strip()
+        selected.image_prompt = edited_prompt.strip()
+        save_scenes(project_id, scenes)
+        st.success("Scene updates saved. Re-run prompts/images/render to apply changes to the final video.")
 
 
 def tab_automation(project_id: str) -> None:
@@ -357,5 +414,5 @@ def tab_automation(project_id: str) -> None:
     else:
         st.info("No render report found.")
 
-    if final_render.exists():
-        st.write(f"Final render path: `{final_render}`")
+    _render_post_run_video_section(project_id, final_render)
+    _render_quick_scene_edits(project_id, scenes)
