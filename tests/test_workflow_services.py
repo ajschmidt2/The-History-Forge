@@ -178,7 +178,7 @@ def test_run_generate_voiceover_with_openai_provider(tmp_path, monkeypatch):
         },
     )
 
-    monkeypatch.setattr("src.workflow.services.generate_voiceover_with_provider", lambda text, settings: (b"fake-mp3", None))
+    monkeypatch.setattr("src.workflow.services.generate_voiceover_with_provider", lambda text, settings, output_path=None: (b"fake-mp3", None))
 
     result = run_generate_voiceover(project_id, PipelineOptions(tts_provider="openai", openai_tts_model="gpt-4o-mini-tts", openai_tts_voice="alloy"))
     assert result.status == StepStatus.COMPLETED

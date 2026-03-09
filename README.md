@@ -285,7 +285,9 @@ Supported built-in OpenAI voices:
 
 - `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`
 
-`gpt-4o-mini-tts` supports optional instruction text for speaking style/tone (for example pacing, warmth, or delivery style).
+OpenAI voiceover uses the Audio Speech API (`/v1/audio/speech`) and requests `response_format` (not `format`) with `mp3` as the default output.
+
+`gpt-4o-mini-tts` supports optional instruction text for speaking style/tone (for example pacing, warmth, or delivery style). For `tts-1` and `tts-1-hd`, instruction text is omitted automatically.
 
 ### Output path
 
