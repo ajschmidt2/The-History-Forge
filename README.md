@@ -431,3 +431,49 @@ Notes:
 - Narrative generation still runs even when subtitles are off (prompt quality depends on it).
 - If effects are off, motion effects are disabled in automated timeline/render metadata.
 - If music is enabled, selected music is passed into render metadata with default mix ratio of 50% vs. voiceover.
+
+
+## Automation modes for 60-second YouTube shorts
+
+The **Automation** tab now supports two entry modes:
+
+1. **Topic → 60s Short Video** (default)
+   - Enter a topic (required) and optional angle/direction.
+   - The app generates a dedicated short-form narration script (~130–170 words) using the `youtube_short_60s` script profile.
+   - Then it runs the full pipeline in this order: `script → voiceover → scenes → narrative → prompts → images → effects → render`.
+
+2. **Existing Script → Full Workflow**
+   - Uses the existing project script and skips script generation.
+   - Runs: `voiceover → scenes → narrative → prompts → images → effects → render`.
+
+### Recommended defaults for Topic mode
+
+When **Topic → 60s Short Video** is selected, Automation preloads short-form defaults (still editable):
+
+- Aspect ratio: `9:16`
+- Number of scenes: `8`
+- Subtitles: on
+- Video effects: on
+- Background music: off (selectable)
+- Visual style: project style (fallback: `Photorealistic cinematic`)
+
+### 60-second script generation behavior
+
+Short-form script generation is tuned for history voiceover:
+
+- ~130–170 spoken words
+- narration-first writing with strong opening hook
+- clear middle progression and memorable closing line
+- no markdown, no bullets, no scene labels, no production notes
+- optimized for short-form retention and later scene splitting
+
+### Running the new default topic-first flow
+
+1. Open **Automation** tab.
+2. Keep mode on **Topic → 60s Short Video**.
+3. Enter a topic (and optional angle/direction).
+4. Optionally adjust scenes, style, subtitles/effects/music, and voice provider.
+5. Click **Run Full Workflow**.
+6. Review final output in `data/projects/<project_id>/renders/final.mp4`.
+
+Automation still stops at render and does not auto-upload to YouTube.

@@ -32,12 +32,13 @@ from src.workflow.project_io import (
     save_project_payload,
     save_scenes,
 )
-from src.workflow.state import load_workflow_state, update_step_status
+from src.workflow.state import load_workflow_state, save_workflow_state, update_step_status
 from utils import (
     generate_image_for_scene,
     generate_prompts_for_scenes,
     generate_script,
     generate_script_from_outline,
+    generate_short_script,
     split_script_into_scenes,
 )
 
@@ -67,6 +68,10 @@ class PipelineOptions:
     openai_tts_model: str = "gpt-4o-mini-tts"
     openai_tts_voice: str = "alloy"
     openai_tts_instructions: str = ""
+    automation_mode: str = "topic_to_short_video"
+    topic: str = ""
+    topic_direction: str = ""
+    script_profile: str = "youtube_short_60s"
 
 
 @dataclass(slots=True)
@@ -278,12 +283,27 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
 
     progress = cfg.progress_callback if callable(cfg.progress_callback) else None
 
+    payload = load_project_payload(project_id)
+    automation_mode = str(cfg.pipeline.automation_mode or payload.get("automation_mode", "topic_to_short_video") or "topic_to_short_video").strip()
+    is_topic_mode = automation_mode == "topic_to_short_video"
+    logger.info("mode=%s", automation_mode)
+
+    state = load_workflow_state(project_id)
+    state.automation_mode = automation_mode
+    state.topic = str(cfg.pipeline.topic or payload.get("topic", "") or "").strip()
+    state.topic_direction = str(cfg.pipeline.topic_direction or payload.get("topic_direction", "") or "").strip()
+    state.script_profile = str(cfg.pipeline.script_profile or payload.get("script_profile", "") or "").strip()
+    save_workflow_state(project_id, state)
+
     if mode == "rerender_only":
         steps: list[tuple[str, bool, Any]] = [
             ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
         ]
     else:
-        steps = [
+        steps = []
+        if is_topic_mode:
+            steps.append(("script", cfg.overwrite_script, lambda: run_generate_short_script(project_id, cfg.pipeline)))
+        steps.extend([
             ("voiceover", cfg.overwrite_voiceover, lambda: run_generate_voiceover(project_id, cfg.pipeline)),
             ("scenes", cfg.overwrite_scenes, lambda: run_split_scenes(project_id, cfg.pipeline)),
             ("narrative", cfg.overwrite_scenes, lambda: run_apply_scene_narrative(project_id, cfg.pipeline)),
@@ -291,17 +311,27 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
             ("images", cfg.overwrite_images, lambda: run_generate_images(project_id, cfg.pipeline)),
             ("effects", cfg.overwrite_timeline, lambda: run_apply_video_effects(project_id, cfg.pipeline)),
             ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
-        ]
+        ])
 
-    payload = load_project_payload(project_id)
-    script_text = str(payload.get("script_text", "") or "").strip()
-    if not script_text and mode != "rerender_only":
-        result.failed_step = "voiceover"
-        result.warnings.append("Script text is required before running full automation.")
-        logger.error("step=voiceover status=failed error=missing_script")
-        if progress:
-            progress({"step": "voiceover", "status": StepStatus.FAILED, "index": 1, "total": len(steps), "message": result.warnings[-1]})
-        return result
+    if mode != "rerender_only":
+        if is_topic_mode:
+            topic = str(cfg.pipeline.topic or payload.get("topic", "") or "").strip()
+            if not topic:
+                result.failed_step = "script"
+                result.warnings.append("Topic is required before running topic-to-short-video automation.")
+                logger.error("step=script status=failed error=missing_topic")
+                if progress:
+                    progress({"step": "script", "status": StepStatus.FAILED, "index": 1, "total": len(steps), "message": result.warnings[-1]})
+                return result
+        else:
+            script_text = str(payload.get("script_text", "") or "").strip()
+            if not script_text:
+                result.failed_step = "voiceover"
+                result.warnings.append("Script text is required before running full automation.")
+                logger.error("step=voiceover status=failed error=missing_script")
+                if progress:
+                    progress({"step": "voiceover", "status": StepStatus.FAILED, "index": 1, "total": len(steps), "message": result.warnings[-1]})
+                return result
 
     total = len(steps)
     for idx, (step_name, overwrite, handler) in enumerate(steps, start=1):
@@ -329,7 +359,12 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
                     progress({"step": step_name, "status": StepStatus.SKIPPED, "index": idx, "total": total, "message": "existing_outputs"})
             continue
 
-        logger.info("step=%s status=started", step_name)
+        if step_name == "script" and is_topic_mode:
+            logger.info("step=script status=started profile=60s_short")
+        elif step_name == "voiceover":
+            logger.info("step=voiceover status=started provider=%s", cfg.pipeline.tts_provider)
+        else:
+            logger.info("step=%s status=started", step_name)
         step_result = handler()
         if step_result.status == StepStatus.FAILED:
             result.failed_step = step_name
@@ -344,7 +379,10 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
             logger.info("step=%s status=skipped reason=%s", step_name, step_result.message or "no_op")
         else:
             result.completed_steps.append(step_name)
-            logger.info("step=%s status=completed", step_name)
+            if step_name == "script":
+                logger.info("step=script status=completed word_count=%s", step_result.outputs.get("word_count", ""))
+            else:
+                logger.info("step=%s status=completed", step_name)
 
         if progress:
             progress({"step": step_name, "status": step_result.status, "index": idx, "total": total, "message": step_result.message})
@@ -402,6 +440,10 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
     merged.openai_tts_model = str(merged.openai_tts_model or payload.get("openai_tts_model", "gpt-4o-mini-tts") or "gpt-4o-mini-tts").strip()
     merged.openai_tts_voice = str(merged.openai_tts_voice or payload.get("openai_tts_voice", "alloy") or "alloy").strip()
     merged.openai_tts_instructions = str(merged.openai_tts_instructions or payload.get("openai_tts_instructions", "") or "").strip()
+    merged.automation_mode = str(merged.automation_mode or payload.get("automation_mode", "topic_to_short_video") or "topic_to_short_video").strip()
+    merged.topic = str(merged.topic or payload.get("topic", "") or "").strip()
+    merged.topic_direction = str(merged.topic_direction or payload.get("topic_direction", payload.get("story_angle", "")) or "").strip()
+    merged.script_profile = str(merged.script_profile or payload.get("script_profile", "youtube_short_60s") or "youtube_short_60s").strip()
     return payload, merged
 
 
@@ -457,6 +499,46 @@ def run_generate_script(project_id: str, options: PipelineOptions | None = None)
         pass
     update_step_status(project_id, "script", StepStatus.COMPLETED)
     return StepResult(project_id, "script", StepStatus.COMPLETED, outputs={"script_text": script_text})
+
+
+
+
+def run_generate_short_script(project_id: str, options: PipelineOptions | None = None) -> StepResult:
+    ensure_project_files(project_id)
+    load_workflow_state(project_id)
+    payload, cfg = _load_options(project_id, options)
+
+    topic = str(cfg.topic or payload.get("topic", "") or "").strip()
+    if not topic:
+        return StepResult(project_id, "script", StepStatus.FAILED, message="Project topic is empty.")
+
+    update_step_status(project_id, "script", StepStatus.IN_PROGRESS)
+    try:
+        script_text = generate_short_script(
+            topic=topic,
+            tone=cfg.tone,
+            reading_level=cfg.reading_level,
+            direction=cfg.topic_direction,
+        )
+    except Exception as exc:  # noqa: BLE001
+        update_step_status(project_id, "script", StepStatus.FAILED, error=str(exc))
+        return StepResult(project_id, "script", StepStatus.FAILED, message=str(exc))
+
+    payload["topic"] = topic
+    payload["topic_direction"] = str(cfg.topic_direction or "").strip()
+    payload["script_profile"] = "youtube_short_60s"
+    payload["automation_mode"] = "topic_to_short_video"
+    payload["script_text"] = script_text
+    (project_dir(project_id) / "script.txt").write_text(script_text, encoding="utf-8")
+    save_project_payload(project_id, payload)
+    try:
+        _sb_store.upload_script(project_id, script_text)
+    except Exception:
+        pass
+
+    update_step_status(project_id, "script", StepStatus.COMPLETED)
+    word_count = len([w for w in script_text.split() if w.strip()])
+    return StepResult(project_id, "script", StepStatus.COMPLETED, outputs={"script_text": script_text, "word_count": word_count})
 
 
 def run_split_scenes(project_id: str, options: PipelineOptions | None = None) -> StepResult:

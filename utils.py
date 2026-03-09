@@ -513,6 +513,67 @@ def generate_script(
     return resp.choices[0].message.content.strip()
 
 
+def generate_short_script(
+    topic: str,
+    *,
+    tone: str = "Documentary",
+    reading_level: str = "General",
+    direction: str = "",
+) -> str:
+    """Generate a narration-first script tuned for ~60-second YouTube history shorts."""
+    topic = (topic or "").strip()
+    if not topic:
+        return "Please enter a topic."
+
+    client = _openai_client()
+    if client is None:
+        return (
+            f"[Missing openai_api_key] Placeholder short-form script for: {topic}\n\n"
+            "Add `openai_api_key` in Streamlit Secrets to enable real short script generation."
+        )
+
+    direction_block = f"Direction/angle: {direction.strip()}\n" if (direction or "").strip() else ""
+    system = (
+        "You are a YouTube history short-form narration writer. "
+        "Write compelling, historically grounded scripts that sound natural when spoken aloud."
+    )
+    user = (
+        "Write a 60-second YouTube history narration script.\n"
+        f"Topic: {topic}\n"
+        f"Tone: {(tone or 'Documentary').strip()}\n"
+        f"Reading level: {(reading_level or 'General').strip()}\n"
+        f"{direction_block}"
+        "Requirements:\n"
+        "- About 130 to 170 spoken words.\n"
+        "- Strong hook in the first 1-2 lines.\n"
+        "- Clear middle progression.\n"
+        "- Strong memorable closing line.\n"
+        "- Concise, vivid, engaging language with short-form retention pacing.\n"
+        "- No markdown, no bullets, no scene labels, no production notes, no visual instructions.\n"
+        "Output only the final narration script text."
+    )
+
+    try:
+        resp = openai_chat_completion(
+            client,
+            model=get_openai_text_model(),
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+    except Exception as exc:
+        _reraise_api_errors(exc)
+        exc_detail = f"{type(exc).__name__}: {exc}"
+        return (
+            f"[OpenAI request failed — {exc_detail}] Unable to generate short script for: {topic}\n\n"
+            "Check the error detail above, then try again."
+        )
+
+    return resp.choices[0].message.content.strip()
+
+
 def edit_script_with_direction(script: str, direction: str) -> str:
     """Revise an existing script according to a plain-English direction.
 
