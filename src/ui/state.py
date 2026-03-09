@@ -147,6 +147,12 @@ def _supabase_project_ids() -> list[str]:
 def _available_project_ids() -> list[str]:
     merged = set(_existing_project_ids())
     merged.update(_supabase_project_ids())
+    deleted_ids = {
+        slugify_project_id(pid)
+        for pid in st.session_state.get("_deleted_project_ids", set())
+    }
+    if deleted_ids:
+        merged.difference_update(deleted_ids)
     return sorted(merged)
 
 
@@ -437,6 +443,12 @@ def delete_project(project_id_or_name: str) -> tuple[int, list[str]]:
     removed_local_dirs = 0
     errors: list[str] = []
 
+    deleted_ids = st.session_state.setdefault("_deleted_project_ids", set())
+    if not isinstance(deleted_ids, set):
+        deleted_ids = set(deleted_ids) if isinstance(deleted_ids, (list, tuple, set)) else set()
+    deleted_ids.add(normalized)
+    st.session_state["_deleted_project_ids"] = deleted_ids
+
     for project_dir in _matching_project_dirs(project_id_or_name):
         try:
             shutil.rmtree(project_dir)
@@ -448,6 +460,9 @@ def delete_project(project_id_or_name: str) -> tuple[int, list[str]]:
         delete_project_records(normalized)
     except Exception as exc:
         errors.append(f"Failed to delete project records for {normalized}: {exc}")
+
+    if not _sb_store.delete_project(normalized):
+        errors.append(f"Failed to delete Supabase project records for {normalized}")
 
     return removed_local_dirs, errors
 
@@ -491,6 +506,7 @@ def init_state() -> None:
     st.session_state.setdefault("project_id", "")
     st.session_state.setdefault("project_selector", "")
     st.session_state.setdefault("new_project_title", "")
+    st.session_state.setdefault("_deleted_project_ids", set())
     st.session_state.setdefault("topic", "")
     st.session_state.setdefault("script_text", "")
     st.session_state.setdefault("script_text_input", "")
