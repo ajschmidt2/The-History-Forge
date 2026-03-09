@@ -1,5 +1,6 @@
 import streamlit as st
 
+from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import active_project_id, clear_downstream, scenes_ready
 from src.workflow import PipelineOptions, StepStatus, run_generate_prompts
 from src.workflow.project_io import load_scenes
@@ -116,21 +117,7 @@ def tab_create_prompts() -> None:
         st.warning("Create scenes first.")
         return
 
-    style_options = [
-        "Photorealistic cinematic",
-        "Painterly",
-        "Vintage photo",
-        "Illustrated",
-        "Film still",
-        "Sepia archival",
-        "Watercolor",
-        "Oil painting",
-        "Graphic novel",
-        "3D render",
-        "Epic concept art",
-        "High-contrast noir",
-        "Vintage postcard",
-    ]
+    style_options = list(VISUAL_STYLE_OPTIONS)
     current_style = st.session_state.visual_style if st.session_state.visual_style in style_options else style_options[0]
     st.session_state.visual_style = st.selectbox(
         "Visual style",

@@ -3,15 +3,15 @@ from __future__ import annotations
 import json
 from collections import deque
 from pathlib import Path
-
-MUSIC_LIBRARY_ROOT = Path("data/music_library")
 from typing import Any
 
 import streamlit as st
 
+from src.ui.constants import VISUAL_STYLE_OPTIONS
+from src.ui.state import DEFAULT_VOICE_ID
 from src.workflow import PIPELINE_STEPS, reset_downstream_steps
-from src.workflow.models import StepStatus
 from src.workflow.assets import preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets
+from src.workflow.models import StepStatus
 from src.workflow.project_io import load_project_payload, load_scenes, project_dir, save_project_payload
 from src.workflow.services import (
     FullWorkflowOptions,
@@ -22,12 +22,22 @@ from src.workflow.services import (
 )
 from src.workflow.state import load_workflow_state, save_workflow_state
 
+MUSIC_LIBRARY_ROOT = Path("data/music_library")
+PREFERENCES_PATH = Path("data/user_preferences.json")
+AUTOMATION_STEP_ORDER: tuple[str, ...] = ("voiceover", "scenes", "narrative", "prompts", "images", "effects", "render")
+
 
 def _tail_file(path: Path, lines: int = 200) -> str:
     if not path.exists():
         return ""
     with path.open("r", encoding="utf-8", errors="ignore") as handle:
         return "".join(deque(handle, maxlen=lines))
+
+
+def _tail_workflow_log(project_id: str, n: int = 50) -> list[str]:
+    log_path = project_dir(project_id) / "workflow.log"
+    tailed = _tail_file(log_path, lines=n)
+    return [line for line in tailed.splitlines() if line.strip()]
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -40,6 +50,32 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _load_saved_voice_preference() -> str:
+    if not PREFERENCES_PATH.exists():
+        return ""
+    try:
+        payload = json.loads(PREFERENCES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(payload.get("voice_id", "") or "").strip()
+
+
+def _resolve_voice_id(selected_voice_id: str, payload: dict[str, Any]) -> tuple[str, str]:
+    selected = str(selected_voice_id or "").strip()
+    if selected:
+        return selected, "selected"
+    project_voice = str(payload.get("voice_id", "") or "").strip()
+    if project_voice:
+        return project_voice, "project"
+    saved = _load_saved_voice_preference()
+    if saved:
+        return saved, "saved_preference"
+    fallback = str(DEFAULT_VOICE_ID or "").strip()
+    if fallback:
+        return fallback, "DEFAULT_VOICE_ID"
+    return "", "unresolved"
+
+
 def _count_files(folder: Path, suffixes: tuple[str, ...]) -> int:
     if not folder.exists():
         return 0
@@ -47,12 +83,12 @@ def _count_files(folder: Path, suffixes: tuple[str, ...]) -> int:
     return sum(1 for path in folder.glob("*") if path.is_file() and path.suffix.lower() in valid)
 
 
-
-
 def _list_music_tracks(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
     return sorted([p for p in folder.glob("*.*") if p.suffix.lower() in {".mp3", ".wav", ".m4a"}], key=lambda p: p.name.lower())
+
+
 def _reset_step(project_id: str, step_name: str) -> None:
     state = load_workflow_state(project_id)
     state.step_statuses[step_name] = StepStatus.NOT_STARTED
@@ -80,6 +116,36 @@ def _asset_counts(project_id: str) -> dict[str, int]:
     }
 
 
+def _render_workflow_progress(project_id: str, progress_holder: Any, log_holder: Any, error_holder: Any, output_holder: Any) -> None:
+    state = load_workflow_state(project_id)
+    completed = sum(1 for step in AUTOMATION_STEP_ORDER if state.step_statuses.get(step) in {StepStatus.COMPLETED, StepStatus.SKIPPED})
+    ratio = completed / max(1, len(AUTOMATION_STEP_ORDER))
+    current = state.current_stage if state.current_stage in AUTOMATION_STEP_ORDER else AUTOMATION_STEP_ORDER[0]
+    current_idx = AUTOMATION_STEP_ORDER.index(current) + 1
+
+    with progress_holder.container():
+        st.progress(ratio)
+        st.write(f"Running step {current_idx} of {len(AUTOMATION_STEP_ORDER)}: {current.replace('_', ' ').title()}")
+        cols = st.columns(len(AUTOMATION_STEP_ORDER))
+        for idx, step in enumerate(AUTOMATION_STEP_ORDER):
+            status = state.step_statuses.get(step, StepStatus.NOT_STARTED)
+            cols[idx].markdown(f"**{step.title()}**\n\n`{status.value}`")
+
+    recent_lines = _tail_workflow_log(project_id, n=60)
+    with log_holder.container():
+        st.caption("Recent workflow log")
+        st.code("\n".join(recent_lines) if recent_lines else "No workflow.log lines yet.", language="text")
+
+    if state.last_error:
+        error_holder.error(f"Last error: {state.last_error}")
+    else:
+        error_holder.empty()
+
+    final_render = project_dir(project_id) / "renders" / "final.mp4"
+    if final_render.exists():
+        output_holder.success(f"Final render path: {final_render}")
+
+
 def tab_automation(project_id: str) -> None:
     st.subheader("Automation")
     project_path = project_dir(project_id)
@@ -94,104 +160,35 @@ def tab_automation(project_id: str) -> None:
     workflow_log = project_path / "workflow.log"
     scenes = load_scenes(project_id)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Overall Status", str(state.overall_status).replace("_", " ").title())
-    c2.metric("Current Stage", state.current_stage.replace("_", " ").title())
-    c3.metric("Final Render", "Ready" if final_render.exists() else "Missing")
-
-    if state.last_error:
-        st.error(f"Last error: {state.last_error}")
-
-    st.markdown("#### Step Status")
-    cols = st.columns(3)
-    for idx, step in enumerate(PIPELINE_STEPS):
-        status = state.step_statuses.get(step, StepStatus.NOT_STARTED)
-        icon = {
-            StepStatus.COMPLETED: "✅",
-            StepStatus.FAILED: "❌",
-            StepStatus.IN_PROGRESS: "⏳",
-            StepStatus.SKIPPED: "⏭️",
-            StepStatus.NEEDS_REVIEW: "⚠️",
-            StepStatus.NOT_STARTED: "▫️",
-        }.get(status, "▫️")
-        cols[idx % 3].write(f"{icon} **{step.replace('_', ' ').title()}** — {status.value}")
-
-    st.markdown("#### Asset Dashboard")
-    a1, a2, a3, a4 = st.columns(4)
-    a1.metric("Scenes", counts["scenes"])
-    a2.metric("Prompts", counts["prompts"])
-    a3.metric("Images", counts["images"])
-    a4.metric("Voiceover Files", counts["voiceover"])
-    b1, b2, b3 = st.columns(3)
-    b1.metric("Music Files", counts["music"])
-    b2.metric("Video Files", counts["videos"])
-    b3.metric("Scenes With AI Video", counts["ai_video_scenes"])
-
-    checklist = {
-        "Script ready": bool(script_text),
-        "Scenes ready": counts["scenes"] > 0,
-        "Prompts ready": counts["prompts"] >= counts["scenes"] > 0,
-        "Visuals ready": counts["images"] + counts["videos"] >= max(1, counts["scenes"]),
-        "Voiceover ready": counts["voiceover"] > 0,
-        "Timeline ready": timeline_path.exists(),
-        "Render ready": final_render.exists(),
-    }
-    st.markdown("#### Pipeline Checklist")
-    for label, ready in checklist.items():
-        st.write(f"{'✅' if ready else '⬜'} {label}")
-
-    missing: list[str] = []
-    if counts["scenes"] and counts["images"] + counts["videos"] < counts["scenes"]:
-        missing.append("Some scenes do not have generated visual assets yet.")
-    if checklist["Timeline ready"] and not checklist["Voiceover ready"]:
-        missing.append("Timeline exists but no voiceover file found.")
-    if missing:
-        st.warning("\n".join(f"• {item}" for item in missing))
-
-
-    st.markdown("#### Render Preflight")
-    preflight = preflight_report(project_id)
-    if preflight["ok"]:
-        st.success("Preflight passed. Timeline/media references look healthy.")
-    else:
-        st.warning(f"Preflight found {preflight['issue_count']} issue(s).")
-        st.json(preflight)
-
-    image_based = sum(1 for scene in scenes if not (getattr(scene, "video_path", "") or getattr(scene, "video_url", "")))
-    video_based = len(scenes) - image_based
-    st.caption(f"Scene media mix: {image_based} image-based, {video_based} video-based.")
-
-    enabled_ai_video = bool(payload.get("automation_enable_ai_video", False))
-    if enabled_ai_video and image_based > 0:
-        st.info("AI video is enabled but some scenes are still image-based. Fallback: render now with images, then regenerate selected scenes with AI video and rerender.")
+    progress_holder = st.empty()
+    error_holder = st.empty()
+    log_holder = st.empty()
+    output_holder = st.empty()
+    _render_workflow_progress(project_id, progress_holder, log_holder, error_holder, output_holder)
 
     st.markdown("#### Automation Settings")
     project_music_tracks = _list_music_tracks(project_path / "assets/music")
     shared_music_tracks = _list_music_tracks(MUSIC_LIBRARY_ROOT)
 
+    saved_voice_id = _load_saved_voice_preference()
+    known_voice_ids = [DEFAULT_VOICE_ID]
+    for candidate in [str(payload.get("voice_id", "") or ""), saved_voice_id]:
+        if candidate and candidate not in known_voice_ids:
+            known_voice_ids.append(candidate)
+
+    current_style = str(payload.get("visual_style", payload.get("image_style", VISUAL_STYLE_OPTIONS[0])) or VISUAL_STYLE_OPTIONS[0])
+    if current_style not in VISUAL_STYLE_OPTIONS:
+        current_style = VISUAL_STYLE_OPTIONS[0]
+
     col_settings_1, col_settings_2 = st.columns(2)
     with col_settings_1:
-        aspect_ratio = st.selectbox(
-            "Aspect Ratio",
-            options=["16:9", "9:16"],
-            index=0 if str(payload.get("aspect_ratio", "16:9")) == "16:9" else 1,
-        )
-        image_style = st.text_input(
-            "Image Style",
-            value=str(payload.get("image_style", payload.get("visual_style", "Photorealistic cinematic")) or "Photorealistic cinematic"),
-            help="Example: Photorealistic cinematic, Realistic, Vintage painted, Documentary still",
-        )
-        scene_count = st.number_input(
-            "Number of Scenes",
-            min_value=1,
-            max_value=75,
-            value=int(payload.get("scene_count", payload.get("max_scenes", 8)) or 8),
-            step=1,
-        )
+        aspect_ratio = st.selectbox("Aspect Ratio", options=["16:9", "9:16"], index=0 if str(payload.get("aspect_ratio", "16:9")) == "16:9" else 1)
+        visual_style = st.selectbox("Visual Style", options=list(VISUAL_STYLE_OPTIONS), index=list(VISUAL_STYLE_OPTIONS).index(current_style))
+        scene_count = st.number_input("Number of Scenes", min_value=1, max_value=75, value=int(payload.get("scene_count", payload.get("max_scenes", 8)) or 8), step=1)
         enable_video_effects = st.toggle("Video Effects", value=bool(payload.get("enable_video_effects", True)))
     with col_settings_2:
-        enable_music = st.toggle("Background Music", value=bool(payload.get("enable_music", payload.get("include_music", False))))
         enable_subtitles = st.toggle("Subtitles", value=bool(payload.get("enable_subtitles", payload.get("automation_include_captions", True))))
+        enable_music = st.toggle("Background Music", value=bool(payload.get("enable_music", payload.get("include_music", False))))
         generate_voiceover = st.toggle("Generate voiceover", value=bool(payload.get("automation_generate_voiceover", True)))
         overwrite_existing = st.toggle("Overwrite existing assets", value=bool(payload.get("automation_overwrite_existing", False)))
 
@@ -212,52 +209,73 @@ def tab_automation(project_id: str) -> None:
         else:
             st.warning("Background music is enabled, but no project/shared music tracks were found.")
             selected_music_track = ""
-    else:
-        selected_music_track = ""
+
+    selected_voice_id = st.selectbox(
+        "Voice ID",
+        options=known_voice_ids,
+        index=known_voice_ids.index(str(payload.get("voice_id", "") or "")) if str(payload.get("voice_id", "") or "") in known_voice_ids else 0,
+        help="Automation resolves Voice ID in order: selected value, saved preference, then DEFAULT_VOICE_ID.",
+    )
+    resolved_voice_id, resolved_source = _resolve_voice_id(selected_voice_id, payload)
+    st.caption(f"Resolved Voice ID: `{resolved_voice_id or 'None'}` ({resolved_source})")
 
     if st.button("Save automation settings", width="stretch"):
-        payload["aspect_ratio"] = aspect_ratio
-        payload["image_style"] = image_style
-        payload["visual_style"] = image_style
-        payload["scene_count"] = int(scene_count)
-        payload["max_scenes"] = int(scene_count)
-        payload["enable_video_effects"] = bool(enable_video_effects)
-        payload["enable_music"] = bool(enable_music)
-        payload["include_music"] = bool(enable_music)
-        payload["selected_music_track"] = selected_music_track
-        payload["enable_subtitles"] = bool(enable_subtitles)
-        payload["automation_generate_voiceover"] = bool(generate_voiceover)
-        payload["automation_overwrite_existing"] = bool(overwrite_existing)
-        payload["music_volume_relative_to_voiceover"] = 0.5
+        payload.update({
+            "aspect_ratio": aspect_ratio,
+            "image_style": visual_style,
+            "visual_style": visual_style,
+            "scene_count": int(scene_count),
+            "max_scenes": int(scene_count),
+            "enable_video_effects": bool(enable_video_effects),
+            "enable_music": bool(enable_music),
+            "include_music": bool(enable_music),
+            "selected_music_track": selected_music_track if enable_music else "",
+            "enable_subtitles": bool(enable_subtitles),
+            "automation_generate_voiceover": bool(generate_voiceover),
+            "automation_overwrite_existing": bool(overwrite_existing),
+            "music_volume_relative_to_voiceover": 0.5,
+            "voice_id": selected_voice_id,
+        })
         save_project_payload(project_id, payload)
         st.success("Automation settings saved.")
-    include_voiceover = bool(payload.get("include_voiceover", True))
+
+    if generate_voiceover and not resolved_voice_id:
+        st.warning("No Voice ID could be resolved. Select a voice before running automation.")
+    if enable_music and not selected_music_track:
+        st.warning("Background music is enabled, but no music track is selected.")
+
     pipeline_options = PipelineOptions(
         include_music=enable_music,
         include_subtitles=enable_subtitles,
-        include_voiceover=include_voiceover,
+        include_voiceover=bool(generate_voiceover),
         number_of_scenes=int(scene_count),
         aspect_ratio=aspect_ratio,
-        visual_style=image_style,
+        visual_style=visual_style,
         enable_video_effects=enable_video_effects,
         selected_music_track=selected_music_track,
         music_volume_relative_to_voiceover=0.5,
-        voice_id=str(payload.get("voice_id", "") or ""),
-        allow_silent_render=not include_voiceover,
+        voice_id=selected_voice_id,
+        allow_silent_render=False,
     )
 
     st.markdown("#### Controls")
     c_full, c_resume, c_timeline, c_render = st.columns(4)
     c_assets, c_rebuild = st.columns(2)
+
+    def _progress_callback(event: dict[str, Any]) -> None:
+        _render_workflow_progress(project_id, progress_holder, log_holder, error_holder, output_holder)
+
     if c_full.button("Run Full Workflow", width="stretch"):
         if enable_music and not selected_music_track:
             st.error("Background music is enabled but no track is selected.")
+            return
+        if generate_voiceover and not resolved_voice_id:
+            st.error("Voice ID is required for voiceover.")
             return
         result = run_full_workflow(
             project_id,
             FullWorkflowOptions(
                 mode="full_auto",
-                overwrite_script=overwrite_existing,
                 overwrite_scenes=overwrite_existing,
                 overwrite_prompts=overwrite_existing,
                 overwrite_images=overwrite_existing,
@@ -265,8 +283,10 @@ def tab_automation(project_id: str) -> None:
                 overwrite_timeline=overwrite_existing,
                 overwrite_render=overwrite_existing,
                 pipeline=pipeline_options,
+                progress_callback=_progress_callback,
             ),
         )
+        _render_workflow_progress(project_id, progress_holder, log_holder, error_holder, output_holder)
         if result.failed_step:
             st.error(f"Workflow stopped at: {result.failed_step}")
         else:
@@ -275,13 +295,8 @@ def tab_automation(project_id: str) -> None:
             st.success(f"Final render: {result.final_output_path}")
 
     if c_resume.button("Resume Missing Steps", width="stretch"):
-        result = run_full_workflow(
-            project_id,
-            FullWorkflowOptions(
-                mode="resume_missing",
-                pipeline=pipeline_options,
-            ),
-        )
+        result = run_full_workflow(project_id, FullWorkflowOptions(mode="resume_missing", pipeline=pipeline_options, progress_callback=_progress_callback))
+        _render_workflow_progress(project_id, progress_holder, log_holder, error_holder, output_holder)
         if result.failed_step:
             st.error(f"Resume failed at: {result.failed_step}")
         else:
@@ -293,7 +308,6 @@ def tab_automation(project_id: str) -> None:
             st.success("Timeline rebuilt.")
         else:
             st.error(result.message or "Timeline rebuild failed.")
-
 
     if c_assets.button("Regenerate Missing Scene Assets", width="stretch"):
         regen = regenerate_missing_scene_assets(project_id)
@@ -324,6 +338,13 @@ def tab_automation(project_id: str) -> None:
     if r2.button("Reset Downstream from Selected Step", width="stretch"):
         reset_downstream_steps(project_id, selected_downstream)
         st.success(f"Reset downstream from: {selected_downstream}")
+
+    st.markdown("#### Render Preflight")
+    preflight = preflight_report(project_id)
+    if preflight["ok"]:
+        st.success("Preflight passed. Timeline/media references look healthy.")
+    else:
+        st.warning(f"Preflight found {preflight['issue_count']} issue(s).")
 
     st.markdown("#### Logs")
     st.caption("Recent workflow log lines")
