@@ -260,6 +260,48 @@ Remove incorrect variants such as `MODEL=...` or `OPENAI_MODEL=sk-proj-...`.
 
 For canonical secrets setup examples, see `docs/SECRETS.md`.
 
+
+## Voiceover providers
+
+The app now supports two voiceover providers in both the **Voiceover** tab and the **Automation** tab:
+
+- **ElevenLabs** (existing behavior, Voice ID-based)
+- **OpenAI Text-to-Speech**
+
+### Provider selection
+
+- Pick **Voice Provider** = `ElevenLabs` to keep the existing Voice ID workflow.
+- Pick **Voice Provider** = `OpenAI` to use OpenAI TTS model + voice selection.
+
+### OpenAI TTS options
+
+Supported OpenAI TTS models:
+
+- `gpt-4o-mini-tts`
+- `tts-1`
+- `tts-1-hd`
+
+Supported built-in OpenAI voices:
+
+- `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`
+
+`gpt-4o-mini-tts` supports optional instruction text for speaking style/tone (for example pacing, warmth, or delivery style).
+
+### Output path
+
+Generated voiceover audio is saved to the same canonical project output path used by the workflow:
+
+- `data/projects/<project_id>/assets/audio/voiceover.mp3`
+
+### Automation behavior
+
+During automation, the voiceover step now reads your configured provider settings and logs which provider was used:
+
+- ElevenLabs logs `provider=elevenlabs voice_id=...`
+- OpenAI logs `provider=openai model=... voice=...`
+
+Downstream timeline, subtitle, and render steps continue to use the same canonical voiceover file path.
+
 ## Automated workflow (deterministic + resumable)
 
 The app now includes a hardened **Automation** tab designed for full pipeline runs that are deterministic, resumable, and recoverable without background workers.
@@ -344,7 +386,9 @@ Before running automation, the tab now persists these settings per project:
 - Subtitles (on/off)
 - Background Music (on/off)
 - Background Music Selection (project + shared library)
-- Voice ID
+- Voice Provider (`ElevenLabs` or `OpenAI`)
+- ElevenLabs Voice ID (when ElevenLabs is selected)
+- OpenAI TTS Model / OpenAI Voice / optional speaking instructions (when OpenAI is selected)
 
 ### Visual style dropdown
 

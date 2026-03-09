@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from src.ai_video_generation import generate_video
+from src.audio import (
+    TTS_PROVIDER_ELEVENLABS,
+    TTS_PROVIDER_OPENAI,
+    generate_voiceover_with_provider,
+    resolve_tts_settings,
+)
 from src.storage import record_asset
 import src.supabase_storage as _sb_store
 from src.ui.timeline_sync import sync_timeline_for_project
@@ -32,7 +38,6 @@ from utils import (
     generate_prompts_for_scenes,
     generate_script,
     generate_script_from_outline,
-    generate_voiceover,
     split_script_into_scenes,
 )
 
@@ -57,6 +62,11 @@ class PipelineOptions:
     selected_music_track: str = ""
     music_volume_relative_to_voiceover: float = 0.5
     voice_id: str = ""
+    tts_provider: str = TTS_PROVIDER_ELEVENLABS
+    elevenlabs_voice_id: str = ""
+    openai_tts_model: str = "gpt-4o-mini-tts"
+    openai_tts_voice: str = "alloy"
+    openai_tts_instructions: str = ""
 
 
 @dataclass(slots=True)
@@ -387,6 +397,11 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
     except (TypeError, ValueError):
         merged.music_volume_relative_to_voiceover = 0.5
     merged.voice_id = str(merged.voice_id or payload.get("voice_id", "") or "").strip()
+    merged.tts_provider = str(merged.tts_provider or payload.get("tts_provider", TTS_PROVIDER_ELEVENLABS) or TTS_PROVIDER_ELEVENLABS).strip().lower()
+    merged.elevenlabs_voice_id = str(merged.elevenlabs_voice_id or merged.voice_id or payload.get("elevenlabs_voice_id", payload.get("voice_id", "")) or "").strip()
+    merged.openai_tts_model = str(merged.openai_tts_model or payload.get("openai_tts_model", "gpt-4o-mini-tts") or "gpt-4o-mini-tts").strip()
+    merged.openai_tts_voice = str(merged.openai_tts_voice or payload.get("openai_tts_voice", "alloy") or "alloy").strip()
+    merged.openai_tts_instructions = str(merged.openai_tts_instructions or payload.get("openai_tts_instructions", "") or "").strip()
     return payload, merged
 
 
@@ -592,10 +607,22 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message="Script text is missing.")
 
     output_path = project_dir(project_id) / "assets/audio/voiceover.mp3"
-    voice_id = _resolve_voice_id(project_id, cfg.voice_id, payload, logger)
-    logger.info("voiceover setup: script_detected=%s output_path=%s", bool(script_text), output_path)
+    tts_settings = resolve_tts_settings(
+        payload,
+        tts_provider=cfg.tts_provider,
+        elevenlabs_voice_id=cfg.elevenlabs_voice_id or cfg.voice_id,
+        openai_tts_model=cfg.openai_tts_model,
+        openai_tts_voice=cfg.openai_tts_voice,
+        openai_tts_instructions=cfg.openai_tts_instructions,
+        output_format="mp3",
+    )
 
-    if not voice_id:
+    if tts_settings.provider == TTS_PROVIDER_ELEVENLABS and not tts_settings.elevenlabs_voice_id:
+        tts_settings.elevenlabs_voice_id = _resolve_voice_id(project_id, cfg.voice_id, payload, logger)
+
+    logger.info("voiceover setup: script_detected=%s output_path=%s provider=%s", bool(script_text), output_path, tts_settings.provider)
+
+    if tts_settings.provider == TTS_PROVIDER_ELEVENLABS and not tts_settings.elevenlabs_voice_id:
         if cfg.allow_silent_render:
             return StepResult(
                 project_id,
@@ -610,7 +637,7 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
 
     update_step_status(project_id, "voiceover", StepStatus.IN_PROGRESS)
     try:
-        audio, err = generate_voiceover(script_text, voice_id=voice_id, output_format="mp3")
+        audio, err = generate_voiceover_with_provider(script_text, tts_settings)
     except Exception as exc:  # noqa: BLE001
         update_step_status(project_id, "voiceover", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message=str(exc))
@@ -627,11 +654,37 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
     except Exception:
         pass
 
-    payload["voice_id"] = voice_id
+    payload["tts_provider"] = tts_settings.provider
+    payload["elevenlabs_voice_id"] = tts_settings.elevenlabs_voice_id
+    payload["openai_tts_model"] = tts_settings.openai_tts_model
+    payload["openai_tts_voice"] = tts_settings.openai_tts_voice
+    payload["openai_tts_instructions"] = tts_settings.openai_tts_instructions
+    payload["voice_id"] = tts_settings.elevenlabs_voice_id or payload.get("voice_id", "")
     save_project_payload(project_id, payload)
-    logger.info("voiceover using selected voice_id=%s", voice_id)
+
+    if tts_settings.provider == TTS_PROVIDER_OPENAI:
+        logger.info(
+            "voiceover provider=openai model=%s voice=%s output_path=%s",
+            tts_settings.openai_tts_model,
+            tts_settings.openai_tts_voice,
+            output_path,
+        )
+    else:
+        logger.info("voiceover provider=elevenlabs voice_id=%s output_path=%s", tts_settings.elevenlabs_voice_id, output_path)
+
     update_step_status(project_id, "voiceover", StepStatus.COMPLETED)
-    return StepResult(project_id, "voiceover", StepStatus.COMPLETED, outputs={"voiceover_path": str(output_path), "voice_id": voice_id})
+    return StepResult(
+        project_id,
+        "voiceover",
+        StepStatus.COMPLETED,
+        outputs={
+            "voiceover_path": str(output_path),
+            "provider": tts_settings.provider,
+            "voice_id": tts_settings.elevenlabs_voice_id,
+            "openai_tts_model": tts_settings.openai_tts_model,
+            "openai_tts_voice": tts_settings.openai_tts_voice,
+        },
+    )
 
 
 def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -> StepResult:

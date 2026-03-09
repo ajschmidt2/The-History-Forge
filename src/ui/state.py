@@ -299,6 +299,12 @@ def save_project_state(project_id: str) -> None:
         "selected_music_track": str(st.session_state.get("selected_music_track", "") or ""),
         "enable_subtitles": bool(st.session_state.get("enable_subtitles", True)),
         "music_volume_relative_to_voiceover": float(st.session_state.get("music_volume_relative_to_voiceover", 0.5) or 0.5),
+        "tts_provider": str(st.session_state.get("tts_provider", "elevenlabs") or "elevenlabs"),
+        "voice_id": str(st.session_state.get("voice_id", DEFAULT_VOICE_ID) or DEFAULT_VOICE_ID),
+        "elevenlabs_voice_id": str(st.session_state.get("voice_id", DEFAULT_VOICE_ID) or DEFAULT_VOICE_ID),
+        "openai_tts_model": str(st.session_state.get("openai_tts_model", "gpt-4o-mini-tts") or "gpt-4o-mini-tts"),
+        "openai_tts_voice": str(st.session_state.get("openai_tts_voice", "alloy") or "alloy"),
+        "openai_tts_instructions": str(st.session_state.get("openai_tts_instructions", "") or ""),
         "scene_wpm": int(st.session_state.get("scene_wpm", 160) or 160),
         "estimated_total_runtime_sec": float(st.session_state.get("estimated_total_runtime_sec", 0.0) or 0.0),
         "scene_transition_types": st.session_state.get("scene_transition_types", []),
@@ -347,6 +353,11 @@ def load_project_state(project_id: str) -> None:
         st.session_state.estimated_total_runtime_sec = 0.0
         st.session_state.scenes = []
         st.session_state.scene_transition_types = []
+        st.session_state.tts_provider = "elevenlabs"
+        st.session_state.voice_id = _load_saved_voice_id()
+        st.session_state.openai_tts_model = "gpt-4o-mini-tts"
+        st.session_state.openai_tts_voice = "alloy"
+        st.session_state.openai_tts_instructions = ""
         st.session_state.character_registry = []
         st.session_state.object_registry = []
         return
@@ -398,6 +409,11 @@ def load_project_state(project_id: str) -> None:
     st.session_state.selected_music_track = str(raw.get("selected_music_track", "") or "")
     st.session_state.enable_subtitles = bool(raw.get("enable_subtitles", True))
     st.session_state.music_volume_relative_to_voiceover = float(raw.get("music_volume_relative_to_voiceover", 0.5) or 0.5)
+    st.session_state.tts_provider = str(raw.get("tts_provider", "elevenlabs") or "elevenlabs")
+    st.session_state.voice_id = str(raw.get("elevenlabs_voice_id", raw.get("voice_id", _load_saved_voice_id())) or _load_saved_voice_id())
+    st.session_state.openai_tts_model = str(raw.get("openai_tts_model", "gpt-4o-mini-tts") or "gpt-4o-mini-tts")
+    st.session_state.openai_tts_voice = str(raw.get("openai_tts_voice", "alloy") or "alloy")
+    st.session_state.openai_tts_instructions = str(raw.get("openai_tts_instructions", "") or "")
     st.session_state.scene_wpm = int(raw.get("scene_wpm", 160) or 160)
     st.session_state.estimated_total_runtime_sec = float(raw.get("estimated_total_runtime_sec", 0.0) or 0.0)
     raw_transitions = raw.get("scene_transition_types", [])
@@ -521,8 +537,12 @@ def init_state() -> None:
 
     st.session_state.setdefault("openai_model", DEFAULT_OPENAI_MODEL)
 
+    st.session_state.setdefault("tts_provider", "elevenlabs")
     st.session_state.setdefault("voice_id", _load_saved_voice_id())
     st.session_state.setdefault("voice_ids", _load_saved_voice_ids())
+    st.session_state.setdefault("openai_tts_model", "gpt-4o-mini-tts")
+    st.session_state.setdefault("openai_tts_voice", "alloy")
+    st.session_state.setdefault("openai_tts_instructions", "")
     st.session_state.setdefault("voiceover_bytes", None)
     st.session_state.setdefault("voiceover_error", None)
     st.session_state.setdefault("voiceover_saved_path", "")
