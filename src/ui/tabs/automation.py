@@ -134,6 +134,13 @@ def _automation_steps_for_mode(mode: str) -> tuple[str, ...]:
     return AUTOMATION_STEP_ORDER_TOPIC if mode == "topic_to_short_video" else AUTOMATION_STEP_ORDER_SCRIPT
 
 
+def _coerce_float(raw_value: Any, fallback: float) -> float:
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _render_workflow_progress(project_id: str, mode: str, progress_holder: Any, log_holder: Any, error_holder: Any, output_holder: Any) -> None:
     state = load_workflow_state(project_id)
     step_order = _automation_steps_for_mode(mode)
@@ -280,16 +287,33 @@ def tab_automation(project_id: str) -> None:
         current_style = VISUAL_STYLE_OPTIONS[0]
 
     col_settings_1, col_settings_2 = st.columns(2)
+    default_ratio = str(payload.get("aspect_ratio", "") or "").strip()
+    if default_ratio not in {"16:9", "9:16"}:
+        default_ratio = "9:16" if selected_mode == "topic_to_short_video" else "16:9"
+
+    raw_scene_count = payload.get("scene_count", payload.get("max_scenes", 8))
+    try:
+        default_scene_count = int(raw_scene_count or 8)
+    except (TypeError, ValueError):
+        default_scene_count = 8
+    default_scene_count = max(1, min(75, default_scene_count))
+
+    payload_enable_effects = payload.get("enable_video_effects")
+    default_enable_effects = bool(payload_enable_effects) if payload_enable_effects is not None else True
+    payload_enable_subtitles = payload.get("enable_subtitles", payload.get("automation_include_captions"))
+    default_enable_subtitles = bool(payload_enable_subtitles) if payload_enable_subtitles is not None else (selected_mode == "topic_to_short_video")
+    payload_enable_music = payload.get("enable_music", payload.get("include_music"))
+    default_enable_music = bool(payload_enable_music) if payload_enable_music is not None else False
+    default_music_volume = min(1.0, max(0.0, _coerce_float(payload.get("music_volume_relative_to_voiceover", 0.5), 0.5)))
+
     with col_settings_1:
-        default_ratio = "9:16" if selected_mode == "topic_to_short_video" else str(payload.get("aspect_ratio", "16:9"))
         aspect_ratio = st.selectbox("Aspect Ratio", options=["16:9", "9:16"], index=0 if default_ratio == "16:9" else 1)
         visual_style = st.selectbox("Visual Style", options=list(VISUAL_STYLE_OPTIONS), index=list(VISUAL_STYLE_OPTIONS).index(current_style))
-        default_scene_count = 8 if selected_mode == "topic_to_short_video" else int(payload.get("scene_count", payload.get("max_scenes", 8)) or 8)
         scene_count = st.number_input("Number of Scenes", min_value=1, max_value=75, value=default_scene_count, step=1)
-        enable_video_effects = st.toggle("Video Effects", value=True if selected_mode == "topic_to_short_video" else bool(payload.get("enable_video_effects", True)))
+        enable_video_effects = st.toggle("Video Effects", value=default_enable_effects)
     with col_settings_2:
-        enable_subtitles = st.toggle("Subtitles", value=True if selected_mode == "topic_to_short_video" else bool(payload.get("enable_subtitles", payload.get("automation_include_captions", True))))
-        enable_music = st.toggle("Background Music", value=False if selected_mode == "topic_to_short_video" else bool(payload.get("enable_music", payload.get("include_music", False))))
+        enable_subtitles = st.toggle("Subtitles", value=default_enable_subtitles)
+        enable_music = st.toggle("Background Music", value=default_enable_music)
         generate_voiceover = st.toggle("Generate voiceover", value=bool(payload.get("automation_generate_voiceover", True)))
         overwrite_existing = st.toggle("Overwrite existing assets", value=bool(payload.get("automation_overwrite_existing", False)))
 
@@ -300,6 +324,15 @@ def tab_automation(project_id: str) -> None:
         combined_music_choices.append((f"Shared · {track.name}", str(track)))
 
     selected_music_track = str(payload.get("selected_music_track", "") or "")
+    music_volume_relative_to_voiceover = st.slider(
+        "Background Music Level (relative to voiceover)",
+        min_value=0.0,
+        max_value=1.0,
+        step=0.05,
+        value=default_music_volume,
+        disabled=not enable_music,
+        help="1.0 = same level as voiceover, 0.5 = quieter, 0.0 = muted.",
+    )
     if enable_music:
         if combined_music_choices:
             labels = [label for label, _ in combined_music_choices]
@@ -355,12 +388,14 @@ def tab_automation(project_id: str) -> None:
         )
 
     if st.button("Save automation settings", width="stretch"):
+        safe_scene_count = max(1, min(75, int(scene_count)))
+        safe_music_volume = min(1.0, max(0.0, float(music_volume_relative_to_voiceover)))
         payload.update({
             "aspect_ratio": aspect_ratio,
             "image_style": visual_style,
             "visual_style": visual_style,
-            "scene_count": int(scene_count),
-            "max_scenes": int(scene_count),
+            "scene_count": safe_scene_count,
+            "max_scenes": safe_scene_count,
             "enable_video_effects": bool(enable_video_effects),
             "enable_music": bool(enable_music),
             "include_music": bool(enable_music),
@@ -368,7 +403,7 @@ def tab_automation(project_id: str) -> None:
             "enable_subtitles": bool(enable_subtitles),
             "automation_generate_voiceover": bool(generate_voiceover),
             "automation_overwrite_existing": bool(overwrite_existing),
-            "music_volume_relative_to_voiceover": 0.5,
+            "music_volume_relative_to_voiceover": safe_music_volume,
             "tts_provider": selected_provider,
             "voice_id": selected_voice_id,
             "elevenlabs_voice_id": selected_voice_id,
@@ -394,12 +429,12 @@ def tab_automation(project_id: str) -> None:
         include_music=enable_music,
         include_subtitles=enable_subtitles,
         include_voiceover=bool(generate_voiceover),
-        number_of_scenes=int(scene_count),
+        number_of_scenes=max(1, min(75, int(scene_count))),
         aspect_ratio=aspect_ratio,
         visual_style=visual_style,
         enable_video_effects=enable_video_effects,
         selected_music_track=selected_music_track,
-        music_volume_relative_to_voiceover=0.5,
+        music_volume_relative_to_voiceover=min(1.0, max(0.0, float(music_volume_relative_to_voiceover))),
         voice_id=selected_voice_id,
         tts_provider=selected_provider,
         elevenlabs_voice_id=selected_voice_id,

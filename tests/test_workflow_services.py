@@ -208,3 +208,34 @@ def test_run_full_workflow_topic_mode_requires_topic(tmp_path, monkeypatch):
     result = run_full_workflow(project_id, FullWorkflowOptions(pipeline=PipelineOptions(automation_mode="topic_to_short_video", topic="")))
     assert result.failed_step == "script"
     assert any("Topic is required" in msg for msg in result.warnings)
+
+
+def test_load_options_hardens_automation_payload_values(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-options-harden"
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "scene_count": 999,
+            "max_scenes": 999,
+            "aspect_ratio": "1:1",
+            "enable_subtitles": "false",
+            "enable_music": "true",
+            "automation_generate_voiceover": "false",
+            "music_volume_relative_to_voiceover": "2.5",
+            "variations_per_scene": 0,
+        },
+    )
+
+    from src.workflow.services import _load_options
+
+    _, options = _load_options(project_id, None)
+
+    assert options.number_of_scenes == 75
+    assert options.aspect_ratio == "16:9"
+    assert options.include_subtitles is False
+    assert options.include_music is True
+    assert options.include_voiceover is False
+    assert options.music_volume_relative_to_voiceover == 1.0
+    assert options.variations_per_scene == 1
