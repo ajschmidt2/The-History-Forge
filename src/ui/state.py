@@ -640,7 +640,6 @@ def render_project_selector() -> None:
                 return
             removed_local_dirs, errors = delete_project(selected_option)
             _select_fallback_project_after_delete()
-            st.session_state[confirmation_key] = ""
             if errors:
                 st.error("Project delete completed with issues: " + " | ".join(errors))
             else:
