@@ -1276,6 +1276,15 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
     if len(chunk_pool) != target:
         chunk_pool = split_script_into_scene_strings(text, target)
 
+    # Hard guarantee: always honor the requested scene count.
+    # Some content patterns can still drift after heuristics/rebalancing (e.g.,
+    # heavily duplicated chunks, very short scripts, or malformed delimiters).
+    if len(chunk_pool) < target:
+        filler = split_script_into_scene_strings(text, target)
+        chunk_pool.extend(filler[len(chunk_pool):])
+    if len(chunk_pool) > target:
+        chunk_pool = chunk_pool[:target]
+
     beats = _outline_beats(outline)
     scenes: list[Scene] = []
     for i, chunk in enumerate(chunk_pool[:target], start=1):

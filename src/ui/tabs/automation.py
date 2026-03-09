@@ -152,9 +152,13 @@ def _render_post_run_video_section(project_id: str, final_render: Path) -> None:
         st.info("Run **Render Final Video** (or full workflow) to preview and download the final MP4 here.")
         return
 
-    video_bytes = final_render.read_bytes()
-    st.video(video_bytes)
+    st.video(str(final_render))
     st.write(f"Final render path: `{final_render}`")
+    try:
+        video_bytes = final_render.read_bytes()
+    except OSError as exc:
+        st.warning(f"Final render exists but could not be read for download: {exc}")
+        return
     st.download_button(
         "⬇️ Download Final Video",
         data=video_bytes,
@@ -350,6 +354,7 @@ def tab_automation(project_id: str) -> None:
             st.success("Workflow run completed.")
         if result.final_output_path:
             st.success(f"Final render: {result.final_output_path}")
+            st.rerun()
 
     if c_resume.button("Resume Missing Steps", width="stretch"):
         result = run_full_workflow(project_id, FullWorkflowOptions(mode="resume_missing", pipeline=pipeline_options, progress_callback=_progress_callback))
@@ -381,6 +386,7 @@ def tab_automation(project_id: str) -> None:
         result = run_render_video(project_id, pipeline_options)
         if result.status == StepStatus.COMPLETED:
             st.success("Render completed.")
+            st.rerun()
         else:
             st.error(result.message or "Render failed.")
 
