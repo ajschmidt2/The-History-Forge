@@ -32,7 +32,8 @@ from src.workflow.state import load_workflow_state, save_workflow_state
 
 MUSIC_LIBRARY_ROOT = Path("data/music_library")
 PREFERENCES_PATH = Path("data/user_preferences.json")
-AUTOMATION_STEP_ORDER: tuple[str, ...] = ("voiceover", "scenes", "narrative", "prompts", "images", "effects", "render")
+AUTOMATION_STEP_ORDER_TOPIC: tuple[str, ...] = ("script", "voiceover", "scenes", "narrative", "prompts", "images", "effects", "render")
+AUTOMATION_STEP_ORDER_SCRIPT: tuple[str, ...] = ("voiceover", "scenes", "narrative", "prompts", "images", "effects", "render")
 
 
 def _tail_file(path: Path, lines: int = 200) -> str:
@@ -124,18 +125,28 @@ def _asset_counts(project_id: str) -> dict[str, int]:
     }
 
 
-def _render_workflow_progress(project_id: str, progress_holder: Any, log_holder: Any, error_holder: Any, output_holder: Any) -> None:
+def _automation_mode(project_payload: dict[str, Any]) -> str:
+    mode = str(project_payload.get("automation_mode", "topic_to_short_video") or "topic_to_short_video").strip()
+    return mode if mode in {"topic_to_short_video", "existing_script_full_workflow"} else "topic_to_short_video"
+
+
+def _automation_steps_for_mode(mode: str) -> tuple[str, ...]:
+    return AUTOMATION_STEP_ORDER_TOPIC if mode == "topic_to_short_video" else AUTOMATION_STEP_ORDER_SCRIPT
+
+
+def _render_workflow_progress(project_id: str, mode: str, progress_holder: Any, log_holder: Any, error_holder: Any, output_holder: Any) -> None:
     state = load_workflow_state(project_id)
-    completed = sum(1 for step in AUTOMATION_STEP_ORDER if state.step_statuses.get(step) in {StepStatus.COMPLETED, StepStatus.SKIPPED})
-    ratio = completed / max(1, len(AUTOMATION_STEP_ORDER))
-    current = state.current_stage if state.current_stage in AUTOMATION_STEP_ORDER else AUTOMATION_STEP_ORDER[0]
-    current_idx = AUTOMATION_STEP_ORDER.index(current) + 1
+    step_order = _automation_steps_for_mode(mode)
+    completed = sum(1 for step in step_order if state.step_statuses.get(step) in {StepStatus.COMPLETED, StepStatus.SKIPPED})
+    ratio = completed / max(1, len(step_order))
+    current = state.current_stage if state.current_stage in step_order else step_order[0]
+    current_idx = step_order.index(current) + 1
 
     with progress_holder.container():
         st.progress(ratio)
-        st.write(f"Running step {current_idx} of {len(AUTOMATION_STEP_ORDER)}: {current.replace('_', ' ').title()}")
-        cols = st.columns(len(AUTOMATION_STEP_ORDER))
-        for idx, step in enumerate(AUTOMATION_STEP_ORDER):
+        st.write(f"Running step {current_idx} of {len(step_order)}: {current.replace('_', ' ').title()}")
+        cols = st.columns(len(step_order))
+        for idx, step in enumerate(step_order):
             status = state.step_statuses.get(step, StepStatus.NOT_STARTED)
             cols[idx].markdown(f"**{step.title()}**\n\n`{status.value}`")
 
@@ -222,6 +233,7 @@ def tab_automation(project_id: str) -> None:
     state = load_workflow_state(project_id)
     counts = _asset_counts(project_id)
 
+    automation_mode = _automation_mode(payload)
     script_text = str(payload.get("script_text", "") or "").strip()
     final_render = project_path / "renders" / "final.mp4"
     timeline_path = project_path / "timeline.json"
@@ -233,9 +245,27 @@ def tab_automation(project_id: str) -> None:
     error_holder = st.empty()
     log_holder = st.empty()
     output_holder = st.empty()
-    _render_workflow_progress(project_id, progress_holder, log_holder, error_holder, output_holder)
+    _render_workflow_progress(project_id, automation_mode, progress_holder, log_holder, error_holder, output_holder)
 
     st.markdown("#### Automation Settings")
+    mode_label_map = {
+        "Topic → 60s Short Video": "topic_to_short_video",
+        "Existing Script → Full Workflow": "existing_script_full_workflow",
+    }
+    current_mode_label = "Topic → 60s Short Video" if automation_mode == "topic_to_short_video" else "Existing Script → Full Workflow"
+    selected_mode_label = st.selectbox("Automation Mode", options=list(mode_label_map.keys()), index=list(mode_label_map.keys()).index(current_mode_label))
+    selected_mode = mode_label_map[selected_mode_label]
+
+    topic_input = str(payload.get("topic", "") or "")
+    topic_direction = str(payload.get("topic_direction", payload.get("story_angle", "")) or "")
+    if selected_mode == "topic_to_short_video":
+        topic_input = st.text_input("Topic (required)", value=topic_input)
+        topic_direction = st.text_input("Angle / Direction (optional)", value=topic_direction)
+    elif not script_text:
+        st.warning("Existing Script mode selected, but no script currently exists in this project.")
+
+    st.caption(f"Current mode: `{selected_mode}`")
+    st.caption(f"Script status: {'available' if script_text else 'missing'}")
     project_music_tracks = _list_music_tracks(project_path / "assets/music")
     shared_music_tracks = _list_music_tracks(MUSIC_LIBRARY_ROOT)
 
@@ -251,13 +281,15 @@ def tab_automation(project_id: str) -> None:
 
     col_settings_1, col_settings_2 = st.columns(2)
     with col_settings_1:
-        aspect_ratio = st.selectbox("Aspect Ratio", options=["16:9", "9:16"], index=0 if str(payload.get("aspect_ratio", "16:9")) == "16:9" else 1)
+        default_ratio = "9:16" if selected_mode == "topic_to_short_video" else str(payload.get("aspect_ratio", "16:9"))
+        aspect_ratio = st.selectbox("Aspect Ratio", options=["16:9", "9:16"], index=0 if default_ratio == "16:9" else 1)
         visual_style = st.selectbox("Visual Style", options=list(VISUAL_STYLE_OPTIONS), index=list(VISUAL_STYLE_OPTIONS).index(current_style))
-        scene_count = st.number_input("Number of Scenes", min_value=1, max_value=75, value=int(payload.get("scene_count", payload.get("max_scenes", 8)) or 8), step=1)
-        enable_video_effects = st.toggle("Video Effects", value=bool(payload.get("enable_video_effects", True)))
+        default_scene_count = 8 if selected_mode == "topic_to_short_video" else int(payload.get("scene_count", payload.get("max_scenes", 8)) or 8)
+        scene_count = st.number_input("Number of Scenes", min_value=1, max_value=75, value=default_scene_count, step=1)
+        enable_video_effects = st.toggle("Video Effects", value=True if selected_mode == "topic_to_short_video" else bool(payload.get("enable_video_effects", True)))
     with col_settings_2:
-        enable_subtitles = st.toggle("Subtitles", value=bool(payload.get("enable_subtitles", payload.get("automation_include_captions", True))))
-        enable_music = st.toggle("Background Music", value=bool(payload.get("enable_music", payload.get("include_music", False))))
+        enable_subtitles = st.toggle("Subtitles", value=True if selected_mode == "topic_to_short_video" else bool(payload.get("enable_subtitles", payload.get("automation_include_captions", True))))
+        enable_music = st.toggle("Background Music", value=False if selected_mode == "topic_to_short_video" else bool(payload.get("enable_music", payload.get("include_music", False))))
         generate_voiceover = st.toggle("Generate voiceover", value=bool(payload.get("automation_generate_voiceover", True)))
         overwrite_existing = st.toggle("Overwrite existing assets", value=bool(payload.get("automation_overwrite_existing", False)))
 
@@ -340,6 +372,10 @@ def tab_automation(project_id: str) -> None:
             "openai_tts_model": selected_openai_model,
             "openai_tts_voice": selected_openai_voice,
             "openai_tts_instructions": selected_openai_instructions,
+            "automation_mode": selected_mode,
+            "topic": topic_input.strip(),
+            "topic_direction": topic_direction.strip(),
+            "script_profile": "youtube_short_60s" if selected_mode == "topic_to_short_video" else str(payload.get("script_profile", "") or ""),
         })
         save_project_payload(project_id, payload)
         st.success("Automation settings saved.")
@@ -368,6 +404,10 @@ def tab_automation(project_id: str) -> None:
         openai_tts_voice=selected_openai_voice,
         openai_tts_instructions=selected_openai_instructions,
         allow_silent_render=False,
+        automation_mode=selected_mode,
+        topic=topic_input.strip(),
+        topic_direction=topic_direction.strip(),
+        script_profile="youtube_short_60s" if selected_mode == "topic_to_short_video" else str(payload.get("script_profile", "") or ""),
     )
 
     st.markdown("#### Controls")
@@ -375,12 +415,19 @@ def tab_automation(project_id: str) -> None:
     c_assets, c_rebuild = st.columns(2)
 
     def _progress_callback(event: dict[str, Any]) -> None:
-        _render_workflow_progress(project_id, progress_holder, log_holder, error_holder, output_holder)
+        _render_workflow_progress(project_id, selected_mode, progress_holder, log_holder, error_holder, output_holder)
 
     if c_full.button("Run Full Workflow", width="stretch"):
+        if selected_mode == "topic_to_short_video" and not topic_input.strip():
+            st.error("Topic is required for Topic → 60s Short Video mode.")
+            return
+        if selected_mode == "existing_script_full_workflow" and not script_text:
+            st.error("Existing Script mode requires project script text.")
+            return
         if enable_music and not selected_music_track:
             st.error("Background music is enabled but no track is selected.")
             return
+        st.info(f"Settings Summary · Mode={selected_mode} | Topic={topic_input.strip() or 'n/a'} | Aspect={aspect_ratio} | Style={visual_style} | Scenes={int(scene_count)} | Voice={selected_provider} | Subtitles={enable_subtitles} | Effects={enable_video_effects} | Music={enable_music}")
         if generate_voiceover and selected_provider == TTS_PROVIDER_ELEVENLABS and not resolved_voice_id:
             st.error("Voice ID is required for ElevenLabs voiceover.")
             return
@@ -398,7 +445,7 @@ def tab_automation(project_id: str) -> None:
                 progress_callback=_progress_callback,
             ),
         )
-        _render_workflow_progress(project_id, progress_holder, log_holder, error_holder, output_holder)
+        _render_workflow_progress(project_id, selected_mode, progress_holder, log_holder, error_holder, output_holder)
         if result.failed_step:
             st.error(f"Workflow stopped at: {result.failed_step}")
         else:
@@ -409,7 +456,7 @@ def tab_automation(project_id: str) -> None:
 
     if c_resume.button("Resume Missing Steps", width="stretch"):
         result = run_full_workflow(project_id, FullWorkflowOptions(mode="resume_missing", pipeline=pipeline_options, progress_callback=_progress_callback))
-        _render_workflow_progress(project_id, progress_holder, log_holder, error_holder, output_holder)
+        _render_workflow_progress(project_id, selected_mode, progress_holder, log_holder, error_holder, output_holder)
         if result.failed_step:
             st.error(f"Resume failed at: {result.failed_step}")
         else:
@@ -442,7 +489,8 @@ def tab_automation(project_id: str) -> None:
             st.error(result.message or "Render failed.")
 
     failed_candidates = [step for step in PIPELINE_STEPS if state.step_statuses.get(step) == StepStatus.FAILED]
-    reset_step = st.selectbox("Failed step to reset", options=failed_candidates or ["script"], key=f"automation_reset_{project_id}")
+    default_reset_step = "script" if selected_mode == "topic_to_short_video" else "voiceover"
+    reset_step = st.selectbox("Failed step to reset", options=failed_candidates or [default_reset_step], key=f"automation_reset_{project_id}")
     selected_downstream = st.selectbox("Reset downstream from", options=list(PIPELINE_STEPS), key=f"automation_downstream_{project_id}")
     r1, r2 = st.columns(2)
     if r1.button("Reset Failed Step", width="stretch", disabled=not failed_candidates):

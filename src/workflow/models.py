@@ -55,6 +55,10 @@ class WorkflowState:
     last_error: str = ""
     retry_counts: dict[str, int] = field(default_factory=dict)
     asset_summary: dict[str, Any] = field(default_factory=dict)
+    automation_mode: str = "topic_to_short_video"
+    topic: str = ""
+    topic_direction: str = ""
+    script_profile: str = ""
 
     def __post_init__(self) -> None:
         for step in PIPELINE_STEPS:
@@ -72,6 +76,10 @@ class WorkflowState:
             "last_error": self.last_error,
             "retry_counts": dict(self.retry_counts),
             "asset_summary": dict(self.asset_summary),
+            "automation_mode": self.automation_mode,
+            "topic": self.topic,
+            "topic_direction": self.topic_direction,
+            "script_profile": self.script_profile,
         }
 
     @classmethod
@@ -116,6 +124,11 @@ class WorkflowState:
         if current_stage not in PIPELINE_STEPS:
             current_stage = "script"
 
+        automation_mode = str(payload.get("automation_mode", "topic_to_short_video") or "topic_to_short_video")
+        topic = str(payload.get("topic", "") or "")
+        topic_direction = str(payload.get("topic_direction", "") or "")
+        script_profile = str(payload.get("script_profile", "") or "")
+
         return cls(
             project_id=str(payload.get("project_id", project_id) or project_id),
             current_stage=current_stage,
@@ -125,6 +138,10 @@ class WorkflowState:
             last_error=str(payload.get("last_error", "") or ""),
             retry_counts=retry_counts,
             asset_summary=asset_summary,
+            automation_mode=automation_mode,
+            topic=topic,
+            topic_direction=topic_direction,
+            script_profile=script_profile,
         )
 
 

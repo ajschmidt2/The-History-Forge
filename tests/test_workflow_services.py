@@ -9,6 +9,7 @@ from src.workflow.services import (
     StepResult,
     run_full_workflow,
     run_generate_script,
+    run_generate_short_script,
     run_generate_voiceover,
     run_split_scenes,
     run_sync_timeline,
@@ -128,6 +129,7 @@ def test_run_generate_voiceover_skips_when_silent_fallback_enabled_without_voice
         },
     )
 
+    monkeypatch.setattr("src.workflow.services._resolve_voice_id", lambda *args, **kwargs: "")
     result = run_generate_voiceover(project_id, PipelineOptions(allow_silent_render=True, include_voiceover=True))
     assert result.status == StepStatus.SKIPPED
     assert "silent render" in result.message
@@ -155,7 +157,7 @@ def test_run_full_workflow_skips_existing_steps_for_resume(tmp_path, monkeypatch
     save_project_payload(project_id, {"project_id": project_id, "script_text": "Existing"})
     result = run_full_workflow(
         project_id,
-        FullWorkflowOptions(pipeline=PipelineOptions(allow_silent_render=True, include_voiceover=True)),
+        FullWorkflowOptions(mode="resume_missing", pipeline=PipelineOptions(allow_silent_render=True, include_voiceover=True, automation_mode="existing_script_full_workflow")),
     )
     assert result.failed_step == ""
     assert "scenes" in result.skipped_steps
@@ -181,3 +183,28 @@ def test_run_generate_voiceover_with_openai_provider(tmp_path, monkeypatch):
     result = run_generate_voiceover(project_id, PipelineOptions(tts_provider="openai", openai_tts_model="gpt-4o-mini-tts", openai_tts_voice="alloy"))
     assert result.status == StepStatus.COMPLETED
     assert result.outputs.get("provider") == "openai"
+
+
+def test_run_generate_short_script_persists_script(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-short-script"
+    save_project_payload(project_id, {"project_id": project_id, "topic": "Battle of Cannae"})
+
+    monkeypatch.setattr("src.workflow.services.generate_short_script", lambda **kwargs: "Hook line. Middle progression. Closing line.")
+
+    result = run_generate_short_script(project_id, PipelineOptions(topic="Battle of Cannae", automation_mode="topic_to_short_video"))
+    assert result.status == StepStatus.COMPLETED
+
+    script_path = Path("data/projects") / project_id / "script.txt"
+    assert script_path.exists()
+    assert "Hook line" in script_path.read_text(encoding="utf-8")
+
+
+def test_run_full_workflow_topic_mode_requires_topic(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-topic-required"
+    save_project_payload(project_id, {"project_id": project_id})
+
+    result = run_full_workflow(project_id, FullWorkflowOptions(pipeline=PipelineOptions(automation_mode="topic_to_short_video", topic="")))
+    assert result.failed_step == "script"
+    assert any("Topic is required" in msg for msg in result.warnings)
