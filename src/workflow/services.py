@@ -448,9 +448,13 @@ def run_split_scenes(project_id: str, options: PipelineOptions | None = None) ->
         return StepResult(project_id, "scenes", StepStatus.FAILED, message="Script text is missing.")
 
     update_step_status(project_id, "scenes", StepStatus.IN_PROGRESS)
+    requested_scene_count = max(1, min(int(cfg.number_of_scenes or 8), 75))
     try:
-        scenes = split_script_into_scenes(script_text, max_scenes=cfg.number_of_scenes, wpm=int(payload.get("scene_wpm", 160) or 160))
+        scenes = split_script_into_scenes(script_text, max_scenes=requested_scene_count, wpm=int(payload.get("scene_wpm", 160) or 160))
+        if len(scenes) != requested_scene_count:
+            raise ValueError(f"Scene splitter returned {len(scenes)} scenes; expected {requested_scene_count}.")
         save_scenes(project_id, scenes)
+
         sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001
         update_step_status(project_id, "scenes", StepStatus.FAILED, error=str(exc))

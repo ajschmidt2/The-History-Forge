@@ -59,3 +59,11 @@ def test_split_scene_strings_is_deterministic() -> None:
     second = split_script_into_scene_strings(script, 5)
     assert first == second
     assert len(first) == 5
+
+
+def test_split_script_into_scenes_always_matches_requested_scene_count() -> None:
+    script = "---SCENE_BREAK---".join(["Repeated beat." for _ in range(3)])
+    scenes = split_script_into_scenes(script, max_scenes=9, outline=None, wpm=160)
+
+    assert len(scenes) == 9
+    assert all(scene.script_excerpt.strip() for scene in scenes)
