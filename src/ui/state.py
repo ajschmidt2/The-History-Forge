@@ -416,11 +416,58 @@ def load_project_state(project_id: str) -> None:
     st.session_state.scenes = scenes
 
 
-def delete_project(project_id_or_name: str) -> None:
+def delete_project(project_id_or_name: str) -> tuple[int, list[str]]:
     normalized = slugify_project_id(project_id_or_name)
+    removed_local_dirs = 0
+    errors: list[str] = []
+
     for project_dir in _matching_project_dirs(project_id_or_name):
-        shutil.rmtree(project_dir, ignore_errors=True)
-    delete_project_records(normalized)
+        try:
+            shutil.rmtree(project_dir)
+            removed_local_dirs += 1
+        except OSError as exc:
+            errors.append(f"Failed to remove {project_dir}: {exc}")
+
+    try:
+        delete_project_records(normalized)
+    except Exception as exc:
+        errors.append(f"Failed to delete project records for {normalized}: {exc}")
+
+    return removed_local_dirs, errors
+
+
+def _select_fallback_project_after_delete() -> None:
+    remaining = _available_project_ids()
+    if remaining:
+        st.session_state.project_id = remaining[0]
+        load_project_state(remaining[0])
+        return
+
+    fallback = slugify_project_id("Untitled Project")
+    st.session_state.project_id = fallback
+    st.session_state.project_title = "Untitled Project"
+    st.session_state.topic = ""
+    st.session_state.script_text = ""
+    st.session_state.script_text_input = ""
+    st.session_state.generated_script_text_input = ""
+    st.session_state.pending_script_text_input = ""
+    st.session_state.audience = "General audience"
+    st.session_state.story_angle = "Balanced overview"
+    st.session_state.research_brief_text = ""
+    st.session_state.use_research_brief_for_script = False
+    st.session_state.use_web_research = False
+    st.session_state.research_sources = []
+    st.session_state.outline_json_text = ""
+    st.session_state.reading_level = "General"
+    st.session_state.pacing = "Balanced"
+    st.session_state.run_clarity_pass = True
+    st.session_state.run_retention_pass = True
+    st.session_state.run_safety_pass = True
+    st.session_state.scene_wpm = 160
+    st.session_state.estimated_total_runtime_sec = 0.0
+    st.session_state.scenes = []
+    st.session_state.scene_transition_types = []
+    ensure_project_exists(fallback)
 
 
 def init_state() -> None:
@@ -560,46 +607,25 @@ def render_project_selector() -> None:
 
         st.divider()
         st.caption("Danger zone")
-        confirm_key = f"confirm_delete_{selected}"
-        confirm_delete = st.checkbox(
-            f"I understand deleting '{selected}' removes all saved files and project data.",
-            key=confirm_key,
+        confirmation_key = f"delete_project_confirmation_{selected}"
+        confirmation = st.text_input(
+            f"Type `{selected}` to confirm deletion",
+            key=confirmation_key,
+            placeholder=selected,
+            help="This permanently deletes local project files and clears saved project records.",
         )
         if st.button("Delete this project", type="secondary", width="stretch", key=f"delete_project_{selected}"):
-            if not confirm_delete:
-                st.warning("Check the confirmation box before deleting.")
+            if slugify_project_id(confirmation) != selected:
+                st.warning(f"Type `{selected}` exactly to confirm deletion.")
                 return
-            delete_project(selected_option)
-            remaining = _available_project_ids()
-            if remaining:
-                st.session_state.project_id = remaining[0]
-                load_project_state(remaining[0])
+            removed_local_dirs, errors = delete_project(selected_option)
+            _select_fallback_project_after_delete()
+            st.session_state[confirmation_key] = ""
+            if errors:
+                st.error("Project delete completed with issues: " + " | ".join(errors))
             else:
-                fallback = slugify_project_id("Untitled Project")
-                st.session_state.project_id = fallback
-                st.session_state.project_title = "Untitled Project"
-                st.session_state.topic = ""
-                st.session_state.script_text = ""
-                st.session_state.script_text_input = ""
-                st.session_state.generated_script_text_input = ""
-                st.session_state.audience = "General audience"
-                st.session_state.story_angle = "Balanced overview"
-                st.session_state.research_brief_text = ""
-                st.session_state.use_research_brief_for_script = False
-                st.session_state.use_web_research = False
-                st.session_state.research_sources = []
-                st.session_state.outline_json_text = ""
-                st.session_state.reading_level = "General"
-                st.session_state.pacing = "Balanced"
-                st.session_state.run_clarity_pass = True
-                st.session_state.run_retention_pass = True
-                st.session_state.run_safety_pass = True
-                st.session_state.scene_wpm = 160
-                st.session_state.estimated_total_runtime_sec = 0.0
-                st.session_state.scenes = []
-                st.session_state.scene_transition_types = []
-                ensure_project_exists(fallback)
-            st.toast(f"Deleted project: {selected}")
+                source_summary = "local files + saved records" if removed_local_dirs else "saved records"
+                st.toast(f"Deleted project: {selected} ({source_summary})")
             st.rerun()
 
 
