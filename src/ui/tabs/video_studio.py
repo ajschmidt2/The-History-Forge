@@ -1492,7 +1492,13 @@ def tab_video_compile() -> None:
                     return
                 else:
                     st.success("Render complete.")
-                    _sb_store.upload_video(project_name, "final.mp4", final_output_path)
+                    uploaded_url = _sb_store.upload_video(project_name, "final.mp4", final_output_path)
+                    if uploaded_url:
+                        st.session_state["video_render_last_supabase_url"] = uploaded_url
+                        st.success("Uploaded final render to Supabase.")
+                    else:
+                        st.session_state.pop("video_render_last_supabase_url", None)
+                        st.info("Supabase upload skipped or failed; local render is still available below.")
 
     st.markdown("### Render output")
     video_path = renders_dir / "final.mp4"
@@ -1504,6 +1510,19 @@ def tab_video_compile() -> None:
         st.video(str(video_path))
         with video_path.open("rb") as handle:
             st.download_button("Download video", handle, file_name="final.mp4")
+
+    supabase_video_url = str(st.session_state.get("video_render_last_supabase_url", "") or "").strip()
+    if supabase_video_url:
+        st.caption("Supabase video URL")
+        st.code(supabase_video_url, language="text")
+        st.link_button("Open Supabase video", supabase_video_url)
+        st.download_button(
+            "Download from Supabase URL",
+            data=supabase_video_url,
+            file_name="final_video_supabase_url.txt",
+            mime="text/plain",
+            help="Use this URL to download/share the cloud copy outside this app.",
+        )
 
     if srt_path.exists():
         st.download_button("Download captions.srt", srt_path.read_bytes(), file_name="captions.srt")
