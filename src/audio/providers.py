@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from src.config import resolve_openai_key
@@ -16,6 +18,15 @@ OPENAI_TTS_MODELS: tuple[str, ...] = (
     "tts-1-hd",
 )
 
+OPENAI_TTS_RESPONSE_FORMATS: tuple[str, ...] = (
+    "mp3",
+    "opus",
+    "aac",
+    "flac",
+    "wav",
+    "pcm",
+)
+
 OPENAI_TTS_VOICES: tuple[str, ...] = (
     "alloy",
     "ash",
@@ -28,6 +39,8 @@ OPENAI_TTS_VOICES: tuple[str, ...] = (
     "sage",
     "shimmer",
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -84,6 +97,7 @@ def generate_openai_voiceover(
     voice: str = "alloy",
     instructions: str | None = None,
     output_format: str = "mp3",
+    output_path: Path | None = None,
 ) -> tuple[bytes | None, str | None]:
     prompt = str(text or "").strip()
     if not prompt:
@@ -107,20 +121,44 @@ def generate_openai_voiceover(
         return None, f"OpenAI SDK import failed: {exc}"
 
     client = OpenAI(api_key=api_key)
+    response_format = str(output_format or "mp3").strip().lower() or "mp3"
+    if response_format not in OPENAI_TTS_RESPONSE_FORMATS:
+        response_format = "mp3"
     kwargs: dict[str, Any] = {
         "model": chosen_model,
         "voice": chosen_voice,
         "input": prompt,
-        "format": str(output_format or "mp3").strip().lower() or "mp3",
+        "response_format": response_format,
     }
-    if chosen_model == OPENAI_TTS_MODEL_GPT4O_MINI and str(instructions or "").strip():
-        kwargs["instructions"] = str(instructions or "").strip()
+    normalized_instructions = str(instructions or "").strip()
+    if chosen_model == OPENAI_TTS_MODEL_GPT4O_MINI and normalized_instructions:
+        kwargs["instructions"] = normalized_instructions
+        _LOG.info(
+            "voiceover provider=openai model=%s voice=%s instructions=enabled",
+            chosen_model,
+            chosen_voice,
+        )
+    elif normalized_instructions:
+        _LOG.info(
+            "voiceover provider=openai model=%s voice=%s instructions=omitted_for_model",
+            chosen_model,
+            chosen_voice,
+        )
+
+    target_path = Path(output_path) if output_path else None
+    if target_path is not None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        response = client.audio.speech.create(**kwargs)
-        audio_bytes = getattr(response, "content", None)
-        if not audio_bytes and hasattr(response, "read") and callable(response.read):
-            audio_bytes = response.read()
+        if target_path is not None:
+            with client.audio.speech.with_streaming_response.create(**kwargs) as response:
+                response.stream_to_file(str(target_path))
+            audio_bytes = target_path.read_bytes()
+        else:
+            response = client.audio.speech.create(**kwargs)
+            audio_bytes = getattr(response, "content", None)
+            if not audio_bytes and hasattr(response, "read") and callable(response.read):
+                audio_bytes = response.read()
         if not isinstance(audio_bytes, (bytes, bytearray)) or len(audio_bytes) == 0:
             return None, "OpenAI TTS returned empty audio content."
         return bytes(audio_bytes), None
@@ -142,7 +180,11 @@ def generate_openai_voiceover(
         return None, f"OpenAI TTS request failed: {exc}"
 
 
-def generate_voiceover_with_provider(text: str, settings: TTSSettings) -> tuple[bytes | None, str | None]:
+def generate_voiceover_with_provider(
+    text: str,
+    settings: TTSSettings,
+    output_path: Path | None = None,
+) -> tuple[bytes | None, str | None]:
     if settings.provider == TTS_PROVIDER_OPENAI:
         return generate_openai_voiceover(
             text=text,
@@ -150,6 +192,7 @@ def generate_voiceover_with_provider(text: str, settings: TTSSettings) -> tuple[
             voice=settings.openai_tts_voice,
             instructions=settings.openai_tts_instructions,
             output_format=settings.output_format,
+            output_path=output_path,
         )
 
     return generate_elevenlabs_voiceover(

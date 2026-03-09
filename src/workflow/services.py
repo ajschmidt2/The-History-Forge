@@ -703,6 +703,14 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
         tts_settings.elevenlabs_voice_id = _resolve_voice_id(project_id, cfg.voice_id, payload, logger)
 
     logger.info("voiceover setup: script_detected=%s output_path=%s provider=%s", bool(script_text), output_path, tts_settings.provider)
+    logger.info(
+        "step=voiceover status=started provider=%s model=%s voice=%s response_format=%s output_path=%s",
+        tts_settings.provider,
+        tts_settings.openai_tts_model,
+        tts_settings.openai_tts_voice,
+        tts_settings.output_format,
+        output_path,
+    )
 
     if tts_settings.provider == TTS_PROVIDER_ELEVENLABS and not tts_settings.elevenlabs_voice_id:
         if cfg.allow_silent_render:
@@ -714,12 +722,16 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
             )
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message="Voice ID is required.")
 
-    if not output_path.parent.exists():
-        return StepResult(project_id, "voiceover", StepStatus.FAILED, message="Voiceover output directory is missing or not writable.")
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("ab"):
+            pass
+    except OSError as exc:
+        return StepResult(project_id, "voiceover", StepStatus.FAILED, message=f"Voiceover output path is not writable: {exc}")
 
     update_step_status(project_id, "voiceover", StepStatus.IN_PROGRESS)
     try:
-        audio, err = generate_voiceover_with_provider(script_text, tts_settings)
+        audio, err = generate_voiceover_with_provider(script_text, tts_settings, output_path=output_path if tts_settings.provider == TTS_PROVIDER_OPENAI else None)
     except Exception as exc:  # noqa: BLE001
         update_step_status(project_id, "voiceover", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "voiceover", StepStatus.FAILED, message=str(exc))
