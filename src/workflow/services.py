@@ -365,9 +365,13 @@ class StepResult:
 def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dict[str, Any], PipelineOptions]:
     payload = load_project_payload(project_id)
     merged = options or PipelineOptions()
+    options_provided = options is not None
     merged.tone = payload.get("tone", merged.tone) or merged.tone
     merged.audience = payload.get("audience", merged.audience) or merged.audience
-    merged.number_of_scenes = int(payload.get("scene_count", payload.get("max_scenes", merged.number_of_scenes)) or merged.number_of_scenes)
+    if options_provided:
+        merged.number_of_scenes = int(merged.number_of_scenes or payload.get("scene_count", payload.get("max_scenes", 8)) or 8)
+    else:
+        merged.number_of_scenes = int(payload.get("scene_count", payload.get("max_scenes", merged.number_of_scenes)) or merged.number_of_scenes)
     merged.variations_per_scene = int(payload.get("variations_per_scene", merged.variations_per_scene) or merged.variations_per_scene)
     merged.aspect_ratio = payload.get("aspect_ratio", merged.aspect_ratio) or merged.aspect_ratio
     merged.visual_style = payload.get("visual_style", merged.visual_style) or merged.visual_style
