@@ -219,6 +219,25 @@ def list_projects() -> list[dict]:
         return []
 
 
+def delete_project(project_id: str) -> bool:
+    """Delete project rows for *project_id* in Supabase.
+
+    Returns True when the delete request succeeds or Supabase is unavailable.
+    """
+    sb = get_client()
+    if sb is None:
+        return True
+    normalized = str(project_id or "").strip()
+    if not normalized:
+        return False
+    try:
+        sb.table("assets").delete().eq("project_id", normalized).execute()
+        sb.table("projects").delete().eq("id", normalized).execute()
+        return True
+    except Exception:
+        return False
+
+
 def _list_storage_objects(bucket: str, prefix: str) -> list[dict]:
     """Return object metadata under *prefix* for a bucket."""
     sb = get_client()
