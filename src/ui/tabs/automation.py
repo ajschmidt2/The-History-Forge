@@ -7,12 +7,20 @@ from typing import Any
 
 import streamlit as st
 
+from src.audio import (
+    TTS_PROVIDER_ELEVENLABS,
+    TTS_PROVIDER_OPENAI,
+    get_openai_tts_models,
+    get_openai_tts_voices,
+    get_tts_provider_options,
+    resolve_tts_settings,
+)
 from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import DEFAULT_VOICE_ID
 from src.workflow import PIPELINE_STEPS, reset_downstream_steps
 from src.workflow.assets import canonical_scene_image_path, preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets
 from src.workflow.models import StepStatus
-from src.workflow.project_io import load_project_payload, load_scenes, project_dir, save_project_payload
+from src.workflow.project_io import load_project_payload, load_scenes, project_dir, save_project_payload, save_scenes
 from src.workflow.services import (
     FullWorkflowOptions,
     PipelineOptions,
@@ -271,14 +279,45 @@ def tab_automation(project_id: str) -> None:
             st.warning("Background music is enabled, but no project/shared music tracks were found.")
             selected_music_track = ""
 
-    selected_voice_id = st.selectbox(
-        "Voice ID",
-        options=known_voice_ids,
-        index=known_voice_ids.index(str(payload.get("voice_id", "") or "")) if str(payload.get("voice_id", "") or "") in known_voice_ids else 0,
-        help="Automation resolves Voice ID in order: selected value, saved preference, then DEFAULT_VOICE_ID.",
+    tts_settings = resolve_tts_settings(payload)
+    provider_options = get_tts_provider_options()
+    selected_provider = st.selectbox(
+        "Voice Provider",
+        options=provider_options,
+        index=provider_options.index(tts_settings.provider),
+        format_func=lambda p: "ElevenLabs" if p == TTS_PROVIDER_ELEVENLABS else "OpenAI",
     )
+
+    selected_voice_id = str(payload.get("elevenlabs_voice_id", payload.get("voice_id", "")) or "")
     resolved_voice_id, resolved_source = _resolve_voice_id(selected_voice_id, payload)
-    st.caption(f"Resolved Voice ID: `{resolved_voice_id or 'None'}` ({resolved_source})")
+
+    selected_openai_model = str(payload.get("openai_tts_model", tts_settings.openai_tts_model) or tts_settings.openai_tts_model)
+    selected_openai_voice = str(payload.get("openai_tts_voice", tts_settings.openai_tts_voice) or tts_settings.openai_tts_voice)
+    selected_openai_instructions = str(payload.get("openai_tts_instructions", tts_settings.openai_tts_instructions) or tts_settings.openai_tts_instructions)
+
+    if selected_provider == TTS_PROVIDER_ELEVENLABS:
+        selected_voice_id = st.selectbox(
+            "ElevenLabs Voice ID",
+            options=known_voice_ids,
+            index=known_voice_ids.index(selected_voice_id) if selected_voice_id in known_voice_ids else 0,
+            help="Automation resolves Voice ID in order: selected value, saved preference, then DEFAULT_VOICE_ID.",
+        )
+        resolved_voice_id, resolved_source = _resolve_voice_id(selected_voice_id, payload)
+        st.caption(f"Resolved Voice ID: `{resolved_voice_id or 'None'}` ({resolved_source})")
+    else:
+        model_options = get_openai_tts_models()
+        voice_options = get_openai_tts_voices()
+        if selected_openai_model not in model_options:
+            selected_openai_model = "gpt-4o-mini-tts"
+        if selected_openai_voice not in voice_options:
+            selected_openai_voice = "alloy"
+        selected_openai_model = st.selectbox("OpenAI TTS Model", options=model_options, index=model_options.index(selected_openai_model))
+        selected_openai_voice = st.selectbox("OpenAI Voice", options=voice_options, index=voice_options.index(selected_openai_voice))
+        selected_openai_instructions = st.text_area(
+            "Speaking style instructions (optional)",
+            value=selected_openai_instructions,
+            help="Style/tone guidance, especially for gpt-4o-mini-tts.",
+        )
 
     if st.button("Save automation settings", width="stretch"):
         payload.update({
@@ -295,13 +334,20 @@ def tab_automation(project_id: str) -> None:
             "automation_generate_voiceover": bool(generate_voiceover),
             "automation_overwrite_existing": bool(overwrite_existing),
             "music_volume_relative_to_voiceover": 0.5,
+            "tts_provider": selected_provider,
             "voice_id": selected_voice_id,
+            "elevenlabs_voice_id": selected_voice_id,
+            "openai_tts_model": selected_openai_model,
+            "openai_tts_voice": selected_openai_voice,
+            "openai_tts_instructions": selected_openai_instructions,
         })
         save_project_payload(project_id, payload)
         st.success("Automation settings saved.")
 
-    if generate_voiceover and not resolved_voice_id:
+    if generate_voiceover and selected_provider == TTS_PROVIDER_ELEVENLABS and not resolved_voice_id:
         st.warning("No Voice ID could be resolved. Select a voice before running automation.")
+    if generate_voiceover and selected_provider == TTS_PROVIDER_OPENAI and not selected_openai_voice:
+        st.warning("OpenAI voice is required before running automation.")
     if enable_music and not selected_music_track:
         st.warning("Background music is enabled, but no music track is selected.")
 
@@ -316,6 +362,11 @@ def tab_automation(project_id: str) -> None:
         selected_music_track=selected_music_track,
         music_volume_relative_to_voiceover=0.5,
         voice_id=selected_voice_id,
+        tts_provider=selected_provider,
+        elevenlabs_voice_id=selected_voice_id,
+        openai_tts_model=selected_openai_model,
+        openai_tts_voice=selected_openai_voice,
+        openai_tts_instructions=selected_openai_instructions,
         allow_silent_render=False,
     )
 
@@ -330,8 +381,8 @@ def tab_automation(project_id: str) -> None:
         if enable_music and not selected_music_track:
             st.error("Background music is enabled but no track is selected.")
             return
-        if generate_voiceover and not resolved_voice_id:
-            st.error("Voice ID is required for voiceover.")
+        if generate_voiceover and selected_provider == TTS_PROVIDER_ELEVENLABS and not resolved_voice_id:
+            st.error("Voice ID is required for ElevenLabs voiceover.")
             return
         result = run_full_workflow(
             project_id,

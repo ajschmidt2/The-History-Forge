@@ -160,3 +160,24 @@ def test_run_full_workflow_skips_existing_steps_for_resume(tmp_path, monkeypatch
     assert result.failed_step == ""
     assert "scenes" in result.skipped_steps
     assert "render" in result.completed_steps
+
+
+def test_run_generate_voiceover_with_openai_provider(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-voiceover-openai"
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "script_text": "Narration to synthesize.",
+            "tts_provider": "openai",
+            "openai_tts_model": "gpt-4o-mini-tts",
+            "openai_tts_voice": "alloy",
+        },
+    )
+
+    monkeypatch.setattr("src.workflow.services.generate_voiceover_with_provider", lambda text, settings: (b"fake-mp3", None))
+
+    result = run_generate_voiceover(project_id, PipelineOptions(tts_provider="openai", openai_tts_model="gpt-4o-mini-tts", openai_tts_voice="alloy"))
+    assert result.status == StepStatus.COMPLETED
+    assert result.outputs.get("provider") == "openai"
