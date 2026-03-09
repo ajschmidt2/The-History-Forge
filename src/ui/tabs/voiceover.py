@@ -109,6 +109,7 @@ def tab_voiceover() -> None:
         options=provider_options,
         index=provider_options.index(st.session_state.get("tts_provider", TTS_PROVIDER_ELEVENLABS)),
         format_func=lambda p: "ElevenLabs" if p == TTS_PROVIDER_ELEVENLABS else "OpenAI",
+        key="voiceover_voice_provider",
     )
 
     voice_ids = [str(v or "").strip() for v in st.session_state.get("voice_ids", []) if str(v or "").strip()]
@@ -126,6 +127,7 @@ def tab_voiceover() -> None:
             options=st.session_state.voice_ids,
             index=st.session_state.voice_ids.index(current_voice_id),
             help="Default ID is hard-coded, and you can add more IDs below.",
+            key="voiceover_elevenlabs_voice_id",
         )
         st.session_state.voice_id = selected_voice_id
 
@@ -161,13 +163,14 @@ def tab_voiceover() -> None:
         if current_voice not in voice_options:
             current_voice = "alloy"
 
-        st.session_state.openai_tts_model = st.selectbox("OpenAI TTS Model", options=model_options, index=model_options.index(current_model))
-        st.session_state.openai_tts_voice = st.selectbox("OpenAI Voice", options=voice_options, index=voice_options.index(current_voice))
+        st.session_state.openai_tts_model = st.selectbox("OpenAI TTS Model", options=model_options, index=model_options.index(current_model), key="voiceover_openai_tts_model")
+        st.session_state.openai_tts_voice = st.selectbox("OpenAI Voice", options=voice_options, index=voice_options.index(current_voice), key="voiceover_openai_tts_voice")
         st.session_state.openai_tts_instructions = st.text_area(
             "Speaking style instructions (optional)",
             value=st.session_state.get("openai_tts_instructions", ""),
             placeholder="Example: Calm, reflective pacing with warm documentary tone.",
             help="This controls tone/style guidance, especially with gpt-4o-mini-tts.",
+            key="voiceover_openai_tts_instructions",
         )
         st.caption("Tip: gpt-4o-mini-tts supports instruction-driven delivery style.")
 
