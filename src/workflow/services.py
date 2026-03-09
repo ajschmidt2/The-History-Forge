@@ -414,26 +414,50 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
     payload = load_project_payload(project_id)
     merged = options or PipelineOptions()
     options_provided = options is not None
+
+    def _safe_int(raw_value: Any, fallback: int) -> int:
+        try:
+            return int(raw_value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _safe_bool(raw_value: Any, fallback: bool) -> bool:
+        if raw_value is None:
+            return fallback
+        if isinstance(raw_value, str):
+            lowered = raw_value.strip().lower()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off"}:
+                return False
+        return bool(raw_value)
+
+    def _safe_aspect_ratio(raw_value: Any, fallback: str) -> str:
+        ratio = str(raw_value or fallback).strip()
+        return ratio if ratio in {"16:9", "9:16"} else fallback
+
     merged.tone = payload.get("tone", merged.tone) or merged.tone
     merged.audience = payload.get("audience", merged.audience) or merged.audience
     if options_provided:
-        merged.number_of_scenes = int(merged.number_of_scenes or payload.get("scene_count", payload.get("max_scenes", 8)) or 8)
+        scene_count = _safe_int(merged.number_of_scenes or payload.get("scene_count", payload.get("max_scenes", 8)) or 8, 8)
     else:
-        merged.number_of_scenes = int(payload.get("scene_count", payload.get("max_scenes", merged.number_of_scenes)) or merged.number_of_scenes)
-    merged.variations_per_scene = int(payload.get("variations_per_scene", merged.variations_per_scene) or merged.variations_per_scene)
-    merged.aspect_ratio = payload.get("aspect_ratio", merged.aspect_ratio) or merged.aspect_ratio
+        scene_count = _safe_int(payload.get("scene_count", payload.get("max_scenes", merged.number_of_scenes)) or merged.number_of_scenes, int(merged.number_of_scenes or 8))
+    merged.number_of_scenes = max(1, min(75, scene_count))
+    merged.variations_per_scene = max(1, _safe_int(payload.get("variations_per_scene", merged.variations_per_scene) or merged.variations_per_scene, int(merged.variations_per_scene or 1)))
+    merged.aspect_ratio = _safe_aspect_ratio(payload.get("aspect_ratio", merged.aspect_ratio), merged.aspect_ratio)
     merged.visual_style = payload.get("visual_style", merged.visual_style) or merged.visual_style
     merged.reading_level = payload.get("reading_level", merged.reading_level) or merged.reading_level
     merged.pacing = payload.get("pacing", merged.pacing) or merged.pacing
-    merged.include_voiceover = bool(payload.get("include_voiceover", merged.include_voiceover))
-    merged.include_music = bool(payload.get("enable_music", payload.get("include_music", merged.include_music)))
-    merged.include_subtitles = bool(payload.get("enable_subtitles", merged.include_subtitles))
-    merged.enable_video_effects = bool(payload.get("enable_video_effects", merged.enable_video_effects))
+    merged.include_voiceover = _safe_bool(payload.get("automation_generate_voiceover", payload.get("include_voiceover", merged.include_voiceover)), merged.include_voiceover)
+    merged.include_music = _safe_bool(payload.get("enable_music", payload.get("include_music", merged.include_music)), merged.include_music)
+    merged.include_subtitles = _safe_bool(payload.get("enable_subtitles", payload.get("automation_include_captions", merged.include_subtitles)), merged.include_subtitles)
+    merged.enable_video_effects = _safe_bool(payload.get("enable_video_effects", merged.enable_video_effects), merged.enable_video_effects)
     merged.selected_music_track = str(payload.get("selected_music_track", merged.selected_music_track) or "")
     try:
-        merged.music_volume_relative_to_voiceover = float(payload.get("music_volume_relative_to_voiceover", merged.music_volume_relative_to_voiceover) or merged.music_volume_relative_to_voiceover)
+        music_level = float(payload.get("music_volume_relative_to_voiceover", merged.music_volume_relative_to_voiceover) or merged.music_volume_relative_to_voiceover)
     except (TypeError, ValueError):
-        merged.music_volume_relative_to_voiceover = 0.5
+        music_level = 0.5
+    merged.music_volume_relative_to_voiceover = min(1.0, max(0.0, music_level))
     merged.voice_id = str(merged.voice_id or payload.get("voice_id", "") or "").strip()
     merged.tts_provider = str(merged.tts_provider or payload.get("tts_provider", TTS_PROVIDER_ELEVENLABS) or TTS_PROVIDER_ELEVENLABS).strip().lower()
     merged.elevenlabs_voice_id = str(merged.elevenlabs_voice_id or merged.voice_id or payload.get("elevenlabs_voice_id", payload.get("voice_id", "")) or "").strip()
