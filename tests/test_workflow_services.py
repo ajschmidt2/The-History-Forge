@@ -243,6 +243,47 @@ def test_load_options_hardens_automation_payload_values(tmp_path, monkeypatch):
     assert options.video_effects_style == "Ken Burns - Dramatic"
 
 
+def test_load_options_explicit_options_override_payload(tmp_path, monkeypatch):
+    """Explicit pipeline_options values must win over saved payload for render settings."""
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-options-override"
+    # Payload has 16:9, subtitles on, music off
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "aspect_ratio": "16:9",
+            "enable_subtitles": True,
+            "enable_music": False,
+            "selected_music_track": "",
+            "enable_video_effects": True,
+            "video_effects_style": "Ken Burns - Standard",
+            "music_volume_relative_to_voiceover": 0.5,
+        },
+    )
+
+    from src.workflow.services import _load_options
+
+    # User selects 9:16, subtitles off, music on via pipeline_options
+    explicit_options = PipelineOptions(
+        aspect_ratio="9:16",
+        include_subtitles=False,
+        include_music=True,
+        selected_music_track="data/music_library/track.mp3",
+        enable_video_effects=True,
+        video_effects_style="Ken Burns - Dramatic",
+        music_volume_relative_to_voiceover=0.3,
+    )
+    _, options = _load_options(project_id, explicit_options)
+
+    assert options.aspect_ratio == "9:16", "aspect_ratio from options must override payload"
+    assert options.include_subtitles is False, "include_subtitles from options must override payload"
+    assert options.include_music is True, "include_music from options must override payload"
+    assert options.selected_music_track == "data/music_library/track.mp3"
+    assert options.video_effects_style == "Ken Burns - Dramatic"
+    assert abs(options.music_volume_relative_to_voiceover - 0.3) < 0.001
+
+
 def test_resolve_automation_render_settings_prefers_current_run_values() -> None:
     from src.workflow.services import resolve_automation_render_settings
 

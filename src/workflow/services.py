@@ -535,18 +535,43 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
         scene_count = _safe_int(payload.get("scene_count", payload.get("max_scenes", merged.number_of_scenes)) or merged.number_of_scenes, int(merged.number_of_scenes or 8))
     merged.number_of_scenes = max(1, min(75, scene_count))
     merged.variations_per_scene = max(1, _safe_int(payload.get("variations_per_scene", merged.variations_per_scene) or merged.variations_per_scene, int(merged.variations_per_scene or 1)))
-    merged.aspect_ratio = _safe_aspect_ratio(payload.get("aspect_ratio", merged.aspect_ratio), merged.aspect_ratio)
+    # For render/output settings, explicit pipeline_options take priority over the saved payload.
+    # When options_provided=False (no caller-supplied options), fall back to the payload as before.
+    merged.aspect_ratio = _safe_aspect_ratio(
+        merged.aspect_ratio if options_provided else payload.get("aspect_ratio", merged.aspect_ratio),
+        merged.aspect_ratio,
+    )
     merged.visual_style = payload.get("visual_style", merged.visual_style) or merged.visual_style
     merged.reading_level = payload.get("reading_level", merged.reading_level) or merged.reading_level
     merged.pacing = payload.get("pacing", merged.pacing) or merged.pacing
-    merged.include_voiceover = _safe_bool(payload.get("automation_generate_voiceover", payload.get("include_voiceover", merged.include_voiceover)), merged.include_voiceover)
-    merged.include_music = _safe_bool(payload.get("enable_music", payload.get("include_music", merged.include_music)), merged.include_music)
-    merged.include_subtitles = _safe_bool(payload.get("enable_subtitles", payload.get("automation_include_captions", merged.include_subtitles)), merged.include_subtitles)
-    merged.enable_video_effects = _safe_bool(payload.get("enable_video_effects", merged.enable_video_effects), merged.enable_video_effects)
-    merged.video_effects_style = normalize_video_effects_style(payload.get("video_effects_style", merged.video_effects_style), enable_motion=merged.enable_video_effects)
-    merged.selected_music_track = str(payload.get("selected_music_track", merged.selected_music_track) or "")
+    merged.include_voiceover = _safe_bool(
+        merged.include_voiceover if options_provided else payload.get("automation_generate_voiceover", payload.get("include_voiceover", merged.include_voiceover)),
+        merged.include_voiceover,
+    )
+    merged.include_music = _safe_bool(
+        merged.include_music if options_provided else payload.get("enable_music", payload.get("include_music", merged.include_music)),
+        merged.include_music,
+    )
+    merged.include_subtitles = _safe_bool(
+        merged.include_subtitles if options_provided else payload.get("enable_subtitles", payload.get("automation_include_captions", merged.include_subtitles)),
+        merged.include_subtitles,
+    )
+    merged.enable_video_effects = _safe_bool(
+        merged.enable_video_effects if options_provided else payload.get("enable_video_effects", merged.enable_video_effects),
+        merged.enable_video_effects,
+    )
+    merged.video_effects_style = normalize_video_effects_style(
+        merged.video_effects_style if options_provided else payload.get("video_effects_style", merged.video_effects_style),
+        enable_motion=merged.enable_video_effects,
+    )
+    merged.selected_music_track = str(
+        merged.selected_music_track if options_provided else (payload.get("selected_music_track", merged.selected_music_track) or "")
+    )
     try:
-        music_level = float(payload.get("music_volume_relative_to_voiceover", merged.music_volume_relative_to_voiceover) or merged.music_volume_relative_to_voiceover)
+        music_level = float(
+            merged.music_volume_relative_to_voiceover if options_provided
+            else (payload.get("music_volume_relative_to_voiceover", merged.music_volume_relative_to_voiceover) or merged.music_volume_relative_to_voiceover)
+        )
     except (TypeError, ValueError):
         music_level = 0.5
     merged.music_volume_relative_to_voiceover = min(1.0, max(0.0, music_level))
