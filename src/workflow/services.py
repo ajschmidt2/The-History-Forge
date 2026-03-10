@@ -413,6 +413,94 @@ class StepResult:
     outputs: dict[str, Any] = field(default_factory=dict)
 
 
+def _safe_setting_bool(raw_value: Any, fallback: bool) -> bool:
+    if raw_value is None:
+        return fallback
+    if isinstance(raw_value, str):
+        lowered = raw_value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return bool(raw_value)
+
+
+def _state_get(state: Any, key: str, default: Any = None) -> Any:
+    if isinstance(state, dict):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
+
+@dataclass(slots=True, frozen=True)
+class ResolvedAutomationRenderSettings:
+    aspect_ratio: str
+    output_width: int
+    output_height: int
+    output_size: str
+    subtitles_enabled: bool
+    effects_style: str
+    music_enabled: bool
+    music_track: str
+
+
+def resolve_automation_render_settings(
+    project_id: str,
+    workflow_state: dict[str, Any],
+    project_state: dict[str, Any],
+    session_state: dict[str, Any] | None = None,
+) -> ResolvedAutomationRenderSettings:
+    ratio = normalize_aspect_ratio(
+        (session_state or {}).get("aspect_ratio", _state_get(workflow_state, "aspect_ratio", _state_get(project_state, "aspect_ratio", "16:9"))),
+        default="16:9",
+    )
+    output_size = render_resolution_for_aspect_ratio(ratio)
+    width_str, height_str = output_size.split("x", maxsplit=1)
+
+    raw_effects_enabled = (session_state or {}).get(
+        "enable_video_effects",
+        _state_get(workflow_state, "enable_video_effects", _state_get(project_state, "enable_video_effects", True)),
+    )
+    effects_enabled = _safe_setting_bool(raw_effects_enabled, True)
+    effect_style = normalize_video_effects_style(
+        (session_state or {}).get("video_effects_style", _state_get(workflow_state, "video_effects_style", _state_get(project_state, "video_effects_style", "Ken Burns - Standard"))),
+        enable_motion=effects_enabled,
+    )
+
+    subtitles_enabled = _safe_setting_bool(
+        (session_state or {}).get(
+            "enable_subtitles",
+            _state_get(workflow_state, "enable_subtitles", _state_get(project_state, "enable_subtitles", True)),
+        ),
+        True,
+    )
+    music_enabled = _safe_setting_bool(
+        (session_state or {}).get("enable_music", _state_get(workflow_state, "enable_music", _state_get(project_state, "enable_music", False))),
+        False,
+    )
+    music_track = str(
+        (session_state or {}).get(
+            "selected_music_track",
+            _state_get(workflow_state, "selected_music_track", _state_get(project_state, "selected_music_track", "")),
+        )
+        or ""
+    ).strip()
+
+    return ResolvedAutomationRenderSettings(
+        aspect_ratio=ratio,
+        output_width=int(width_str),
+        output_height=int(height_str),
+        output_size=output_size,
+        subtitles_enabled=subtitles_enabled,
+        effects_style=effect_style,
+        music_enabled=music_enabled,
+        music_track=music_track if music_enabled else "",
+    )
+
+
+def should_apply_subtitles(resolved_settings: ResolvedAutomationRenderSettings, timeline_meta: Any | None) -> bool:
+    return bool(resolved_settings.subtitles_enabled)
+
+
 def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dict[str, Any], PipelineOptions]:
     payload = load_project_payload(project_id)
     merged = options or PipelineOptions()
@@ -811,8 +899,8 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
 
 
 
-def _automation_settings_signature(cfg: PipelineOptions) -> str:
-    payload = {
+def _automation_settings_payload(cfg: PipelineOptions) -> dict[str, Any]:
+    return {
         "aspect_ratio": normalize_aspect_ratio(cfg.aspect_ratio, default="16:9"),
         "subtitles": bool(cfg.include_subtitles),
         "effects_enabled": bool(cfg.enable_video_effects),
@@ -821,11 +909,16 @@ def _automation_settings_signature(cfg: PipelineOptions) -> str:
         "music_track": str(cfg.selected_music_track or "").strip(),
         "music_volume": round(float(cfg.music_volume_relative_to_voiceover), 4),
     }
+
+
+def _automation_settings_signature(cfg: PipelineOptions) -> str:
+    payload = _automation_settings_payload(cfg)
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _invalidate_render_artifacts_for_settings_change(project_id: str, old_sig: str, new_sig: str, logger: logging.Logger) -> None:
+def _invalidate_render_artifacts_for_settings_change(project_id: str, old_sig: str, new_sig: str, logger: logging.Logger, change_reasons: list[str] | None = None) -> None:
     if not old_sig or old_sig == new_sig:
+        logger.info("settings_fingerprint_changed=False")
         return
     base = project_dir(project_id)
     paths = [
@@ -845,7 +938,10 @@ def _invalidate_render_artifacts_for_settings_change(project_id: str, old_sig: s
                 path.unlink()
         except Exception:
             pass
-    logger.info("settings_changed=true old_signature=%s new_signature=%s rebuild_triggered=true", old_sig, new_sig)
+    for reason in (change_reasons or ["settings_changed"]):
+        logger.info("invalidating_scene_cache reason=%s", reason)
+        logger.info("invalidating_render reason=%s", reason)
+    logger.info("settings_fingerprint_changed=True old_signature=%s new_signature=%s rebuild_triggered=true", old_sig, new_sig)
 
 
 
@@ -853,10 +949,44 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
     ensure_project_files(project_id)
     payload, cfg = _load_options(project_id, options)
     logger = _workflow_logger(project_id)
+    workflow_state = load_workflow_state(project_id)
+    session_settings = {
+        "aspect_ratio": cfg.aspect_ratio,
+        "enable_subtitles": cfg.include_subtitles,
+        "enable_video_effects": cfg.enable_video_effects,
+        "video_effects_style": cfg.video_effects_style,
+        "enable_music": cfg.include_music,
+        "selected_music_track": cfg.selected_music_track,
+    }
+    resolved_settings = resolve_automation_render_settings(project_id, workflow_state, payload, session_settings)
+    logger.info(
+        "automation_resolved_settings aspect_ratio=%s output_size=%sx%s subtitles_enabled=%s effects_style=%s music_enabled=%s music_track=%s",
+        resolved_settings.aspect_ratio,
+        resolved_settings.output_width,
+        resolved_settings.output_height,
+        resolved_settings.subtitles_enabled,
+        resolved_settings.effects_style,
+        resolved_settings.music_enabled,
+        resolved_settings.music_track,
+    )
+
+    settings_payload = _automation_settings_payload(cfg)
+    previous_settings_payload = payload.get("automation_settings_payload", {}) or {}
+    changed_keys = [
+        key for key in ["aspect_ratio", "subtitles", "effects_style", "music_enabled", "music_track"]
+        if previous_settings_payload.get(key) != settings_payload.get(key)
+    ]
     new_settings_signature = _automation_settings_signature(cfg)
     previous_settings_signature = str(payload.get("automation_settings_signature", "") or "").strip()
-    _invalidate_render_artifacts_for_settings_change(project_id, previous_settings_signature, new_settings_signature, logger)
+    _invalidate_render_artifacts_for_settings_change(
+        project_id,
+        previous_settings_signature,
+        new_settings_signature,
+        logger,
+        change_reasons=[f"{key}_changed" for key in changed_keys] or None,
+    )
     payload["automation_settings_signature"] = new_settings_signature
+    payload["automation_settings_payload"] = settings_payload
     save_project_payload(project_id, payload)
     scenes = sync_scene_asset_metadata(project_id)
     if not scenes:
@@ -884,7 +1014,16 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
             music_volume_db = 20.0 * math.log10(ratio)
     except Exception:
         music_volume_db = -6.0
-    logger.info("aspect_ratio=%s output_size=%s subtitles_enabled=%s effects_style=%s music_enabled=%s music_track=%s", cfg.aspect_ratio, render_resolution_for_aspect_ratio(cfg.aspect_ratio), bool(cfg.include_subtitles), normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects), bool(cfg.include_music), str(cfg.selected_music_track or ""))
+    logger.info(
+        "automation_resolved_settings aspect_ratio=%s output_size=%sx%s subtitles_enabled=%s effects_style=%s music_enabled=%s music_track=%s",
+        resolved_settings.aspect_ratio,
+        resolved_settings.output_width,
+        resolved_settings.output_height,
+        resolved_settings.subtitles_enabled,
+        resolved_settings.effects_style,
+        resolved_settings.music_enabled,
+        resolved_settings.music_track,
+    )
     try:
         timeline_path = sync_timeline_for_project(
             project_path=project_path,
@@ -893,15 +1032,15 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
             session_scenes=scenes,
             scene_captions=scene_captions,
             meta_overrides={
-                "aspect_ratio": cfg.aspect_ratio,
+                "aspect_ratio": resolved_settings.aspect_ratio,
                 "include_voiceover": cfg.include_voiceover,
-                "include_music": cfg.include_music,
-                "burn_captions": cfg.include_subtitles,
+                "include_music": resolved_settings.music_enabled,
+                "burn_captions": resolved_settings.subtitles_enabled,
                 "enable_motion": cfg.enable_video_effects,
-                "video_effects_style": normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects),
-                "resolution": render_resolution_for_aspect_ratio(cfg.aspect_ratio),
-                "selected_music_track": cfg.selected_music_track,
-                "music": {"path": cfg.selected_music_track, "volume_db": music_volume_db},
+                "video_effects_style": resolved_settings.effects_style,
+                "resolution": resolved_settings.output_size,
+                "selected_music_track": resolved_settings.music_track,
+                "music": {"path": resolved_settings.music_track, "volume_db": music_volume_db},
                 "transition_types": payload.get("scene_transition_types", []),
             },
         )
@@ -919,7 +1058,17 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
 
 def run_render_video(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     ensure_project_files(project_id)
-    _, cfg = _load_options(project_id, options)
+    project_state, cfg = _load_options(project_id, options)
+    workflow_state = load_workflow_state(project_id)
+    session_settings = {
+        "aspect_ratio": cfg.aspect_ratio,
+        "enable_subtitles": cfg.include_subtitles,
+        "enable_video_effects": cfg.enable_video_effects,
+        "video_effects_style": cfg.video_effects_style,
+        "enable_music": cfg.include_music,
+        "selected_music_track": cfg.selected_music_track,
+    }
+    resolved_settings = resolve_automation_render_settings(project_id, workflow_state, project_state, session_settings)
 
     timeline_result = run_sync_timeline(project_id, cfg)
     if timeline_result.status != StepStatus.COMPLETED:
@@ -942,15 +1091,36 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
         update_step_status(project_id, "render", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "render", StepStatus.FAILED, message=str(exc))
 
-    requested_aspect_ratio = normalize_aspect_ratio(cfg.aspect_ratio)
-    requested_resolution = render_resolution_for_aspect_ratio(requested_aspect_ratio)
+    requested_aspect_ratio = resolved_settings.aspect_ratio
+    requested_resolution = resolved_settings.output_size
     logger = _workflow_logger(project_id)
-    logger.info("aspect_ratio=%s output_size=%s", requested_aspect_ratio, requested_resolution)
+    logger.info(
+        "automation_resolved_settings aspect_ratio=%s output_size=%sx%s subtitles_enabled=%s effects_style=%s music_enabled=%s music_track=%s",
+        resolved_settings.aspect_ratio,
+        resolved_settings.output_width,
+        resolved_settings.output_height,
+        resolved_settings.subtitles_enabled,
+        resolved_settings.effects_style,
+        resolved_settings.music_enabled,
+        resolved_settings.music_track,
+    )
     timeline_aspect_ratio = normalize_aspect_ratio(timeline.meta.aspect_ratio, requested_aspect_ratio)
-    if timeline_aspect_ratio != requested_aspect_ratio:
-        msg = f"Aspect-ratio mismatch: requested {requested_aspect_ratio} but timeline has {timeline.meta.aspect_ratio}."
-        update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
-        return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
+    timeline_resolution = str(timeline.meta.resolution or "")
+    if timeline_aspect_ratio != requested_aspect_ratio or timeline_resolution != requested_resolution:
+        logger.info(
+            "timeline_settings_mismatch detected=true requested_aspect_ratio=%s requested_resolution=%s timeline_aspect_ratio=%s timeline_resolution=%s",
+            requested_aspect_ratio,
+            requested_resolution,
+            timeline_aspect_ratio,
+            timeline_resolution,
+        )
+        retry_sync = run_sync_timeline(project_id, cfg)
+        if retry_sync.status != StepStatus.COMPLETED:
+            msg = f"Aspect-ratio mismatch: requested {requested_aspect_ratio} but timeline has {timeline.meta.aspect_ratio}."
+            update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
+            return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
+        timeline_path = Path(str(retry_sync.outputs.get("timeline_path", "")))
+        timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
 
     if timeline.meta.include_voiceover and not cfg.allow_silent_render:
         voice_path = timeline.meta.voiceover.path if timeline.meta.voiceover else ""
@@ -968,10 +1138,27 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
             timeline_path.parent.mkdir(parents=True, exist_ok=True)
             timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
 
-    if cfg.include_music and not str(cfg.selected_music_track or "").strip():
+    if resolved_settings.music_enabled and not str(resolved_settings.music_track or "").strip():
         msg = "Background music is enabled but no track is selected."
         update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
         return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
+
+    timeline.meta.aspect_ratio = requested_aspect_ratio
+    timeline.meta.resolution = requested_resolution
+    timeline.meta.burn_captions = should_apply_subtitles(resolved_settings, timeline.meta)
+    timeline.meta.include_music = bool(resolved_settings.music_enabled)
+    timeline.meta.video_effects_style = resolved_settings.effects_style
+    if timeline.meta.include_music:
+        if not timeline.meta.music:
+            from src.video.timeline_schema import Music, Ducking
+            timeline.meta.music = Music(path=resolved_settings.music_track, volume_db=-6.0, ducking=Ducking(enabled=False))
+        timeline.meta.music.path = resolved_settings.music_track
+    else:
+        timeline.meta.music = None
+
+    timeline_path = project_dir(project_id) / "renders" / "timeline.resolved.json"
+    timeline_path.parent.mkdir(parents=True, exist_ok=True)
+    timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
 
     warnings: list[str] = []
     if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:

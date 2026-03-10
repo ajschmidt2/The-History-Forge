@@ -241,3 +241,45 @@ def test_load_options_hardens_automation_payload_values(tmp_path, monkeypatch):
     assert options.music_volume_relative_to_voiceover == 1.0
     assert options.variations_per_scene == 1
     assert options.video_effects_style == "Ken Burns - Dramatic"
+
+
+def test_resolve_automation_render_settings_prefers_current_run_values() -> None:
+    from src.workflow.services import resolve_automation_render_settings
+
+    resolved = resolve_automation_render_settings(
+        project_id="p1",
+        workflow_state={"aspect_ratio": "16:9", "enable_subtitles": True, "enable_music": False},
+        project_state={"aspect_ratio": "16:9", "enable_subtitles": True, "enable_music": False},
+        session_state={
+            "aspect_ratio": "9:16",
+            "enable_subtitles": False,
+            "enable_video_effects": True,
+            "video_effects_style": "Ken Burns - Dramatic",
+            "enable_music": True,
+            "selected_music_track": "data/music/track.mp3",
+        },
+    )
+
+    assert resolved.aspect_ratio == "9:16"
+    assert resolved.output_size == "720x1280"
+    assert resolved.subtitles_enabled is False
+    assert resolved.effects_style == "Ken Burns - Dramatic"
+    assert resolved.music_enabled is True
+    assert resolved.music_track == "data/music/track.mp3"
+
+
+def test_should_apply_subtitles_uses_resolved_settings() -> None:
+    from src.workflow.services import ResolvedAutomationRenderSettings, should_apply_subtitles
+
+    resolved = ResolvedAutomationRenderSettings(
+        aspect_ratio="9:16",
+        output_width=720,
+        output_height=1280,
+        output_size="720x1280",
+        subtitles_enabled=False,
+        effects_style="Ken Burns - Standard",
+        music_enabled=False,
+        music_track="",
+    )
+
+    assert should_apply_subtitles(resolved, timeline_meta=None) is False
