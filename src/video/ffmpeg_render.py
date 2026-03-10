@@ -38,6 +38,27 @@ def _parse_resolution(resolution: str) -> tuple[int, int]:
     return int(width), int(height)
 
 
+def _probe_video_dimensions(video_path: Path) -> str:
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
+            str(video_path),
+        ]
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        dims = (result.stdout or "").strip()
+        if "x" in dims:
+            return dims
+    except Exception:
+        pass
+    return "unknown"
 
 
 def _apply_max_width(width: int, height: int, max_width: int) -> tuple[int, int]:
@@ -638,6 +659,7 @@ def render_video_from_timeline(
             srt_path = output_path.with_name("captions.srt")
             ass_path = output_path.with_name("captions.ass")
             subtitle_filter_applied = False
+            music_mix_applied = False
             if timeline.meta.burn_captions:
                 write_srt_file(srt_path, timeline)
                 write_ass_file(ass_path, timeline)
@@ -681,6 +703,7 @@ def render_video_from_timeline(
                     return cmd
 
                 mix_cmd = _build_mix_audio_cmd(simplify_mix=False)
+                music_mix_applied = bool(timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path)
                 ffmpeg_commands.append(mix_cmd)
                 mix_result = run_cmd(mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec, check=False, workdir=render_dir, cwd=project_root)
                 if not mix_result["ok"]:
@@ -771,8 +794,9 @@ def render_video_from_timeline(
                 "effect_style": str(getattr(meta, "video_effects_style", "Ken Burns - Standard")),
                 "music_enabled": bool(meta.include_music),
                 "music_track": str(meta.music.path if meta.music and meta.music.path else ""),
-                "music_mix_applied": bool(meta.include_music),
+                "music_mix_applied": bool(locals().get("music_mix_applied", False)),
                 "output_path": str(output_path),
+                "actual_output_size": _probe_video_dimensions(output_path) if output_path.exists() else "unknown",
                 "scene_cache": {
                     "directory": str(cache_dir),
                     "hits": cache_hits,
