@@ -119,7 +119,12 @@ def ken_burns(
         direction = "zoom-in-center"
 
     zf = max(1.001, float(zoom_factor))
-    total_frames = max(2, int(duration * fps))
+    # Render zoompan at 3× the target FPS internally so position is computed at
+    # triple the resolution, then downsample with the fps filter.  This triples
+    # the number of intermediate steps (a 200% smoothness increase) and
+    # eliminates the sub-pixel jitter that plagues low-fps zoompan renders.
+    internal_fps = fps * 3
+    total_frames = max(2, int(duration * internal_fps))
     step = (zf - 1.0) / total_frames
 
     # Build zoompan z/x/y expressions.
@@ -153,14 +158,16 @@ def ken_burns(
 
     zoompan = (
         f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}'"
-        f":d={total_frames}:s={width}x{height}:fps={fps}"
+        f":d={total_frames}:s={width}x{height}:fps={internal_fps}"
     )
     # Scale image to exact output size first so zoompan pixel coords are
     # predictable; crop removes any letterbox/pillarbox from aspect mismatch.
+    # fps={fps} downsamples from the 3× internal rate back to the target rate.
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},"
         f"{zoompan},"
+        f"fps={fps},"
         f"format=yuv420p"
     )
 
@@ -434,7 +441,9 @@ def map_flyover(
         return False
 
     zf = max(1.001, float(zoom_factor))
-    total_frames = max(2, int(duration * fps))
+    # Render at 3× FPS internally for 200% smoother motion (see ken_burns).
+    internal_fps = fps * 3
+    total_frames = max(2, int(duration * internal_fps))
 
     sx, sy = float(start_coords[0]), float(start_coords[1])
     ex, ey = float(end_coords[0]), float(end_coords[1])
@@ -464,12 +473,13 @@ def map_flyover(
 
     zoompan = (
         f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}'"
-        f":d={total_frames}:s={width}x{height}:fps={fps}"
+        f":d={total_frames}:s={width}x{height}:fps={internal_fps}"
     )
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},"
         f"{zoompan},"
+        f"fps={fps},"
         f"format=yuv420p"
     )
 
