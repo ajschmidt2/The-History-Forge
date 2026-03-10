@@ -16,7 +16,8 @@ from src.ui.state import DEFAULT_VOICE_ID, active_project_id, save_voice_id, scr
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.timeline_builder import compute_scene_durations
 from src.video.utils import get_media_duration
-from src.workflow import PipelineOptions, StepStatus, run_generate_voiceover
+from src.workflow.models import StepStatus
+from src.workflow.services import PipelineOptions, run_generate_voiceover
 
 
 def _fit_scene_durations_to_voiceover(

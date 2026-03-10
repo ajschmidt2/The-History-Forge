@@ -14,7 +14,8 @@ import src.supabase_storage as _sb_store
 from src.config import get_secret
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.storage import delete_project_records
-from src.workflow import get_project_manifest, load_workflow_state
+from src.workflow.project_io import get_project_manifest
+from src.workflow.state import load_workflow_state
 
 
 def _load_forge_utils():

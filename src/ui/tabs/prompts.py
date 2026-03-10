@@ -2,7 +2,8 @@ import streamlit as st
 
 from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import active_project_id, clear_downstream, scenes_ready
-from src.workflow import PipelineOptions, StepStatus, run_generate_prompts
+from src.workflow.models import StepStatus
+from src.workflow.services import PipelineOptions, run_generate_prompts
 from src.workflow.project_io import load_scenes
 
 _MAX_CHARACTERS = 5
