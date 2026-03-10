@@ -296,12 +296,29 @@ def sync_timeline_for_project(
     include_voiceover = include_voiceover_requested and bool(audio_files)
 
     selected_music_path: Path | None = None
-    if selected_music_track:
-        candidate = Path(selected_music_track).expanduser()
+
+    def _resolve_music_path(raw_path: str) -> Path | None:
+        text = str(raw_path or "").strip()
+        if not text:
+            return None
+        candidate = Path(text).expanduser()
+        possible_paths: list[Path] = [candidate]
         if not candidate.is_absolute():
-            candidate = (project_path / candidate).resolve()
-        if candidate.exists():
-            selected_music_path = candidate
+            possible_paths.append(project_path / candidate)
+            possible_paths.append(music_dir / candidate.name)
+        for option in possible_paths:
+            if option.exists() and option.suffix.lower() in {".wav", ".mp3"}:
+                return option.resolve()
+        return None
+
+    selected_music_path = _resolve_music_path(selected_music_track)
+    if selected_music_path is None:
+        selected_music_path = _resolve_music_path(str((merged_meta.get("music") or {}).get("path", "")))
+    if selected_music_path is None and music_files:
+        # Non-automation workflow does not always persist selected_music_track.
+        # Fall back to the first local project track so "Include music" actually mixes audio.
+        selected_music_path = music_files[0].resolve()
+
     include_music = include_music_requested and bool(selected_music_path)
 
     music_volume_db = -6.0
