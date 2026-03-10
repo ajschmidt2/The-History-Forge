@@ -24,7 +24,7 @@ from src.video.render_settings import normalize_aspect_ratio, normalize_video_ef
 from src.video.timeline_builder import compute_scene_durations
 from src.video.timeline_schema import Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists, get_media_duration
-from src.workflow.assets import preflight_report, sync_scene_asset_metadata
+from src.workflow.assets import preflight_report, resolve_music_track_for_project, sync_scene_asset_metadata
 from src.workflow.models import StepStatus
 from src.workflow.project_io import (
     ensure_project_files,
@@ -1012,6 +1012,22 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
         resolved_settings.music_enabled,
         resolved_settings.music_track,
     )
+    music_resolution = resolve_music_track_for_project(project_id, resolved_settings.music_track) if resolved_settings.music_enabled else {
+        "selected_track": "",
+        "resolved_path": "",
+        "copied_to_project": False,
+        "file_exists": False,
+    }
+    resolved_music_track = str(music_resolution.get("resolved_path", "") or "")
+    logger.info(
+        "music_track_selected=%s music_track_resolved=%s music_track_copied_to_project=%s music_track_exists=%s",
+        music_resolution.get("selected_track", ""),
+        resolved_music_track,
+        bool(music_resolution.get("copied_to_project", False)),
+        bool(music_resolution.get("file_exists", False)),
+    )
+    if resolved_settings.music_enabled and not resolved_music_track:
+        return StepResult(project_id, "timeline", StepStatus.FAILED, message="Background music is enabled but selected track could not be resolved.")
 
     settings_payload = _automation_settings_payload(cfg)
     previous_settings_payload = payload.get("automation_settings_payload", {}) or {}
@@ -1082,8 +1098,8 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
                 "enable_motion": cfg.enable_video_effects,
                 "video_effects_style": resolved_settings.effects_style,
                 "resolution": resolved_settings.output_size,
-                "selected_music_track": resolved_settings.music_track,
-                "music": {"path": resolved_settings.music_track, "volume_db": music_volume_db},
+                "selected_music_track": resolved_music_track,
+                "music": {"path": resolved_music_track, "volume_db": music_volume_db},
                 "transition_types": _build_transition_types(cfg.scene_transition_type, len(scenes)),
             },
         )
@@ -1125,12 +1141,20 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
 
     update_step_status(project_id, "render", StepStatus.IN_PROGRESS)
 
+    music_resolution = resolve_music_track_for_project(project_id, resolved_settings.music_track) if resolved_settings.music_enabled else {
+        "selected_track": "",
+        "resolved_path": "",
+        "copied_to_project": False,
+        "file_exists": False,
+    }
+    resolved_music_track = str(music_resolution.get("resolved_path", "") or "")
+
     expected_settings = {
         "aspect_ratio": resolved_settings.aspect_ratio,
         "subtitles_enabled": resolved_settings.subtitles_enabled,
         "effects_style": resolved_settings.effects_style,
         "music_enabled": resolved_settings.music_enabled,
-        "music_track": resolved_settings.music_track,
+        "music_track": resolved_music_track,
         "voiceover_enabled": cfg.include_voiceover,
     }
     preflight = preflight_report(project_id, expected_settings=expected_settings)
@@ -1142,11 +1166,12 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
         logger.warning("auto_rebuilding_timeline_from_disk=True")
         for invalid_reference in preflight["issues"]["invalid_timeline_references"]:
             logger.warning("timeline_reference_invalid path=%s", invalid_reference)
-        logger.warning(
-            "timeline_scene_count_mismatch expected=%s actual=%s",
-            preflight.get("timeline_scene_count_expected", 0),
-            preflight.get("timeline_scene_count_actual", 0),
-        )
+        if int(preflight.get("timeline_scene_count_expected", 0) or 0) != int(preflight.get("timeline_scene_count_actual", 0) or 0):
+            logger.warning(
+                "timeline_scene_count_mismatch expected=%s actual=%s",
+                preflight.get("timeline_scene_count_expected", 0),
+                preflight.get("timeline_scene_count_actual", 0),
+            )
         preflight["timeline_rebuild_attempted"] = True
         try:
             _invalidate_render_derivatives(project_id)
@@ -1196,6 +1221,13 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
         resolved_settings.music_enabled,
         resolved_settings.music_track,
     )
+    logger.info(
+        "music_track_selected=%s music_track_resolved=%s music_track_copied_to_project=%s music_track_exists=%s",
+        music_resolution.get("selected_track", ""),
+        resolved_music_track,
+        bool(music_resolution.get("copied_to_project", False)),
+        bool(music_resolution.get("file_exists", False)),
+    )
     timeline_aspect_ratio = normalize_aspect_ratio(timeline.meta.aspect_ratio, requested_aspect_ratio)
     timeline_resolution = str(timeline.meta.resolution or "")
     if timeline_aspect_ratio != requested_aspect_ratio or timeline_resolution != requested_resolution:
@@ -1230,7 +1262,7 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
             timeline_path.parent.mkdir(parents=True, exist_ok=True)
             timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
 
-    if resolved_settings.music_enabled and not str(resolved_settings.music_track or "").strip():
+    if resolved_settings.music_enabled and not resolved_music_track:
         msg = "Background music is enabled but no track is selected."
         update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
         return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
@@ -1243,8 +1275,8 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     if timeline.meta.include_music:
         if not timeline.meta.music:
             from src.video.timeline_schema import Music, Ducking
-            timeline.meta.music = Music(path=resolved_settings.music_track, volume_db=-6.0, ducking=Ducking(enabled=False))
-        timeline.meta.music.path = resolved_settings.music_track
+            timeline.meta.music = Music(path=resolved_music_track, volume_db=-6.0, ducking=Ducking(enabled=False))
+        timeline.meta.music.path = resolved_music_track
     else:
         timeline.meta.music = None
 
@@ -1253,11 +1285,13 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
 
     warnings: list[str] = []
+    music_mix_applied = False
     if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
         if not Path(timeline.meta.music.path).exists():
             msg = f"Music file missing: {timeline.meta.music.path}"
             update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
             return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
+        music_mix_applied = True
     if timeline.meta.burn_captions:
         try:
             from src.video.captions import write_ass_file
@@ -1292,6 +1326,22 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
             update_step_status(project_id, "render", StepStatus.FAILED, error=str(exc))
             return StepResult(project_id, "render", StepStatus.FAILED, message=str(exc), outputs={"warnings": warnings, "preflight": preflight})
 
+    if report_path.exists():
+        try:
+            report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+            report_payload["music_enabled"] = bool(timeline.meta.include_music)
+            report_payload["music_track"] = str(timeline.meta.music.path if timeline.meta.music and timeline.meta.music.path else "")
+            report_payload["music_mix_applied"] = bool(music_mix_applied)
+            report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    logger.info(
+        "music_enabled=%s music_track=%s music_mix_applied=%s",
+        bool(timeline.meta.include_music),
+        str(timeline.meta.music.path if timeline.meta.music and timeline.meta.music.path else ""),
+        bool(music_mix_applied),
+    )
     update_step_status(project_id, "render", StepStatus.COMPLETED)
     return StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": str(output_path), "warnings": warnings, "preflight": preflight})
 

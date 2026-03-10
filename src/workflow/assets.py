@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,60 @@ from src.workflow.project_io import load_scenes, project_dir, save_scenes
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv"}
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac"}
+
+
+def resolve_music_track_for_project(project_id: str, selected_track: str) -> dict[str, Any]:
+    """Resolve automation music selection into a canonical project-local track path."""
+    selected = str(selected_track or "").strip()
+    project_path = project_dir(project_id)
+    music_dir = project_path / "assets/music"
+    music_dir.mkdir(parents=True, exist_ok=True)
+
+    result: dict[str, Any] = {
+        "selected_track": selected,
+        "resolved_path": "",
+        "copied_to_project": False,
+        "file_exists": False,
+    }
+    if not selected:
+        return result
+
+    repo_root = Path.cwd()
+    raw = Path(selected).expanduser()
+    candidates: list[Path] = []
+    if raw.is_absolute():
+        candidates.append(raw)
+    else:
+        candidates.extend(
+            [
+                (repo_root / raw),
+                (project_path / raw),
+                (music_dir / raw),
+            ]
+        )
+        if raw.name:
+            candidates.extend(
+                [
+                    music_dir / raw.name,
+                    repo_root / "data/music_library" / raw.name,
+                ]
+            )
+
+    source = next((candidate.resolve() for candidate in candidates if candidate.exists()), None)
+    if source is None:
+        return result
+
+    canonical = source
+    shared_library = (repo_root / "data/music_library").resolve()
+    if shared_library in source.parents:
+        canonical = (music_dir / source.name).resolve()
+        if not canonical.exists() or canonical.stat().st_size != source.stat().st_size:
+            shutil.copy2(source, canonical)
+            result["copied_to_project"] = True
+
+    result["resolved_path"] = str(canonical)
+    result["file_exists"] = canonical.exists()
+    return result
 
 
 def canonical_scene_id(index: int) -> str:
@@ -151,6 +206,11 @@ def validate_project_assets(project_id: str, expected_settings: dict[str, Any] |
         "timeline_scene_count_expected": 0,
         "timeline_scene_count_actual": 0,
         "timeline_metadata_mismatches": [],
+        "music_track_selected": "",
+        "music_track_resolved": "",
+        "music_track_copied_to_project": False,
+        "music_track_exists": False,
+        "timeline_music_attached": False,
     }
     scenes = load_scenes(project_id)
     pdir = project_dir(project_id)
@@ -245,10 +305,18 @@ def validate_project_assets(project_id: str, expected_settings: dict[str, Any] |
                 report["timeline_metadata_mismatches"].append(mismatch)
                 issues["invalid_timeline_references"].append(mismatch)
             if bool(expected_music_enabled):
+                resolved_music = resolve_music_track_for_project(project_id, expected_music_track)
+                canonical_expected_track = str(resolved_music.get("resolved_path", "") or expected_music_track)
+                report["music_track_selected"] = expected_music_track
+                report["music_track_resolved"] = canonical_expected_track
+                report["music_track_copied_to_project"] = bool(resolved_music.get("copied_to_project", False))
+                report["music_track_exists"] = bool(resolved_music.get("file_exists", False))
                 actual_music_path = str(timeline.meta.music.path if timeline.meta.music else "")
-                if expected_music_track and actual_music_path != expected_music_track:
+                normalized_expected = str(Path(canonical_expected_track).resolve()) if canonical_expected_track else ""
+                normalized_actual = str(Path(actual_music_path).resolve()) if actual_music_path else ""
+                if normalized_expected and normalized_actual != normalized_expected:
                     mismatch = (
-                        f"timeline_metadata_mismatch music_track expected={expected_music_track} actual={actual_music_path}"
+                        f"timeline_metadata_mismatch music_track expected={canonical_expected_track} actual={actual_music_path}"
                     )
                     report["timeline_metadata_mismatches"].append(mismatch)
                     issues["invalid_timeline_references"].append(mismatch)
@@ -264,6 +332,8 @@ def validate_project_assets(project_id: str, expected_settings: dict[str, Any] |
                     issues["invalid_timeline_references"].append(
                         f"timeline_music_missing enabled={expected_music_enabled} path={music_path or '<missing>'}"
                     )
+                else:
+                    report["timeline_music_attached"] = True
         except Exception as exc:  # noqa: BLE001
             issues["invalid_timeline_references"].append(f"timeline parse error: {exc}")
 
@@ -318,4 +388,9 @@ def preflight_report(project_id: str, expected_settings: dict[str, Any] | None =
         "actions": actionable,
         "timeline_scene_count_expected": int(issues.get("timeline_scene_count_expected", 0) or 0),
         "timeline_scene_count_actual": int(issues.get("timeline_scene_count_actual", 0) or 0),
+        "music_track_selected": str(issues.get("music_track_selected", "") or ""),
+        "music_track_resolved": str(issues.get("music_track_resolved", "") or ""),
+        "music_track_copied_to_project": bool(issues.get("music_track_copied_to_project", False)),
+        "music_track_exists": bool(issues.get("music_track_exists", False)),
+        "timeline_music_attached": bool(issues.get("timeline_music_attached", False)),
     }

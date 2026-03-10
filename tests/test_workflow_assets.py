@@ -7,6 +7,7 @@ from src.workflow.assets import (
     canonical_scene_video_path,
     preflight_report,
     regenerate_missing_scene_assets,
+    resolve_music_track_for_project,
     sync_scene_asset_metadata,
 )
 from src.workflow.project_io import load_scenes, save_scenes
@@ -120,3 +121,60 @@ def test_preflight_reports_scene_count_and_metadata_mismatch(tmp_path, monkeypat
     assert report["timeline_scene_count_actual"] == 2
     assert any("timeline_scene_count_mismatch" in item for item in report["issues"]["invalid_timeline_references"])
     assert any("timeline_metadata_mismatch" in item for item in report["issues"]["invalid_timeline_references"])
+
+
+def test_resolve_music_track_copies_shared_library_track_into_project(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "music-resolve"
+    shared = Path("data/music_library")
+    shared.mkdir(parents=True, exist_ok=True)
+    src_track = shared / "track.mp3"
+    src_track.write_bytes(b"mp3")
+
+    resolved = resolve_music_track_for_project(project_id, str(src_track))
+
+    assert resolved["selected_track"] == str(src_track)
+    assert resolved["copied_to_project"] is True
+    assert resolved["file_exists"] is True
+    assert "/assets/music/track.mp3" in resolved["resolved_path"]
+    assert Path(resolved["resolved_path"]).exists()
+
+
+def test_preflight_music_metadata_uses_resolved_track_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "preflight-music"
+    scene = Scene(index=1, title="One", script_excerpt="Excerpt", visual_intent="Intent", image_prompt="Prompt")
+    save_scenes(project_id, [scene])
+
+    pdir = Path("data/projects") / project_id
+    (pdir / "assets/images").mkdir(parents=True, exist_ok=True)
+    (pdir / "assets/images/s01.png").write_bytes(b"png")
+    shared = Path("data/music_library")
+    shared.mkdir(parents=True, exist_ok=True)
+    selected_track = shared / "library.mp3"
+    selected_track.write_bytes(b"mp3")
+
+    report_for_expected = resolve_music_track_for_project(project_id, str(selected_track))
+    canonical = report_for_expected["resolved_path"]
+
+    timeline = Timeline(
+        meta=Meta(
+            project_id=project_id,
+            title="t",
+            include_music=True,
+            music={"path": canonical, "volume_db": -6, "ducking": {"enabled": False}},
+        ),
+        scenes=[TimelineScene(id="s01", image_path=str(pdir / "assets/images/s01.png"), start=0, duration=2)],
+    )
+    (pdir / "timeline.json").write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+
+    report = preflight_report(
+        project_id,
+        expected_settings={"music_enabled": True, "music_track": str(selected_track)},
+    )
+
+    assert report["music_track_selected"] == str(selected_track)
+    assert report["music_track_resolved"] == canonical
+    assert report["music_track_exists"] is True
+    assert report.get("timeline_music_attached") is True
+    assert not any("timeline_metadata_mismatch music_track" in item for item in report["issues"]["invalid_timeline_references"])
