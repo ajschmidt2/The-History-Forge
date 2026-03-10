@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import logging
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from src.storage import record_asset
 import src.supabase_storage as _sb_store
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.ffmpeg_render import render_video_from_timeline
+from src.video.render_settings import normalize_aspect_ratio, normalize_video_effects_style, render_resolution_for_aspect_ratio
 from src.video.timeline_builder import compute_scene_durations
 from src.video.timeline_schema import Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists, get_media_duration
@@ -60,6 +62,7 @@ class PipelineOptions:
     allow_captionless_render: bool = True
     include_subtitles: bool = True
     enable_video_effects: bool = True
+    video_effects_style: str = "Ken Burns - Standard"
     selected_music_track: str = ""
     music_volume_relative_to_voiceover: float = 0.5
     voice_id: str = ""
@@ -452,6 +455,7 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
     merged.include_music = _safe_bool(payload.get("enable_music", payload.get("include_music", merged.include_music)), merged.include_music)
     merged.include_subtitles = _safe_bool(payload.get("enable_subtitles", payload.get("automation_include_captions", merged.include_subtitles)), merged.include_subtitles)
     merged.enable_video_effects = _safe_bool(payload.get("enable_video_effects", merged.enable_video_effects), merged.enable_video_effects)
+    merged.video_effects_style = normalize_video_effects_style(payload.get("video_effects_style", merged.video_effects_style), enable_motion=merged.enable_video_effects)
     merged.selected_music_track = str(payload.get("selected_music_track", merged.selected_music_track) or "")
     try:
         music_level = float(payload.get("music_volume_relative_to_voiceover", merged.music_volume_relative_to_voiceover) or merged.music_volume_relative_to_voiceover)
@@ -618,9 +622,10 @@ def run_apply_video_effects(project_id: str, options: PipelineOptions | None = N
     ensure_project_files(project_id)
     payload, cfg = _load_options(project_id, options)
     payload["enable_video_effects"] = bool(cfg.enable_video_effects)
+    payload["video_effects_style"] = normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects)
     save_project_payload(project_id, payload)
     update_step_status(project_id, "effects", StepStatus.COMPLETED)
-    return StepResult(project_id, "effects", StepStatus.COMPLETED, outputs={"enable_video_effects": bool(cfg.enable_video_effects)})
+    return StepResult(project_id, "effects", StepStatus.COMPLETED, outputs={"enable_video_effects": bool(cfg.enable_video_effects), "video_effects_style": normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects)})
 
 def run_generate_prompts(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     ensure_project_files(project_id)
@@ -805,9 +810,54 @@ def run_generate_voiceover(project_id: str, options: PipelineOptions | None = No
     )
 
 
+
+def _automation_settings_signature(cfg: PipelineOptions) -> str:
+    payload = {
+        "aspect_ratio": normalize_aspect_ratio(cfg.aspect_ratio, default="16:9"),
+        "subtitles": bool(cfg.include_subtitles),
+        "effects_enabled": bool(cfg.enable_video_effects),
+        "effects_style": normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects),
+        "music_enabled": bool(cfg.include_music),
+        "music_track": str(cfg.selected_music_track or "").strip(),
+        "music_volume": round(float(cfg.music_volume_relative_to_voiceover), 4),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _invalidate_render_artifacts_for_settings_change(project_id: str, old_sig: str, new_sig: str, logger: logging.Logger) -> None:
+    if not old_sig or old_sig == new_sig:
+        return
+    base = project_dir(project_id)
+    paths = [
+        base / "timeline.json",
+        base / "renders" / "final.mp4",
+        base / "renders" / "render_report.json",
+        base / "renders" / "captions.ass",
+        base / "renders" / "captions.srt",
+        base / "scene_cache",
+    ]
+    for path in paths:
+        try:
+            if path.is_dir():
+                import shutil
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.exists():
+                path.unlink()
+        except Exception:
+            pass
+    logger.info("settings_changed=true old_signature=%s new_signature=%s rebuild_triggered=true", old_sig, new_sig)
+
+
+
 def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     ensure_project_files(project_id)
     payload, cfg = _load_options(project_id, options)
+    logger = _workflow_logger(project_id)
+    new_settings_signature = _automation_settings_signature(cfg)
+    previous_settings_signature = str(payload.get("automation_settings_signature", "") or "").strip()
+    _invalidate_render_artifacts_for_settings_change(project_id, previous_settings_signature, new_settings_signature, logger)
+    payload["automation_settings_signature"] = new_settings_signature
+    save_project_payload(project_id, payload)
     scenes = sync_scene_asset_metadata(project_id)
     if not scenes:
         return StepResult(project_id, "timeline", StepStatus.FAILED, message="No scenes available.")
@@ -834,6 +884,7 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
             music_volume_db = 20.0 * math.log10(ratio)
     except Exception:
         music_volume_db = -6.0
+    logger.info("aspect_ratio=%s output_size=%s subtitles_enabled=%s effects_style=%s music_enabled=%s music_track=%s", cfg.aspect_ratio, render_resolution_for_aspect_ratio(cfg.aspect_ratio), bool(cfg.include_subtitles), normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects), bool(cfg.include_music), str(cfg.selected_music_track or ""))
     try:
         timeline_path = sync_timeline_for_project(
             project_path=project_path,
@@ -847,6 +898,8 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
                 "include_music": cfg.include_music,
                 "burn_captions": cfg.include_subtitles,
                 "enable_motion": cfg.enable_video_effects,
+                "video_effects_style": normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects),
+                "resolution": render_resolution_for_aspect_ratio(cfg.aspect_ratio),
                 "selected_music_track": cfg.selected_music_track,
                 "music": {"path": cfg.selected_music_track, "volume_db": music_volume_db},
                 "transition_types": payload.get("scene_transition_types", []),
@@ -889,6 +942,16 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
         update_step_status(project_id, "render", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "render", StepStatus.FAILED, message=str(exc))
 
+    requested_aspect_ratio = normalize_aspect_ratio(cfg.aspect_ratio)
+    requested_resolution = render_resolution_for_aspect_ratio(requested_aspect_ratio)
+    logger = _workflow_logger(project_id)
+    logger.info("aspect_ratio=%s output_size=%s", requested_aspect_ratio, requested_resolution)
+    timeline_aspect_ratio = normalize_aspect_ratio(timeline.meta.aspect_ratio, requested_aspect_ratio)
+    if timeline_aspect_ratio != requested_aspect_ratio:
+        msg = f"Aspect-ratio mismatch: requested {requested_aspect_ratio} but timeline has {timeline.meta.aspect_ratio}."
+        update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
+        return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
+
     if timeline.meta.include_voiceover and not cfg.allow_silent_render:
         voice_path = timeline.meta.voiceover.path if timeline.meta.voiceover else ""
         if not voice_path or not Path(voice_path).exists():
@@ -913,9 +976,9 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     warnings: list[str] = []
     if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
         if not Path(timeline.meta.music.path).exists():
-            timeline.meta.include_music = False
-            timeline.meta.music = None
-            warnings.append("Music file missing; continuing without music.")
+            msg = f"Music file missing: {timeline.meta.music.path}"
+            update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
+            return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
     if timeline.meta.burn_captions:
         try:
             from src.video.captions import write_ass_file
@@ -929,7 +992,7 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     report_path = project_dir(project_id) / "renders" / "render_report.json"
     try:
         ensure_ffmpeg_exists()
-        render_video_from_timeline(timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=1280)
+        render_video_from_timeline(timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=2000)
         try:
             _sb_store.upload_video(project_id, output_path.name, output_path)
         except Exception:
@@ -941,7 +1004,7 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
                 fallback_timeline_path = project_dir(project_id) / "renders" / "timeline.no_captions.json"
                 fallback_timeline_path.parent.mkdir(parents=True, exist_ok=True)
                 fallback_timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
-                render_video_from_timeline(fallback_timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=1280)
+                render_video_from_timeline(fallback_timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=2000)
                 warnings.append(f"Caption render failed ({exc}); continued without burned captions.")
             except Exception as retry_exc:  # noqa: BLE001
                 update_step_status(project_id, "render", StepStatus.FAILED, error=str(retry_exc))

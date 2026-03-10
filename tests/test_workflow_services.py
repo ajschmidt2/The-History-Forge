@@ -225,6 +225,7 @@ def test_load_options_hardens_automation_payload_values(tmp_path, monkeypatch):
             "automation_generate_voiceover": "false",
             "music_volume_relative_to_voiceover": "2.5",
             "variations_per_scene": 0,
+            "video_effects_style": "Ken Burns - Dramatic",
         },
     )
 
@@ -239,3 +240,4 @@ def test_load_options_hardens_automation_payload_values(tmp_path, monkeypatch):
     assert options.include_voiceover is False
     assert options.music_volume_relative_to_voiceover == 1.0
     assert options.variations_per_scene == 1
+    assert options.video_effects_style == "Ken Burns - Dramatic"

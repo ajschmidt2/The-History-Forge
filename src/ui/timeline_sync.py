@@ -4,6 +4,7 @@ from typing import Any
 from urllib.request import urlopen
 
 from src.video.timeline_builder import build_default_timeline, write_timeline_json
+from src.video.render_settings import normalize_aspect_ratio, normalize_video_effects_style, render_resolution_for_aspect_ratio
 from src.video.timeline_schema import CaptionStyle, Timeline
 from src.ui.caption_format import format_caption
 
@@ -260,7 +261,8 @@ def sync_timeline_for_project(
             existing_meta = {}
 
     merged_meta = {**existing_meta, **(meta_overrides or {})}
-    aspect_ratio = str(merged_meta.get("aspect_ratio", "16:9"))
+    aspect_ratio = normalize_aspect_ratio(str(merged_meta.get("aspect_ratio", "16:9")), default="16:9")
+    merged_meta["resolution"] = render_resolution_for_aspect_ratio(aspect_ratio)
     media_files = _normalize_media_files(media_files or [], aspect_ratio)
     if not media_files:
         return None
@@ -276,6 +278,7 @@ def sync_timeline_for_project(
     include_voiceover_requested = bool(merged_meta.get("include_voiceover", True))
     include_music_requested = bool(merged_meta.get("include_music", False))
     enable_motion = bool(merged_meta.get("enable_motion", True))
+    video_effects_style = normalize_video_effects_style(merged_meta.get("video_effects_style", "Ken Burns - Standard"), enable_motion=enable_motion)
     selected_music_track = str(merged_meta.get("selected_music_track", "") or "").strip()
     narration_wpm = float(merged_meta.get("narration_wpm", 160))
     narration_min_sec = float(merged_meta.get("narration_min_sec", 1.5))
@@ -299,7 +302,7 @@ def sync_timeline_for_project(
             candidate = (project_path / candidate).resolve()
         if candidate.exists():
             selected_music_path = candidate
-    include_music = include_music_requested and bool(selected_music_path or music_files)
+    include_music = include_music_requested and bool(selected_music_path)
 
     music_volume_db = -6.0
     if isinstance(merged_meta.get("music"), dict):
@@ -340,11 +343,12 @@ def sync_timeline_for_project(
         fps=fps,
         burn_captions=burn_captions,
         caption_style=caption_style,
-        music_path=(selected_music_path or (music_files[0] if music_files else None)) if include_music else None,
+        music_path=selected_music_path if include_music else None,
         music_volume_db=music_volume_db,
         include_voiceover=include_voiceover,
         include_music=include_music,
         enable_motion=enable_motion,
+        video_effects_style=video_effects_style,
         crossfade=effective_crossfade,
         crossfade_duration=crossfade_duration,
         transition_types=transition_types,

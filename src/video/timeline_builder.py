@@ -5,13 +5,8 @@ from pathlib import Path
 from typing import Iterable
 
 from .timeline_schema import CaptionStyle, Ducking, Meta, Motion, Music, Scene, Timeline, Voiceover
+from .render_settings import get_motion_preset, normalize_video_effects_style, render_resolution_for_aspect_ratio
 from .utils import get_media_duration
-
-
-def _resolution_for_aspect_ratio(aspect_ratio: str) -> str:
-    if aspect_ratio == "16:9":
-        return "1920x1080"
-    return "1080x1920"
 
 
 def _scene_number_from_path(path: Path) -> int | None:
@@ -31,27 +26,22 @@ def _image_sort_key(path: Path) -> tuple[int, int, str]:
     return (1, 10**9, path.name.lower())
 
 
-def _build_motion(index: int) -> Motion:
+def _build_motion(index: int, effect_style: str, aspect_ratio: str) -> Motion | None:
+    preset = get_motion_preset(effect_style, aspect_ratio)
+    if preset is None:
+        return None
+
+    sweep_patterns = [
+        (0.5 - preset.pan_travel / 2.0, 0.5 + preset.pan_travel / 2.0, 0.50, 0.50),
+        (0.50, 0.50, 0.5 - preset.pan_travel / 2.0, 0.5 + preset.pan_travel / 2.0),
+        (0.5 + preset.pan_travel / 2.0, 0.5 - preset.pan_travel / 2.0, 0.5 + preset.pan_travel / 3.0, 0.5 - preset.pan_travel / 3.0),
+        (0.5 - preset.pan_travel / 3.0, 0.5 + preset.pan_travel / 3.0, 0.5 + preset.pan_travel / 2.0, 0.5 - preset.pan_travel / 2.0),
+    ]
+    x_start, x_end, y_start, y_end = sweep_patterns[(index - 1) % len(sweep_patterns)]
     zoom_in = index % 2 == 0
-    if zoom_in:
-        return Motion(
-            type="kenburns",
-            zoom_start=1.01,
-            zoom_end=1.03,
-            x_start=0.49,
-            x_end=0.51,
-            y_start=0.5,
-            y_end=0.5,
-        )
-    return Motion(
-        type="kenburns",
-        zoom_start=1.03,
-        zoom_end=1.01,
-        x_start=0.51,
-        x_end=0.49,
-        y_start=0.5,
-        y_end=0.5,
-    )
+    zoom_start = preset.zoom_min if zoom_in else preset.zoom_max
+    zoom_end = preset.zoom_max if zoom_in else preset.zoom_min
+    return Motion(type="kenburns", zoom_start=zoom_start, zoom_end=zoom_end, x_start=x_start, x_end=x_end, y_start=y_start, y_end=y_end)
 
 def compute_scene_durations(
     scenes: list[str],
@@ -84,6 +74,7 @@ def build_default_timeline(
     include_voiceover: bool = True,
     include_music: bool = True,
     enable_motion: bool = True,
+    video_effects_style: str = "Ken Burns - Standard",
     crossfade: bool = False,
     crossfade_duration: float = 0.3,
     transition_types: list[str] | None = None,
@@ -137,7 +128,7 @@ def build_default_timeline(
                 image_path=str(image_path),
                 start=round(current_start, 3),
                 duration=round(duration, 3),
-                motion=_build_motion(idx) if enable_motion else None,
+                motion=_build_motion(idx, normalize_video_effects_style(video_effects_style, enable_motion=enable_motion), aspect_ratio) if enable_motion else None,
                 caption=None,
                 video_loop=bool(video_options.get("video_loop", False)),
                 video_muted=bool(video_options.get("video_muted", True)),
@@ -148,14 +139,14 @@ def build_default_timeline(
 
     music = None
     if music_path:
-        music = Music(path=str(music_path), volume_db=music_volume_db, ducking=Ducking())
+        music = Music(path=str(music_path), volume_db=music_volume_db, ducking=Ducking(enabled=False))
 
     timeline = Timeline(
         meta=Meta(
             project_id=project_id,
             title=title,
             aspect_ratio=aspect_ratio,
-            resolution=_resolution_for_aspect_ratio(aspect_ratio),
+            resolution=render_resolution_for_aspect_ratio(aspect_ratio),
             fps=fps,
             scene_duration=(round(sum(scene_durations) / scene_count, 3) if scene_durations else scene_duration),
             burn_captions=burn_captions,
@@ -163,6 +154,7 @@ def build_default_timeline(
             include_music=include_music,
             crossfade=crossfade,
             crossfade_duration=crossfade_duration,
+            video_effects_style=normalize_video_effects_style(video_effects_style, enable_motion=enable_motion),
             transition_types=list(transition_types or []),
             narration_wpm=narration_wpm,
             narration_min_sec=narration_min_sec,
