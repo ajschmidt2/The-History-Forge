@@ -64,7 +64,8 @@ class PipelineOptions:
     enable_video_effects: bool = True
     video_effects_style: str = "Ken Burns - Standard"
     selected_music_track: str = ""
-    music_volume_relative_to_voiceover: float = 0.5
+    music_volume_relative_to_voiceover: float = 0.25
+    scene_transition_type: str = "fade"
     voice_id: str = ""
     tts_provider: str = TTS_PROVIDER_ELEVENLABS
     elevenlabs_voice_id: str = ""
@@ -573,8 +574,13 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
             else (payload.get("music_volume_relative_to_voiceover", merged.music_volume_relative_to_voiceover) or merged.music_volume_relative_to_voiceover)
         )
     except (TypeError, ValueError):
-        music_level = 0.5
+        music_level = 0.25
     merged.music_volume_relative_to_voiceover = min(1.0, max(0.0, music_level))
+    _allowed_transitions = {"random", "fade", "fadeblack", "fadewhite", "wipeleft", "wiperight", "slideleft", "slideright", "smoothleft", "smoothright", "circleopen", "circleclose", "distance"}
+    _raw_transition = str(
+        merged.scene_transition_type if options_provided else payload.get("scene_transition_type", merged.scene_transition_type)
+    ).strip().lower()
+    merged.scene_transition_type = _raw_transition if _raw_transition in _allowed_transitions else "fade"
     merged.voice_id = str(merged.voice_id or payload.get("voice_id", "") or "").strip()
     merged.tts_provider = str(merged.tts_provider or payload.get("tts_provider", TTS_PROVIDER_ELEVENLABS) or TTS_PROVIDER_ELEVENLABS).strip().lower()
     merged.elevenlabs_voice_id = str(merged.elevenlabs_voice_id or merged.voice_id or payload.get("elevenlabs_voice_id", payload.get("voice_id", "")) or "").strip()
@@ -736,6 +742,7 @@ def run_apply_video_effects(project_id: str, options: PipelineOptions | None = N
     payload, cfg = _load_options(project_id, options)
     payload["enable_video_effects"] = bool(cfg.enable_video_effects)
     payload["video_effects_style"] = normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects)
+    payload["scene_transition_type"] = cfg.scene_transition_type
     save_project_payload(project_id, payload)
     update_step_status(project_id, "effects", StepStatus.COMPLETED)
     return StepResult(project_id, "effects", StepStatus.COMPLETED, outputs={"enable_video_effects": bool(cfg.enable_video_effects), "video_effects_style": normalize_video_effects_style(cfg.video_effects_style, enable_motion=cfg.enable_video_effects)})
@@ -970,6 +977,17 @@ def _invalidate_render_artifacts_for_settings_change(project_id: str, old_sig: s
 
 
 
+_NAMED_TRANSITIONS = ["fade", "fadeblack", "fadewhite", "wipeleft", "wiperight", "slideleft", "slideright", "smoothleft", "smoothright", "circleopen", "circleclose", "distance"]
+
+
+def _build_transition_types(transition_type: str, scene_count: int) -> list[str]:
+    import random as _random
+    if transition_type == "random":
+        return [_random.choice(_NAMED_TRANSITIONS) for _ in range(max(0, scene_count - 1))]
+    safe = transition_type if transition_type in _NAMED_TRANSITIONS else "fade"
+    return [safe] * max(0, scene_count - 1)
+
+
 def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     ensure_project_files(project_id)
     payload, cfg = _load_options(project_id, options)
@@ -1066,7 +1084,7 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
                 "resolution": resolved_settings.output_size,
                 "selected_music_track": resolved_settings.music_track,
                 "music": {"path": resolved_settings.music_track, "volume_db": music_volume_db},
-                "transition_types": payload.get("scene_transition_types", []),
+                "transition_types": _build_transition_types(cfg.scene_transition_type, len(scenes)),
             },
         )
     except Exception as exc:  # noqa: BLE001

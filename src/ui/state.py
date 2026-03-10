@@ -304,7 +304,7 @@ def save_project_state(project_id: str) -> None:
         "enable_music": bool(st.session_state.get("enable_music", st.session_state.get("include_music", False))),
         "selected_music_track": str(st.session_state.get("selected_music_track", "") or ""),
         "enable_subtitles": bool(st.session_state.get("enable_subtitles", True)),
-        "music_volume_relative_to_voiceover": float(st.session_state.get("music_volume_relative_to_voiceover", 0.5) or 0.5),
+        "music_volume_relative_to_voiceover": float(st.session_state.get("music_volume_relative_to_voiceover", 0.25) or 0.25),
         "tts_provider": str(st.session_state.get("tts_provider", "elevenlabs") or "elevenlabs"),
         "voice_id": str(st.session_state.get("voice_id", DEFAULT_VOICE_ID) or DEFAULT_VOICE_ID),
         "elevenlabs_voice_id": str(st.session_state.get("voice_id", DEFAULT_VOICE_ID) or DEFAULT_VOICE_ID),
@@ -414,7 +414,7 @@ def load_project_state(project_id: str) -> None:
     st.session_state.enable_music = bool(raw.get("enable_music", raw.get("include_music", False)))
     st.session_state.selected_music_track = str(raw.get("selected_music_track", "") or "")
     st.session_state.enable_subtitles = bool(raw.get("enable_subtitles", True))
-    st.session_state.music_volume_relative_to_voiceover = float(raw.get("music_volume_relative_to_voiceover", 0.5) or 0.5)
+    st.session_state.music_volume_relative_to_voiceover = float(raw.get("music_volume_relative_to_voiceover", 0.25) or 0.25)
     st.session_state.tts_provider = str(raw.get("tts_provider", "elevenlabs") or "elevenlabs")
     st.session_state.voice_id = str(raw.get("elevenlabs_voice_id", raw.get("voice_id", _load_saved_voice_id())) or _load_saved_voice_id())
     st.session_state.openai_tts_model = str(raw.get("openai_tts_model", "gpt-4o-mini-tts") or "gpt-4o-mini-tts")
@@ -544,7 +544,7 @@ def init_state() -> None:
     st.session_state.setdefault("enable_music", False)
     st.session_state.setdefault("selected_music_track", "")
     st.session_state.setdefault("enable_subtitles", True)
-    st.session_state.setdefault("music_volume_relative_to_voiceover", 0.5)
+    st.session_state.setdefault("music_volume_relative_to_voiceover", 0.25)
     st.session_state.setdefault("num_images", 8)
     st.session_state.setdefault("scene_wpm", 160)
     st.session_state.setdefault("estimated_total_runtime_sec", 0.0)
