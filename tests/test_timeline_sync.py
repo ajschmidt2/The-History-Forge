@@ -247,3 +247,30 @@ def test_sync_timeline_for_project_uses_built_scene_count_for_caption_mapping(tm
     assert len(timeline.scenes) == 20
     assert [scene.caption for scene in timeline.scenes[:3]] == ["Caption 1", "Caption 2", "Caption 3"]
     assert timeline.scenes[-1].caption == "Caption 20"
+
+
+def test_sync_timeline_for_project_falls_back_to_project_music_when_track_not_selected(tmp_path) -> None:
+    project_path = tmp_path / "project"
+    images_dir = project_path / "assets" / "images"
+    music_dir = project_path / "assets" / "music"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    music_dir.mkdir(parents=True, exist_ok=True)
+
+    image = images_dir / "s01.png"
+    image.write_bytes(b"image")
+    music = music_dir / "bed.mp3"
+    music.write_bytes(b"music")
+
+    timeline_path = sync_timeline_for_project(
+        project_path=project_path,
+        project_id="p1",
+        title="Demo",
+        media_files=[image],
+        meta_overrides={"include_voiceover": False, "include_music": True},
+    )
+
+    assert timeline_path is not None
+    timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
+    assert timeline.meta.include_music is True
+    assert timeline.meta.music is not None
+    assert timeline.meta.music.path == str(music.resolve())
