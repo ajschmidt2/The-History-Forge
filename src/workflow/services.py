@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
 import logging
 import hashlib
@@ -1113,6 +1113,8 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     }
     resolved_settings = resolve_automation_render_settings(project_id, workflow_state, project_state, session_settings)
 
+    logger = _workflow_logger(project_id)
+
     timeline_result = run_sync_timeline(project_id, cfg)
     if timeline_result.status != StepStatus.COMPLETED:
         return StepResult(project_id, "render", StepStatus.FAILED, message=timeline_result.message)
@@ -1122,9 +1124,57 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
         return StepResult(project_id, "render", StepStatus.FAILED, message="timeline.json is missing")
 
     update_step_status(project_id, "render", StepStatus.IN_PROGRESS)
-    preflight = preflight_report(project_id)
+
+    expected_settings = {
+        "aspect_ratio": resolved_settings.aspect_ratio,
+        "subtitles_enabled": resolved_settings.subtitles_enabled,
+        "effects_style": resolved_settings.effects_style,
+        "music_enabled": resolved_settings.music_enabled,
+        "music_track": resolved_settings.music_track,
+        "voiceover_enabled": cfg.include_voiceover,
+    }
+    preflight = preflight_report(project_id, expected_settings=expected_settings)
+    preflight["timeline_rebuild_attempted"] = False
+    preflight["timeline_rebuild_succeeded"] = False
+    preflight["render_preflight_retry"] = False
+    logger.info("render_preflight_invalid_timeline=%s", bool(preflight["issues"]["invalid_timeline_references"]))
     if preflight["issues"]["invalid_timeline_references"]:
-        msg = "Render preflight failed: invalid timeline references. Rebuild timeline from disk."
+        logger.warning("auto_rebuilding_timeline_from_disk=True")
+        for invalid_reference in preflight["issues"]["invalid_timeline_references"]:
+            logger.warning("timeline_reference_invalid path=%s", invalid_reference)
+        logger.warning(
+            "timeline_scene_count_mismatch expected=%s actual=%s",
+            preflight.get("timeline_scene_count_expected", 0),
+            preflight.get("timeline_scene_count_actual", 0),
+        )
+        preflight["timeline_rebuild_attempted"] = True
+        try:
+            _invalidate_render_derivatives(project_id)
+            timeline_result = _rebuild_timeline_from_disk(project_id, cfg, resolved_settings)
+            preflight["timeline_rebuild_succeeded"] = timeline_result.status == StepStatus.COMPLETED
+            preflight["render_preflight_retry"] = True
+            if timeline_result.status != StepStatus.COMPLETED:
+                msg = timeline_result.message or "Timeline auto-rebuild failed before render."
+                update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
+                return StepResult(project_id, "render", StepStatus.FAILED, message=msg, outputs={"preflight": preflight})
+            timeline_path = Path(str(timeline_result.outputs.get("timeline_path", "")))
+            preflight = preflight_report(project_id, expected_settings=expected_settings) | {
+                "timeline_rebuild_attempted": True,
+                "timeline_rebuild_succeeded": True,
+                "render_preflight_retry": True,
+            }
+            logger.info("timeline_rebuild_attempted=True timeline_rebuild_succeeded=True render_preflight_retry=True")
+        except Exception as exc:  # noqa: BLE001
+            preflight["timeline_rebuild_succeeded"] = False
+            msg = f"Render preflight failed and auto-rebuild errored: {exc}"
+            update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
+            return StepResult(project_id, "render", StepStatus.FAILED, message=msg, outputs={"preflight": preflight})
+
+    if preflight["issues"]["invalid_timeline_references"]:
+        msg = (
+            "Render preflight failed after timeline auto-rebuild. "
+            "See invalid_timeline_references and scene-count details in preflight report."
+        )
         update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
         return StepResult(project_id, "render", StepStatus.FAILED, message=msg, outputs={"preflight": preflight})
 
@@ -1136,7 +1186,6 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
 
     requested_aspect_ratio = resolved_settings.aspect_ratio
     requested_resolution = resolved_settings.output_size
-    logger = _workflow_logger(project_id)
     logger.info(
         "automation_resolved_settings aspect_ratio=%s output_size=%sx%s subtitles_enabled=%s effects_style=%s music_enabled=%s music_track=%s",
         resolved_settings.aspect_ratio,
@@ -1245,3 +1294,25 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
 
     update_step_status(project_id, "render", StepStatus.COMPLETED)
     return StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": str(output_path), "warnings": warnings, "preflight": preflight})
+
+
+def _invalidate_render_derivatives(project_id: str) -> None:
+    pdir = project_dir(project_id)
+    renders_dir = pdir / "renders"
+    for candidate in [pdir / "timeline.json", renders_dir / "final.mp4"]:
+        if candidate.exists():
+            candidate.unlink()
+    for timeline_artifact in renders_dir.glob("timeline*.json"):
+        if timeline_artifact.exists():
+            timeline_artifact.unlink()
+
+
+def _rebuild_timeline_from_disk(project_id: str, cfg: PipelineOptions, resolved_settings: Any) -> StepResult:
+    cfg_for_rebuild = PipelineOptions(**asdict(cfg))
+    cfg_for_rebuild.aspect_ratio = resolved_settings.aspect_ratio
+    cfg_for_rebuild.include_subtitles = bool(resolved_settings.subtitles_enabled)
+    cfg_for_rebuild.enable_video_effects = normalize_video_effects_style(resolved_settings.effects_style) != "Off"
+    cfg_for_rebuild.video_effects_style = resolved_settings.effects_style
+    cfg_for_rebuild.include_music = bool(resolved_settings.music_enabled)
+    cfg_for_rebuild.selected_music_track = str(resolved_settings.music_track or "")
+    return run_sync_timeline(project_id, cfg_for_rebuild)

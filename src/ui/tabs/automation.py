@@ -592,6 +592,20 @@ def tab_automation(project_id: str) -> None:
         st.success("Preflight passed. Timeline/media references look healthy.")
     else:
         st.warning(f"Preflight found {preflight['issue_count']} issue(s).")
+        if preflight["issues"].get("invalid_timeline_references"):
+            st.error("Invalid timeline references detected:")
+            for item in preflight["issues"]["invalid_timeline_references"]:
+                st.code(str(item), language="text")
+        expected_count = preflight.get("timeline_scene_count_expected")
+        actual_count = preflight.get("timeline_scene_count_actual")
+        if expected_count or actual_count:
+            st.caption(f"Timeline scene count: expected={expected_count} actual={actual_count}")
+        if preflight.get("timeline_rebuild_attempted") is not None:
+            st.caption(
+                "Timeline rebuild status: "
+                f"attempted={preflight.get('timeline_rebuild_attempted', False)} "
+                f"succeeded={preflight.get('timeline_rebuild_succeeded', False)}"
+            )
 
     st.markdown("#### Logs")
     st.caption("Recent workflow log lines")
