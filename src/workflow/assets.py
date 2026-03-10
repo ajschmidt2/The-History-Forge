@@ -194,6 +194,81 @@ def _expected_timeline_media_path(project_id: str, scene: Any) -> Path:
     return canonical_scene_image_path(project_id, idx)
 
 
+def repair_timeline_media_references(project_id: str, timeline: Timeline, scenes: list[Any]) -> dict[str, Any]:
+    """Repair stale/missing timeline scene media references from canonical project state."""
+    repaired: list[int] = []
+    unresolved: list[str] = []
+    changed = False
+
+    images_dir = project_dir(project_id) / "assets/images"
+    videos_dir = project_dir(project_id) / "assets/videos"
+
+    for idx, tscene in enumerate(timeline.scenes, start=1):
+        scene = scenes[idx - 1] if idx - 1 < len(scenes) else None
+        expected_media = _expected_timeline_media_path(project_id, scene) if scene is not None else None
+        current_media = Path(str(tscene.image_path or "")).expanduser()
+        if str(tscene.image_path).startswith("storage://"):
+            continue
+        if current_media.exists() and current_media.stat().st_size > 0 and (expected_media is None or current_media.resolve() == expected_media.resolve()):
+            continue
+
+        candidate_paths: list[Path] = []
+        if expected_media is not None:
+            candidate_paths.append(expected_media)
+        if current_media:
+            candidate_paths.append(current_media)
+
+        if scene is not None:
+            raw_video = str(getattr(scene, "video_path", "") or "").strip()
+            if raw_video:
+                video_candidate = Path(raw_video).expanduser()
+                candidate_paths.extend([video_candidate, project_dir(project_id) / raw_video])
+            asset_paths = getattr(scene, "asset_paths", {}) or {}
+            if isinstance(asset_paths, dict):
+                for key in ("image", "video"):
+                    path = str(asset_paths.get(key, "") or "").strip()
+                    if path:
+                        candidate_paths.extend([Path(path).expanduser(), project_dir(project_id) / path])
+            image_bytes = getattr(scene, "image_bytes", None)
+            if isinstance(image_bytes, (bytes, bytearray)) and image_bytes and expected_media is not None:
+                expected_media.parent.mkdir(parents=True, exist_ok=True)
+                expected_media.write_bytes(bytes(image_bytes))
+                tscene.image_path = str(expected_media)
+                changed = True
+                repaired.append(idx)
+                continue
+
+        if expected_media is not None:
+            candidate_paths.extend(
+                [
+                    images_dir / f"s{idx:02d}.png",
+                    images_dir / f"scene{idx:02d}.png",
+                    images_dir / f"{idx:02d}.png",
+                    videos_dir / f"s{idx:02d}.mp4",
+                    videos_dir / f"scene{idx:02d}.mp4",
+                ]
+            )
+
+        usable = next((p for p in candidate_paths if p.exists() and p.stat().st_size > 0), None)
+        if usable is None:
+            unresolved.append(f"scene {idx}: missing media {tscene.image_path}")
+            continue
+
+        target = expected_media or usable
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if usable.resolve() != target.resolve():
+            shutil.copy2(usable, target)
+        tscene.image_path = str(target)
+        changed = True
+        repaired.append(idx)
+
+    return {
+        "changed": changed,
+        "repaired_scene_indexes": repaired,
+        "unresolved": unresolved,
+    }
+
+
 def validate_project_assets(project_id: str, expected_settings: dict[str, Any] | None = None) -> dict[str, Any]:
     issues: dict[str, list[str]] = {
         "missing_images": [],
@@ -368,6 +443,16 @@ def rebuild_timeline_from_disk(project_id: str) -> Path:
 
 def preflight_report(project_id: str, expected_settings: dict[str, Any] | None = None) -> dict[str, Any]:
     sync_scene_asset_metadata(project_id)
+    timeline_path = project_dir(project_id) / "timeline.json"
+    if timeline_path.exists():
+        try:
+            timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
+            scenes = load_scenes(project_id)
+            repair_result = repair_timeline_media_references(project_id, timeline, scenes)
+            if repair_result.get("changed"):
+                timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+        except Exception:
+            pass
     issues = validate_project_assets(project_id, expected_settings=expected_settings)
     total = sum(len(v) for k, v in issues.items() if isinstance(v, list))
     actionable: list[str] = []

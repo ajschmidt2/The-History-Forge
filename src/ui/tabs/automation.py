@@ -229,7 +229,7 @@ def _render_quick_scene_edits(project_id: str, scenes: list[Any]) -> None:
 
     image_path = canonical_scene_image_path(project_id, int(selected.index))
     if image_path.exists():
-        st.image(str(image_path), caption=f"Current image · {image_path.name}", use_container_width=True)
+        st.image(str(image_path), caption=f"Current image · {image_path.name}", width="stretch")
     else:
         st.caption("No image file found for this scene yet.")
 
