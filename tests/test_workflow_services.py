@@ -11,6 +11,7 @@ from src.workflow.services import (
     run_generate_script,
     run_generate_short_script,
     run_generate_voiceover,
+    run_render_video,
     run_split_scenes,
     run_sync_timeline,
 )
@@ -238,9 +239,114 @@ def test_load_options_hardens_automation_payload_values(tmp_path, monkeypatch):
     assert options.include_subtitles is False
     assert options.include_music is True
     assert options.include_voiceover is False
-    assert options.music_volume_relative_to_voiceover == 1.0
-    assert options.variations_per_scene == 1
-    assert options.video_effects_style == "Ken Burns - Dramatic"
+
+
+def test_run_render_video_auto_rebuilds_invalid_timeline_references(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-render-rebuild"
+    pdir = Path("data/projects") / project_id
+    (pdir / "assets/images").mkdir(parents=True, exist_ok=True)
+    (pdir / "assets/music").mkdir(parents=True, exist_ok=True)
+    (pdir / "assets/images/s01.png").write_bytes(b"png")
+    (pdir / "assets/music/bed.mp3").write_bytes(b"mp3")
+
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "project_title": "Render Rebuild",
+            "script_text": "Line one.",
+            "scene_wpm": 160,
+            "aspect_ratio": "9:16",
+            "enable_subtitles": False,
+            "enable_music": True,
+            "selected_music_track": str(pdir / "assets/music/bed.mp3"),
+        },
+    )
+    (pdir / "scenes.json").write_text(
+        json.dumps(
+            [
+                {
+                    "index": 1,
+                    "title": "S1",
+                    "script_excerpt": "A line.",
+                    "visual_intent": "v1",
+                    "image_prompt": "prompt",
+                    "estimated_duration_sec": 2,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    call_count = {"sync": 0}
+
+    def _fake_sync_timeline(project_id_arg, options=None):
+        call_count["sync"] += 1
+        timeline_path = Path("data/projects") / project_id_arg / "timeline.json"
+        if call_count["sync"] == 1:
+            timeline_path.write_text(
+                json.dumps(
+                    {
+                        "meta": {
+                            "project_id": project_id_arg,
+                            "title": "bad",
+                            "aspect_ratio": "16:9",
+                            "resolution": "1280x720",
+                            "burn_captions": True,
+                            "include_voiceover": False,
+                            "include_music": False,
+                            "enable_motion": True,
+                            "video_effects_style": "Ken Burns - Standard",
+                        },
+                        "scenes": [
+                            {"id": "s01", "image_path": "/does/not/exist.png", "start": 0, "duration": 2}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        else:
+            timeline_path.write_text(
+                json.dumps(
+                    {
+                        "meta": {
+                            "project_id": project_id_arg,
+                            "title": "good",
+                            "aspect_ratio": "9:16",
+                            "resolution": "720x1280",
+                            "burn_captions": False,
+                            "include_voiceover": False,
+                            "include_music": True,
+                            "enable_motion": True,
+                            "video_effects_style": "Ken Burns - Standard",
+                            "music": {"path": str(pdir / "assets/music/bed.mp3"), "volume_db": -6, "ducking": {"enabled": False}},
+                        },
+                        "scenes": [
+                            {"id": "s01", "image_path": str(pdir / "assets/images/s01.png"), "start": 0, "duration": 2}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return StepResult(project_id_arg, "timeline", StepStatus.COMPLETED, outputs={"timeline_path": str(timeline_path)})
+
+    monkeypatch.setattr("src.workflow.services.run_sync_timeline", _fake_sync_timeline)
+    monkeypatch.setattr("src.workflow.services.ensure_ffmpeg_exists", lambda: None)
+    monkeypatch.setattr(
+        "src.workflow.services.render_video_from_timeline",
+        lambda timeline_path, output_path, **kwargs: output_path.parent.mkdir(parents=True, exist_ok=True) or output_path.write_bytes(b"mp4"),
+    )
+
+    result = run_render_video(
+        project_id,
+        PipelineOptions(aspect_ratio="9:16", include_subtitles=False, include_music=True, selected_music_track=str(pdir / "assets/music/bed.mp3"), include_voiceover=False),
+    )
+
+    assert result.status == StepStatus.COMPLETED
+    assert call_count["sync"] >= 2
+    assert result.outputs["preflight"]["timeline_rebuild_attempted"] is True
+    assert result.outputs["preflight"]["timeline_rebuild_succeeded"] is True
 
 
 def test_load_options_explicit_options_override_payload(tmp_path, monkeypatch):

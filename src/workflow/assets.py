@@ -131,13 +131,26 @@ def sync_scene_asset_metadata(project_id: str, scenes: list[Any] | None = None) 
     return loaded
 
 
-def validate_project_assets(project_id: str) -> dict[str, list[str]]:
+def _expected_timeline_media_path(project_id: str, scene: Any) -> Path:
+    idx = int(getattr(scene, "index", 0) or 0)
+    canonical_video = canonical_scene_video_path(project_id, idx)
+    if _nonempty_file(canonical_video):
+        return canonical_video
+    return canonical_scene_image_path(project_id, idx)
+
+
+def validate_project_assets(project_id: str, expected_settings: dict[str, Any] | None = None) -> dict[str, Any]:
     issues: dict[str, list[str]] = {
         "missing_images": [],
         "missing_voiceover": [],
         "invalid_timeline_references": [],
         "empty_media_files": [],
         "stale_scene_media": [],
+    }
+    report: dict[str, Any] = {
+        "timeline_scene_count_expected": 0,
+        "timeline_scene_count_actual": 0,
+        "timeline_metadata_mismatches": [],
     }
     scenes = load_scenes(project_id)
     pdir = project_dir(project_id)
@@ -172,20 +185,89 @@ def validate_project_assets(project_id: str) -> dict[str, list[str]]:
         try:
             timeline = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
             scene_count = len(scenes)
+            report["timeline_scene_count_expected"] = scene_count
+            report["timeline_scene_count_actual"] = len(timeline.scenes)
+            if scene_count != len(timeline.scenes):
+                issues["invalid_timeline_references"].append(
+                    f"timeline_scene_count_mismatch expected={scene_count} actual={len(timeline.scenes)}"
+                )
             for idx, tscene in enumerate(timeline.scenes, start=1):
                 media = Path(tscene.image_path)
                 if not str(tscene.id).startswith("s"):
                     issues["invalid_timeline_references"].append(f"scene {idx}: invalid id {tscene.id}")
                 if idx > scene_count:
                     issues["invalid_timeline_references"].append(f"timeline scene {idx} has no source scene")
+                    continue
+                expected_media = _expected_timeline_media_path(project_id, scenes[idx - 1])
+                if str(tscene.image_path) != str(expected_media):
+                    issues["invalid_timeline_references"].append(
+                        f"scene {idx}: stale media reference expected={expected_media} actual={tscene.image_path}"
+                    )
                 if not str(tscene.image_path).startswith("storage://") and (not media.exists()):
                     issues["invalid_timeline_references"].append(f"scene {idx}: missing media {tscene.image_path}")
                 elif media.exists() and media.stat().st_size <= 0:
                     issues["empty_media_files"].append(str(media))
+
+            settings = expected_settings or {}
+            expected_aspect_ratio = str(settings.get("aspect_ratio", "") or "").strip()
+            expected_subtitles = settings.get("subtitles_enabled", None)
+            expected_effects_style = str(settings.get("effects_style", "") or "").strip()
+            expected_music_enabled = settings.get("music_enabled", None)
+            expected_music_track = str(settings.get("music_track", "") or "").strip()
+            expected_voiceover_enabled = settings.get("voiceover_enabled", None)
+
+            if expected_aspect_ratio and str(timeline.meta.aspect_ratio) != expected_aspect_ratio:
+                mismatch = (
+                    f"timeline_metadata_mismatch aspect_ratio expected={expected_aspect_ratio} "
+                    f"actual={timeline.meta.aspect_ratio}"
+                )
+                report["timeline_metadata_mismatches"].append(mismatch)
+                issues["invalid_timeline_references"].append(mismatch)
+            if expected_subtitles is not None and bool(timeline.meta.burn_captions) != bool(expected_subtitles):
+                mismatch = (
+                    f"timeline_metadata_mismatch subtitles_enabled expected={bool(expected_subtitles)} "
+                    f"actual={bool(timeline.meta.burn_captions)}"
+                )
+                report["timeline_metadata_mismatches"].append(mismatch)
+                issues["invalid_timeline_references"].append(mismatch)
+            if expected_effects_style and str(timeline.meta.video_effects_style) != expected_effects_style:
+                mismatch = (
+                    f"timeline_metadata_mismatch effects_style expected={expected_effects_style} "
+                    f"actual={timeline.meta.video_effects_style}"
+                )
+                report["timeline_metadata_mismatches"].append(mismatch)
+                issues["invalid_timeline_references"].append(mismatch)
+            if expected_music_enabled is not None and bool(timeline.meta.include_music) != bool(expected_music_enabled):
+                mismatch = (
+                    f"timeline_metadata_mismatch music_enabled expected={bool(expected_music_enabled)} "
+                    f"actual={bool(timeline.meta.include_music)}"
+                )
+                report["timeline_metadata_mismatches"].append(mismatch)
+                issues["invalid_timeline_references"].append(mismatch)
+            if bool(expected_music_enabled):
+                actual_music_path = str(timeline.meta.music.path if timeline.meta.music else "")
+                if expected_music_track and actual_music_path != expected_music_track:
+                    mismatch = (
+                        f"timeline_metadata_mismatch music_track expected={expected_music_track} actual={actual_music_path}"
+                    )
+                    report["timeline_metadata_mismatches"].append(mismatch)
+                    issues["invalid_timeline_references"].append(mismatch)
+            if bool(expected_voiceover_enabled):
+                voice_path = timeline.meta.voiceover.path if timeline.meta.voiceover else ""
+                if not voice_path or not Path(voice_path).exists():
+                    issues["invalid_timeline_references"].append(
+                        f"timeline_voiceover_missing enabled={expected_voiceover_enabled} path={voice_path or '<missing>'}"
+                    )
+            if bool(expected_music_enabled):
+                music_path = timeline.meta.music.path if timeline.meta.music else ""
+                if not music_path or not Path(music_path).exists():
+                    issues["invalid_timeline_references"].append(
+                        f"timeline_music_missing enabled={expected_music_enabled} path={music_path or '<missing>'}"
+                    )
         except Exception as exc:  # noqa: BLE001
             issues["invalid_timeline_references"].append(f"timeline parse error: {exc}")
 
-    return issues
+    return {**issues, **report}
 
 
 def regenerate_missing_scene_assets(project_id: str) -> dict[str, list[int]]:
@@ -214,10 +296,10 @@ def rebuild_timeline_from_disk(project_id: str) -> Path:
     return Path(str(result.outputs.get("timeline_path", "")))
 
 
-def preflight_report(project_id: str) -> dict[str, Any]:
+def preflight_report(project_id: str, expected_settings: dict[str, Any] | None = None) -> dict[str, Any]:
     sync_scene_asset_metadata(project_id)
-    issues = validate_project_assets(project_id)
-    total = sum(len(v) for v in issues.values())
+    issues = validate_project_assets(project_id, expected_settings=expected_settings)
+    total = sum(len(v) for k, v in issues.items() if isinstance(v, list))
     actionable: list[str] = []
     if issues["missing_images"]:
         actionable.append("Generate images for listed scenes or restore canonical sNN.png files.")
@@ -229,4 +311,11 @@ def preflight_report(project_id: str) -> dict[str, Any]:
         actionable.append("Regenerate or replace empty media files.")
     if issues["stale_scene_media"]:
         actionable.append("Run 'Regenerate Missing Scene Assets' to re-canonicalize stale paths.")
-    return {"ok": total == 0, "issue_count": total, "issues": issues, "actions": actionable}
+    return {
+        "ok": total == 0,
+        "issue_count": total,
+        "issues": issues,
+        "actions": actionable,
+        "timeline_scene_count_expected": int(issues.get("timeline_scene_count_expected", 0) or 0),
+        "timeline_scene_count_actual": int(issues.get("timeline_scene_count_actual", 0) or 0),
+    }

@@ -84,3 +84,39 @@ def test_regenerate_missing_and_preflight_find_actionable_issues(tmp_path, monke
     assert report["issues"]["missing_voiceover"]
     assert report["issues"]["invalid_timeline_references"]
     assert report["actions"]
+
+
+def test_preflight_reports_scene_count_and_metadata_mismatch(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "preflight-mismatch"
+    scene = Scene(index=1, title="One", script_excerpt="Excerpt", visual_intent="Intent", image_prompt="Prompt")
+    save_scenes(project_id, [scene])
+
+    pdir = Path("data/projects") / project_id
+    (pdir / "assets/images").mkdir(parents=True, exist_ok=True)
+    (pdir / "assets/images/s01.png").write_bytes(b"png")
+    (pdir / "assets/images/s02.png").write_bytes(b"png")
+
+    timeline = Timeline(
+        meta=Meta(project_id=project_id, title="t", aspect_ratio="16:9", burn_captions=True, include_music=False),
+        scenes=[
+            TimelineScene(id="s01", image_path=str(pdir / "assets/images/s01.png"), start=0, duration=2),
+            TimelineScene(id="s02", image_path=str(pdir / "assets/images/s02.png"), start=2, duration=2),
+        ],
+    )
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "timeline.json").write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+
+    report = preflight_report(
+        project_id,
+        expected_settings={
+            "aspect_ratio": "9:16",
+            "subtitles_enabled": False,
+            "music_enabled": True,
+            "effects_style": "Ken Burns - Standard",
+        },
+    )
+    assert report["timeline_scene_count_expected"] == 1
+    assert report["timeline_scene_count_actual"] == 2
+    assert any("timeline_scene_count_mismatch" in item for item in report["issues"]["invalid_timeline_references"])
+    assert any("timeline_metadata_mismatch" in item for item in report["issues"]["invalid_timeline_references"])
