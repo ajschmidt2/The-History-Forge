@@ -7,6 +7,7 @@ from src.workflow.assets import (
     canonical_scene_video_path,
     preflight_report,
     regenerate_missing_scene_assets,
+    repair_timeline_media_references,
     resolve_music_track_for_project,
     sync_scene_asset_metadata,
 )
@@ -178,3 +179,48 @@ def test_preflight_music_metadata_uses_resolved_track_path(tmp_path, monkeypatch
     assert report["music_track_exists"] is True
     assert report.get("timeline_music_attached") is True
     assert not any("timeline_metadata_mismatch music_track" in item for item in report["issues"]["invalid_timeline_references"])
+
+
+def test_preflight_does_not_report_scene_count_mismatch_when_equal(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "preflight-equal-count"
+    scene = Scene(index=1, title="One", script_excerpt="Excerpt", visual_intent="Intent", image_prompt="Prompt")
+    save_scenes(project_id, [scene])
+
+    pdir = Path("data/projects") / project_id
+    (pdir / "assets/images").mkdir(parents=True, exist_ok=True)
+    (pdir / "assets/images/s01.png").write_bytes(b"png")
+
+    timeline = Timeline(
+        meta=Meta(project_id=project_id, title="t"),
+        scenes=[TimelineScene(id="s01", image_path=str(pdir / "assets/images/s01.png"), start=0, duration=2)],
+    )
+    (pdir / "timeline.json").write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+
+    report = preflight_report(project_id)
+    assert not any("timeline_scene_count_mismatch" in item for item in report["issues"]["invalid_timeline_references"])
+
+
+def test_repair_timeline_media_references_restores_canonical_scene_image(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "repair-media-refs"
+    scene = Scene(index=1, title="One", script_excerpt="Excerpt", visual_intent="Intent", image_prompt="Prompt")
+    save_scenes(project_id, [scene])
+
+    pdir = Path("data/projects") / project_id
+    images_dir = pdir / "assets/images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    alt = images_dir / "scene01.png"
+    alt.write_bytes(b"png")
+
+    timeline = Timeline(
+        meta=Meta(project_id=project_id, title="t"),
+        scenes=[TimelineScene(id="s01", image_path=str(images_dir / "s01.png"), start=0, duration=2)],
+    )
+
+    result = repair_timeline_media_references(project_id, timeline, load_scenes(project_id))
+
+    assert result["changed"] is True
+    assert result["repaired_scene_indexes"] == [1]
+    assert (images_dir / "s01.png").exists()
+    assert timeline.scenes[0].image_path.endswith("assets/images/s01.png")

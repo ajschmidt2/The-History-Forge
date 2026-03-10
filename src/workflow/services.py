@@ -1183,7 +1183,12 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
                 update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
                 return StepResult(project_id, "render", StepStatus.FAILED, message=msg, outputs={"preflight": preflight})
             timeline_path = Path(str(timeline_result.outputs.get("timeline_path", "")))
-            preflight = preflight_report(project_id, expected_settings=expected_settings) | {
+            if not timeline_path.exists():
+                raise RuntimeError("Timeline rebuild reported success but timeline.json is missing.")
+            # Reload rebuilt timeline from disk and rerun preflight against fresh state.
+            _ = Timeline.model_validate_json(timeline_path.read_text(encoding="utf-8"))
+            preflight_retry = preflight_report(project_id, expected_settings=expected_settings)
+            preflight = preflight_retry | {
                 "timeline_rebuild_attempted": True,
                 "timeline_rebuild_succeeded": True,
                 "render_preflight_retry": True,
@@ -1273,10 +1278,19 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     timeline.meta.include_music = bool(resolved_settings.music_enabled)
     timeline.meta.video_effects_style = resolved_settings.effects_style
     if timeline.meta.include_music:
+        music_volume_db = -6.0
+        try:
+            ratio = max(0.0, float(cfg.music_volume_relative_to_voiceover))
+            if ratio > 0:
+                import math
+                music_volume_db = 20.0 * math.log10(ratio)
+        except Exception:
+            music_volume_db = -6.0
         if not timeline.meta.music:
             from src.video.timeline_schema import Music, Ducking
-            timeline.meta.music = Music(path=resolved_music_track, volume_db=-6.0, ducking=Ducking(enabled=False))
+            timeline.meta.music = Music(path=resolved_music_track, volume_db=music_volume_db, ducking=Ducking(enabled=False))
         timeline.meta.music.path = resolved_music_track
+        timeline.meta.music.volume_db = music_volume_db
     else:
         timeline.meta.music = None
 
