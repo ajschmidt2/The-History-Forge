@@ -21,6 +21,7 @@ from src.workflow import PIPELINE_STEPS, reset_downstream_steps
 from src.workflow.assets import canonical_scene_image_path, preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets
 from src.workflow.models import StepStatus
 from src.workflow.project_io import load_project_payload, load_scenes, project_dir, save_project_payload, save_scenes
+from src.video.render_settings import normalize_video_effects_style, render_resolution_for_aspect_ratio
 from src.workflow.services import (
     FullWorkflowOptions,
     PipelineOptions,
@@ -300,6 +301,7 @@ def tab_automation(project_id: str) -> None:
 
     payload_enable_effects = payload.get("enable_video_effects")
     default_enable_effects = bool(payload_enable_effects) if payload_enable_effects is not None else True
+    default_effect_style = normalize_video_effects_style(payload.get("video_effects_style", "Ken Burns - Standard"), enable_motion=default_enable_effects)
     payload_enable_subtitles = payload.get("enable_subtitles", payload.get("automation_include_captions"))
     default_enable_subtitles = bool(payload_enable_subtitles) if payload_enable_subtitles is not None else (selected_mode == "topic_to_short_video")
     payload_enable_music = payload.get("enable_music", payload.get("include_music"))
@@ -311,6 +313,7 @@ def tab_automation(project_id: str) -> None:
         visual_style = st.selectbox("Visual Style", options=list(VISUAL_STYLE_OPTIONS), index=list(VISUAL_STYLE_OPTIONS).index(current_style))
         scene_count = st.number_input("Number of Scenes", min_value=1, max_value=75, value=default_scene_count, step=1)
         enable_video_effects = st.toggle("Video Effects", value=default_enable_effects)
+        video_effects_style = st.selectbox("Video Effects Style", options=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"], index=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"].index(default_effect_style), disabled=not enable_video_effects)
     with col_settings_2:
         enable_subtitles = st.toggle("Subtitles", value=default_enable_subtitles)
         enable_music = st.toggle("Background Music", value=default_enable_music)
@@ -387,6 +390,10 @@ def tab_automation(project_id: str) -> None:
             key="automation_openai_tts_instructions",
         )
 
+    resolved_output_size = render_resolution_for_aspect_ratio(aspect_ratio)
+    resolved_effect_style = normalize_video_effects_style(video_effects_style, enable_motion=enable_video_effects)
+    st.caption(f"Pre-run summary · aspect_ratio={aspect_ratio} output_size={resolved_output_size} subtitles={enable_subtitles} effects={resolved_effect_style} music_enabled={enable_music} music_track={selected_music_track or "none"}")
+
     if st.button("Save automation settings", width="stretch"):
         safe_scene_count = max(1, min(75, int(scene_count)))
         safe_music_volume = min(1.0, max(0.0, float(music_volume_relative_to_voiceover)))
@@ -397,6 +404,7 @@ def tab_automation(project_id: str) -> None:
             "scene_count": safe_scene_count,
             "max_scenes": safe_scene_count,
             "enable_video_effects": bool(enable_video_effects),
+            "video_effects_style": normalize_video_effects_style(video_effects_style, enable_motion=enable_video_effects),
             "enable_music": bool(enable_music),
             "include_music": bool(enable_music),
             "selected_music_track": selected_music_track if enable_music else "",
@@ -433,6 +441,7 @@ def tab_automation(project_id: str) -> None:
         aspect_ratio=aspect_ratio,
         visual_style=visual_style,
         enable_video_effects=enable_video_effects,
+        video_effects_style=normalize_video_effects_style(video_effects_style, enable_motion=enable_video_effects),
         selected_music_track=selected_music_track,
         music_volume_relative_to_voiceover=min(1.0, max(0.0, float(music_volume_relative_to_voiceover))),
         voice_id=selected_voice_id,
@@ -465,7 +474,7 @@ def tab_automation(project_id: str) -> None:
         if enable_music and not selected_music_track:
             st.error("Background music is enabled but no track is selected.")
             return
-        st.info(f"Settings Summary · Mode={selected_mode} | Topic={topic_input.strip() or 'n/a'} | Aspect={aspect_ratio} | Style={visual_style} | Scenes={int(scene_count)} | Voice={selected_provider} | Subtitles={enable_subtitles} | Effects={enable_video_effects} | Music={enable_music}")
+        st.info(f"Settings Summary · Mode={selected_mode} | Topic={topic_input.strip() or 'n/a'} | Aspect={aspect_ratio} ({resolved_output_size}) | Style={visual_style} | Scenes={int(scene_count)} | Voice={selected_provider} | Subtitles={enable_subtitles} | Effects={normalize_video_effects_style(video_effects_style, enable_motion=enable_video_effects)} | Music={enable_music} | Track={selected_music_track or 'none'}")
         if generate_voiceover and selected_provider == TTS_PROVIDER_ELEVENLABS and not resolved_voice_id:
             st.error("Voice ID is required for ElevenLabs voiceover.")
             return
@@ -554,6 +563,7 @@ def tab_automation(project_id: str) -> None:
     report_payload = _load_json(render_report)
     if report_payload:
         st.json(report_payload)
+        st.caption(f"Post-run summary · final={report_payload.get('output_path', str(final_render))} | output_size={report_payload.get('resolved_output_size', 'unknown')} | subtitles={report_payload.get('subtitles_enabled', 'unknown')} (filter={report_payload.get('subtitle_filter_applied', 'unknown')}) | effects={report_payload.get('effect_style', 'unknown')} | music={report_payload.get('music_track', 'none')}")
     else:
         st.info("No render report found.")
 

@@ -80,6 +80,7 @@ class Meta(BaseModel):
     include_voiceover: bool = True
     include_music: bool = True
     enable_motion: bool = True
+    video_effects_style: str = "Ken Burns - Standard"
     crossfade: bool = False
     crossfade_duration: float = 0.3
     transition_types: List[str] = Field(default_factory=list)
@@ -94,6 +95,13 @@ class Meta(BaseModel):
     def validate_aspect_ratio(cls, value: str) -> str:
         if value not in {"9:16", "16:9"}:
             raise ValueError("aspect_ratio must be '9:16' or '16:9'")
+        return value
+
+    @validator("video_effects_style")
+    def validate_video_effects_style(cls, value: str) -> str:
+        allowed = {"Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"}
+        if value not in allowed:
+            raise ValueError("video_effects_style is invalid")
         return value
 
 

@@ -637,8 +637,10 @@ def render_video_from_timeline(
 
             srt_path = output_path.with_name("captions.srt")
             ass_path = output_path.with_name("captions.ass")
-            write_srt_file(srt_path, timeline)
-            write_ass_file(ass_path, timeline)
+            subtitle_filter_applied = False
+            if timeline.meta.burn_captions:
+                write_srt_file(srt_path, timeline)
+                write_ass_file(ass_path, timeline)
 
             if timeline.meta.include_voiceover:
                 if not timeline.meta.voiceover or not timeline.meta.voiceover.path:
@@ -694,6 +696,7 @@ def render_video_from_timeline(
                     vf_filters.append(f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}")
                 if timeline.meta.burn_captions and ass_path.exists():
                     vf_filters.append(_subtitle_filter(ass_path))
+                    subtitle_filter_applied = True
                 if vf_filters:
                     mux_cmd.extend(["-vf", ",".join(vf_filters)])
                 mux_cmd.extend(
@@ -725,6 +728,7 @@ def render_video_from_timeline(
                 cmd = ["ffmpeg", "-y", "-i", str(stitched_path)]
                 if timeline.meta.burn_captions and ass_path.exists():
                     cmd.extend(["-vf", _subtitle_filter(ass_path)])
+                    subtitle_filter_applied = True
                 cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-movflags", "+faststart", str(tmp_output_path)])
                 ffmpeg_commands.append(cmd)
                 run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir, cwd=project_root)
@@ -760,6 +764,15 @@ def render_video_from_timeline(
                     "voiceover": _file_stat(meta.voiceover.path if meta.voiceover else None),
                     "music": _file_stat(meta.music.path if meta.music else None),
                 },
+                "requested_aspect_ratio": meta.aspect_ratio,
+                "resolved_output_size": meta.resolution,
+                "subtitles_enabled": bool(meta.burn_captions),
+                "subtitle_filter_applied": bool(locals().get("subtitle_filter_applied", False)),
+                "effect_style": str(getattr(meta, "video_effects_style", "Ken Burns - Standard")),
+                "music_enabled": bool(meta.include_music),
+                "music_track": str(meta.music.path if meta.music and meta.music.path else ""),
+                "music_mix_applied": bool(meta.include_music),
+                "output_path": str(output_path),
                 "scene_cache": {
                     "directory": str(cache_dir),
                     "hits": cache_hits,

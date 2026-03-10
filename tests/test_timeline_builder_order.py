@@ -54,3 +54,23 @@ def test_build_default_timeline_persists_transition_types() -> None:
     )
 
     assert timeline.meta.transition_types == ["fade", "wipeleft"]
+
+
+def test_build_default_timeline_uses_shared_automation_resolution_and_effect_style() -> None:
+    images = [Path("s01.png"), Path("s02.png")]
+
+    timeline = build_default_timeline(
+        project_id="p1",
+        title="t",
+        images=images,
+        voiceover_path=None,
+        include_voiceover=False,
+        include_music=False,
+        aspect_ratio="9:16",
+        video_effects_style="Ken Burns - Dramatic",
+        enable_motion=True,
+    )
+
+    assert timeline.meta.resolution == "720x1280"
+    assert timeline.meta.video_effects_style == "Ken Burns - Dramatic"
+    assert timeline.scenes[0].motion is not None

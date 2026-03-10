@@ -479,3 +479,13 @@ Short-form script generation is tuned for history voiceover:
 6. Review final output in `data/projects/<project_id>/renders/final.mp4`.
 
 Automation still stops at render and does not auto-upload to YouTube.
+
+## Automation render settings enforcement
+
+Automation now enforces selected render settings all the way through timeline sync and final FFmpeg render.
+
+- **Aspect ratio enforcement:** shared dimensions are used everywhere (`16:9 -> 1280x720`, `9:16 -> 720x1280`) and logged in workflow/render reporting.
+- **Subtitles toggle enforcement:** subtitles are only burned when the current run has subtitles enabled; subtitle filters are not attached when disabled.
+- **Video effects style options:** Automation now supports `Off`, `Ken Burns - Standard`, `Ken Burns - Strong`, and `Ken Burns - Dramatic` with stronger, aspect-aware motion presets.
+- **Background music enforcement:** when music is enabled, a selected track is required and explicitly mixed with voiceover (default target remains 50% of voiceover level).
+- **Settings-sensitive rebuilds:** timeline/render artifacts are invalidated and regenerated when key Automation settings change (aspect ratio, subtitles, effects style, music on/off, selected music track, mix level).
