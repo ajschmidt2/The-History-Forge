@@ -306,7 +306,7 @@ def tab_automation(project_id: str) -> None:
     default_enable_subtitles = bool(payload_enable_subtitles) if payload_enable_subtitles is not None else (selected_mode == "topic_to_short_video")
     payload_enable_music = payload.get("enable_music", payload.get("include_music"))
     default_enable_music = bool(payload_enable_music) if payload_enable_music is not None else False
-    default_music_volume = min(1.0, max(0.0, _coerce_float(payload.get("music_volume_relative_to_voiceover", 0.5), 0.5)))
+    default_music_volume = min(1.0, max(0.0, _coerce_float(payload.get("music_volume_relative_to_voiceover", 0.25), 0.25)))
 
     with col_settings_1:
         aspect_ratio = st.selectbox("Aspect Ratio", options=["16:9", "9:16"], index=0 if default_ratio == "16:9" else 1)
@@ -314,11 +314,39 @@ def tab_automation(project_id: str) -> None:
         scene_count = st.number_input("Number of Scenes", min_value=1, max_value=75, value=default_scene_count, step=1)
         enable_video_effects = st.toggle("Video Effects", value=default_enable_effects)
         video_effects_style = st.selectbox("Video Effects Style", options=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"], index=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"].index(default_effect_style), disabled=not enable_video_effects)
+    TRANSITION_LABEL_MAP: dict[str, str] = {
+        "Random": "random",
+        "Fade": "fade",
+        "Fade to Black": "fadeblack",
+        "Fade to White": "fadewhite",
+        "Wipe Left": "wipeleft",
+        "Wipe Right": "wiperight",
+        "Slide Left": "slideleft",
+        "Slide Right": "slideright",
+        "Smooth Left": "smoothleft",
+        "Smooth Right": "smoothright",
+        "Circle Open": "circleopen",
+        "Circle Close": "circleclose",
+        "Distance": "distance",
+    }
+    TRANSITION_VALUE_TO_LABEL = {v: k for k, v in TRANSITION_LABEL_MAP.items()}
+    default_transition_type = str(payload.get("scene_transition_type", "fade") or "fade").strip().lower()
+    if default_transition_type not in TRANSITION_LABEL_MAP.values():
+        default_transition_type = "fade"
+    default_transition_label = TRANSITION_VALUE_TO_LABEL.get(default_transition_type, "Fade")
+
     with col_settings_2:
         enable_subtitles = st.toggle("Subtitles", value=default_enable_subtitles)
         enable_music = st.toggle("Background Music", value=default_enable_music)
         generate_voiceover = st.toggle("Generate voiceover", value=bool(payload.get("automation_generate_voiceover", True)))
         overwrite_existing = st.toggle("Overwrite existing assets", value=bool(payload.get("automation_overwrite_existing", False)))
+        selected_transition_label = st.selectbox(
+            "Scene Transition",
+            options=list(TRANSITION_LABEL_MAP.keys()),
+            index=list(TRANSITION_LABEL_MAP.keys()).index(default_transition_label),
+            help="Transition effect between scenes. 'Random' picks a different transition for each scene.",
+        )
+        selected_transition_type = TRANSITION_LABEL_MAP[selected_transition_label]
 
     combined_music_choices: list[tuple[str, str]] = []
     for track in project_music_tracks:
@@ -392,7 +420,7 @@ def tab_automation(project_id: str) -> None:
 
     resolved_output_size = render_resolution_for_aspect_ratio(aspect_ratio)
     resolved_effect_style = normalize_video_effects_style(video_effects_style, enable_motion=enable_video_effects)
-    st.caption(f"Pre-run summary · aspect_ratio={aspect_ratio} output_size={resolved_output_size} subtitles={enable_subtitles} effects={resolved_effect_style} music_enabled={enable_music} music_track={selected_music_track or "none"}")
+    st.caption(f"Pre-run summary · aspect_ratio={aspect_ratio} output_size={resolved_output_size} subtitles={enable_subtitles} effects={resolved_effect_style} transition={selected_transition_type} music_enabled={enable_music} music_track={selected_music_track or 'none'}")
 
     def _persist_current_settings() -> None:
         """Save the current widget values to the project payload."""
@@ -413,6 +441,7 @@ def tab_automation(project_id: str) -> None:
             "automation_generate_voiceover": bool(generate_voiceover),
             "automation_overwrite_existing": bool(overwrite_existing),
             "music_volume_relative_to_voiceover": safe_music_volume,
+            "scene_transition_type": selected_transition_type,
             "tts_provider": selected_provider,
             "voice_id": selected_voice_id,
             "elevenlabs_voice_id": selected_voice_id,
@@ -448,6 +477,7 @@ def tab_automation(project_id: str) -> None:
         video_effects_style=normalize_video_effects_style(video_effects_style, enable_motion=enable_video_effects),
         selected_music_track=selected_music_track,
         music_volume_relative_to_voiceover=min(1.0, max(0.0, float(music_volume_relative_to_voiceover))),
+        scene_transition_type=selected_transition_type,
         voice_id=selected_voice_id,
         tts_provider=selected_provider,
         elevenlabs_voice_id=selected_voice_id,
