@@ -394,7 +394,8 @@ def tab_automation(project_id: str) -> None:
     resolved_effect_style = normalize_video_effects_style(video_effects_style, enable_motion=enable_video_effects)
     st.caption(f"Pre-run summary · aspect_ratio={aspect_ratio} output_size={resolved_output_size} subtitles={enable_subtitles} effects={resolved_effect_style} music_enabled={enable_music} music_track={selected_music_track or "none"}")
 
-    if st.button("Save automation settings", width="stretch"):
+    def _persist_current_settings() -> None:
+        """Save the current widget values to the project payload."""
         safe_scene_count = max(1, min(75, int(scene_count)))
         safe_music_volume = min(1.0, max(0.0, float(music_volume_relative_to_voiceover)))
         payload.update({
@@ -424,6 +425,9 @@ def tab_automation(project_id: str) -> None:
             "script_profile": "youtube_short_60s" if selected_mode == "topic_to_short_video" else str(payload.get("script_profile", "") or ""),
         })
         save_project_payload(project_id, payload)
+
+    if st.button("Save automation settings", width="stretch"):
+        _persist_current_settings()
         st.success("Automation settings saved.")
 
     if generate_voiceover and selected_provider == TTS_PROVIDER_ELEVENLABS and not resolved_voice_id:
@@ -478,6 +482,7 @@ def tab_automation(project_id: str) -> None:
         if generate_voiceover and selected_provider == TTS_PROVIDER_ELEVENLABS and not resolved_voice_id:
             st.error("Voice ID is required for ElevenLabs voiceover.")
             return
+        _persist_current_settings()
         result = run_full_workflow(
             project_id,
             FullWorkflowOptions(
@@ -502,6 +507,7 @@ def tab_automation(project_id: str) -> None:
             st.rerun()
 
     if c_resume.button("Resume Missing Steps", width="stretch"):
+        _persist_current_settings()
         result = run_full_workflow(project_id, FullWorkflowOptions(mode="resume_missing", pipeline=pipeline_options, progress_callback=_progress_callback))
         _render_workflow_progress(project_id, selected_mode, progress_holder, log_holder, error_holder, output_holder)
         if result.failed_step:
@@ -510,6 +516,7 @@ def tab_automation(project_id: str) -> None:
             st.success("Resume completed.")
 
     if c_timeline.button("Rebuild Timeline", width="stretch"):
+        _persist_current_settings()
         result = run_sync_timeline(project_id, pipeline_options)
         if result.status == StepStatus.COMPLETED:
             st.success("Timeline rebuilt.")
@@ -528,6 +535,7 @@ def tab_automation(project_id: str) -> None:
             st.error(f"Timeline rebuild failed: {exc}")
 
     if c_render.button("Render Final Video", width="stretch"):
+        _persist_current_settings()
         result = run_render_video(project_id, pipeline_options)
         if result.status == StepStatus.COMPLETED:
             st.success("Render completed.")
