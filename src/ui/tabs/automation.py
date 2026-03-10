@@ -19,7 +19,13 @@ from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import DEFAULT_VOICE_ID
 from src.workflow.models import PIPELINE_STEPS
 from src.workflow.state import reset_downstream_steps
-from src.workflow.assets import canonical_scene_image_path, preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets
+from src.workflow.assets import (
+    canonical_scene_image_path,
+    preflight_report,
+    rebuild_timeline_from_disk,
+    regenerate_missing_scene_assets,
+    resolve_music_track_for_project,
+)
 from src.workflow.models import StepStatus
 from src.workflow.project_io import load_project_payload, load_scenes, project_dir, save_project_payload, save_scenes
 from src.video.render_settings import normalize_video_effects_style, render_resolution_for_aspect_ratio
@@ -589,6 +595,19 @@ def tab_automation(project_id: str) -> None:
 
     st.markdown("#### Render Preflight")
     preflight = preflight_report(project_id)
+    payload = load_project_payload(project_id)
+    selected_music_track = str(payload.get("selected_music_track", "") or "")
+    music_resolution = resolve_music_track_for_project(project_id, selected_music_track)
+    timeline_music_path = ""
+    timeline_includes_music = False
+    timeline_path = project_dir(project_id) / "timeline.json"
+    if timeline_path.exists():
+        timeline_payload = _load_json(timeline_path)
+        if timeline_payload:
+            meta = timeline_payload.get("meta", {}) if isinstance(timeline_payload.get("meta"), dict) else {}
+            timeline_includes_music = bool(meta.get("include_music", False))
+            music_payload = meta.get("music", {}) if isinstance(meta.get("music"), dict) else {}
+            timeline_music_path = str(music_payload.get("path", "") or "")
     if preflight["ok"]:
         st.success("Preflight passed. Timeline/media references look healthy.")
     else:
@@ -607,6 +626,15 @@ def tab_automation(project_id: str) -> None:
                 f"attempted={preflight.get('timeline_rebuild_attempted', False)} "
                 f"succeeded={preflight.get('timeline_rebuild_succeeded', False)}"
             )
+    st.caption(
+        "Music diagnostics · "
+        f"selected={selected_music_track or 'none'} · "
+        f"resolved={music_resolution.get('resolved_path', '') or 'none'} · "
+        f"exists={music_resolution.get('file_exists', False)} · "
+        f"copied_to_project={music_resolution.get('copied_to_project', False)} · "
+        f"timeline_include_music={timeline_includes_music} · "
+        f"timeline_music_path={timeline_music_path or 'none'}"
+    )
 
     st.markdown("#### Logs")
     st.caption("Recent workflow log lines")
