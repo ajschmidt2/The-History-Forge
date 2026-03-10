@@ -10,7 +10,8 @@ from src.storage import record_asset
 import src.supabase_storage as _sb_store
 from src.ui.state import active_project_id, scenes_ready
 from src.ui.timeline_sync import sync_timeline_for_project
-from src.workflow import PipelineOptions, StepStatus, run_generate_images
+from src.workflow.models import StepStatus
+from src.workflow.services import PipelineOptions, run_generate_images
 from src.workflow.project_io import load_scenes
 
 

@@ -17,7 +17,8 @@ from src.audio import (
 )
 from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import DEFAULT_VOICE_ID
-from src.workflow import PIPELINE_STEPS, reset_downstream_steps
+from src.workflow.models import PIPELINE_STEPS
+from src.workflow.state import reset_downstream_steps
 from src.workflow.assets import canonical_scene_image_path, preflight_report, rebuild_timeline_from_disk, regenerate_missing_scene_assets
 from src.workflow.models import StepStatus
 from src.workflow.project_io import load_project_payload, load_scenes, project_dir, save_project_payload, save_scenes

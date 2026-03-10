@@ -10,7 +10,8 @@ from utils import Scene
 from src.ui.state import active_project_id, clear_downstream, scenes_ready, script_ready
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.video.utils import get_media_duration
-from src.workflow import PipelineOptions, StepStatus, run_split_scenes
+from src.workflow.models import StepStatus
+from src.workflow.services import PipelineOptions, run_split_scenes
 from src.workflow.project_io import load_scenes
 import src.supabase_storage as _sb_store
 
