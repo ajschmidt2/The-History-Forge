@@ -119,11 +119,12 @@ def ken_burns(
         direction = "zoom-in-center"
 
     zf = max(1.001, float(zoom_factor))
-    # Render zoompan at 3× the target FPS internally so position is computed at
-    # triple the resolution, then downsample with the fps filter.  This triples
-    # the number of intermediate steps (a 200% smoothness increase) and
-    # eliminates the sub-pixel jitter that plagues low-fps zoompan renders.
-    internal_fps = fps * 3
+    # Render zoompan at 8× the target FPS internally so position is computed at
+    # very fine sub-frame resolution, then temporal-blend down to the target
+    # rate with minterpolate (mi_mode=blend).  Blend mode averages all 8
+    # internal frames into each output frame instead of picking the nearest one,
+    # which eliminates the sub-pixel timing jitter that causes visible stutter.
+    internal_fps = fps * 8
     total_frames = max(2, int(duration * internal_fps))
     step = (zf - 1.0) / total_frames
 
@@ -162,12 +163,14 @@ def ken_burns(
     )
     # Scale image to exact output size first so zoompan pixel coords are
     # predictable; crop removes any letterbox/pillarbox from aspect mismatch.
-    # fps={fps} downsamples from the 3× internal rate back to the target rate.
+    # minterpolate=blend downsamples from the 8× internal rate by averaging all
+    # 8 sub-frames into each output frame (temporal anti-aliasing), eliminating
+    # the sub-pixel timing jitter that would remain with a plain fps drop filter.
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},"
         f"{zoompan},"
-        f"fps={fps},"
+        f"minterpolate=fps={fps}:mi_mode=blend,"
         f"format=yuv420p"
     )
 
@@ -441,8 +444,9 @@ def map_flyover(
         return False
 
     zf = max(1.001, float(zoom_factor))
-    # Render at 3× FPS internally for 200% smoother motion (see ken_burns).
-    internal_fps = fps * 3
+    # Render at 8× FPS internally and blend-downsample for maximum smoothness
+    # (same strategy as ken_burns — see that function for full explanation).
+    internal_fps = fps * 8
     total_frames = max(2, int(duration * internal_fps))
 
     sx, sy = float(start_coords[0]), float(start_coords[1])
@@ -479,7 +483,7 @@ def map_flyover(
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},"
         f"{zoompan},"
-        f"fps={fps},"
+        f"minterpolate=fps={fps}:mi_mode=blend,"
         f"format=yuv420p"
     )
 
