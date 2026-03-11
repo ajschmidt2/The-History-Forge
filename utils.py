@@ -133,6 +133,16 @@ class Scene:
     video_muted: bool = True
     video_volume: float = 0.0
 
+    # B-roll fields – free stock video assigned to this scene
+    broll_query: str = ""
+    broll_provider: str = ""
+    broll_source_url: str = ""
+    broll_page_url: str = ""
+    broll_local_path: str = ""
+    broll_duration_sec: float = 0.0
+    broll_orientation: str = ""
+    use_broll: bool = False
+
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["image_bytes"] = bool(self.image_bytes)

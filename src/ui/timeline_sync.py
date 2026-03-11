@@ -93,6 +93,16 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
         idx = getattr(scene, "index", None)
         if not isinstance(idx, int) or idx <= 0:
             continue
+
+        # B-roll has the highest priority if enabled and the file exists locally.
+        if bool(getattr(scene, "use_broll", False)):
+            broll_local = str(getattr(scene, "broll_local_path", "") or "").strip()
+            if broll_local:
+                broll_path = Path(broll_local)
+                if broll_path.exists():
+                    media_files.append(broll_path.resolve())
+                    continue
+
         video_path = str(getattr(scene, "video_path", "") or "").strip()
         resolved_video_path = _resolve_scene_video_path(project_path, video_path)
         if resolved_video_path is not None:
@@ -135,25 +145,50 @@ def _apply_scene_media_assignments(
         timeline_scene = timeline.scenes[target_pos]
         scene_id = f"s{idx:02d}"
 
-        # Effects clips (assigned via the Video Effects tab) take highest priority.
-        # They replace the original scene image/video in the compiled media list
-        # but are not stored on the session_scene object, so they must be passed in
-        # explicitly to avoid being overwritten with a fallback image path.
-        if effects_clips_by_index and idx in effects_clips_by_index:
+        # -------------------------------------------------------------------
+        # Scene media priority (highest → lowest):
+        #   1. Manually assigned B-roll clip (use_broll=True + valid local file)
+        #   2. Effects clip (rendered via the Video Effects tab)
+        #   3. AI-generated video clip (video_path or video_object_path)
+        #   4. Still image with motion (Ken Burns / effects)
+        # -------------------------------------------------------------------
+        broll_local_path = str(getattr(session_scene, "broll_local_path", "") or "").strip()
+        use_broll = bool(getattr(session_scene, "use_broll", False))
+        broll_path = Path(broll_local_path) if broll_local_path else None
+
+        if use_broll and broll_path is not None and broll_path.exists():
+            media_path = str(broll_path.resolve())
+            # Loop B-roll clips that are shorter than the scene duration so
+            # the scene never ends on a frozen or blank frame.
+            timeline_scene.video_loop = True
+            timeline_scene.video_muted = True
+            timeline_scene.video_volume = 0.0
+        elif effects_clips_by_index and idx in effects_clips_by_index:
+            # Effects clips (assigned via the Video Effects tab) are pre-rendered
+            # and stored separately; they are not on the session_scene object.
             media_path = str(effects_clips_by_index[idx])
+            timeline_scene.video_loop = bool(getattr(session_scene, "video_loop", False))
+            timeline_scene.video_muted = bool(getattr(session_scene, "video_muted", True))
+            timeline_scene.video_volume = float(getattr(session_scene, "video_volume", 0.0) or 0.0)
         elif getattr(session_scene, "video_path", None) and Path(session_scene.video_path).exists():
             media_path = str(Path(session_scene.video_path).resolve())
+            timeline_scene.video_loop = bool(getattr(session_scene, "video_loop", False))
+            timeline_scene.video_muted = bool(getattr(session_scene, "video_muted", True))
+            timeline_scene.video_volume = float(getattr(session_scene, "video_volume", 0.0) or 0.0)
         elif getattr(session_scene, "video_object_path", None):
             media_path = f"storage://generated-videos/{session_scene.video_object_path}"
+            timeline_scene.video_loop = bool(getattr(session_scene, "video_loop", False))
+            timeline_scene.video_muted = bool(getattr(session_scene, "video_muted", True))
+            timeline_scene.video_volume = float(getattr(session_scene, "video_volume", 0.0) or 0.0)
         else:
             media_path = str(project_path / "assets/images" / f"{scene_id}.png")
+            timeline_scene.video_loop = False
+            timeline_scene.video_muted = True
+            timeline_scene.video_volume = 0.0
 
         timeline_scene.id = scene_id
         timeline_scene.image_path = media_path
         timeline_scene.duration = float(getattr(session_scene, "estimated_duration_sec", timeline_scene.duration) or 3.0)
-        timeline_scene.video_loop = bool(getattr(session_scene, "video_loop", False))
-        timeline_scene.video_muted = bool(getattr(session_scene, "video_muted", True))
-        timeline_scene.video_volume = float(getattr(session_scene, "video_volume", 0.0) or 0.0)
 
         if not str(timeline_scene.image_path).startswith("storage://"):
             assert Path(timeline_scene.image_path).name.lower().startswith(scene_id.lower()), (

@@ -69,6 +69,15 @@ def _scene_to_dict(scene: Any) -> dict[str, Any]:
         "asset_urls": dict(getattr(scene, "asset_urls", {}) or {}),
         "narration_text": str(getattr(scene, "narration_text", "") or ""),
         "subtitle_text": str(getattr(scene, "subtitle_text", "") or ""),
+        # B-roll fields (default to empty/False for backward compatibility)
+        "broll_query": str(getattr(scene, "broll_query", "") or ""),
+        "broll_provider": str(getattr(scene, "broll_provider", "") or ""),
+        "broll_source_url": str(getattr(scene, "broll_source_url", "") or ""),
+        "broll_page_url": str(getattr(scene, "broll_page_url", "") or ""),
+        "broll_local_path": str(getattr(scene, "broll_local_path", "") or ""),
+        "broll_duration_sec": float(getattr(scene, "broll_duration_sec", 0.0) or 0.0),
+        "broll_orientation": str(getattr(scene, "broll_orientation", "") or ""),
+        "use_broll": bool(getattr(scene, "use_broll", False)),
     }
 
 
@@ -108,6 +117,18 @@ def _scene_from_dict(raw: object) -> Any | None:
     scene.asset_urls = raw.get("asset_urls", {}) if isinstance(raw.get("asset_urls"), dict) else {}
     scene.narration_text = str(raw.get("narration_text", "") or "")
     scene.subtitle_text = str(raw.get("subtitle_text", "") or "")
+    # B-roll fields – default to empty/False for old projects that predate this feature
+    scene.broll_query = str(raw.get("broll_query", "") or "")
+    scene.broll_provider = str(raw.get("broll_provider", "") or "")
+    scene.broll_source_url = str(raw.get("broll_source_url", "") or "")
+    scene.broll_page_url = str(raw.get("broll_page_url", "") or "")
+    scene.broll_local_path = str(raw.get("broll_local_path", "") or "")
+    try:
+        scene.broll_duration_sec = float(raw.get("broll_duration_sec", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        scene.broll_duration_sec = 0.0
+    scene.broll_orientation = str(raw.get("broll_orientation", "") or "")
+    scene.use_broll = bool(raw.get("use_broll", False))
     return scene
 
 
