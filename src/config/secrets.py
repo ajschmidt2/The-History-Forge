@@ -12,7 +12,7 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "SUPABASE_URL": ["SUPABASE_URL", "supabase_url", "SUPABASE__URL"],
     "SUPABASE_ANON_KEY": ["SUPABASE_ANON_KEY", "SUPABASE_KEY", "supabase_anon_key", "supabase_key"],
     "SUPABASE_SERVICE_ROLE_KEY": ["SUPABASE_SERVICE_ROLE_KEY", "supabase_service_role_key"],
-    "OPENAI_API_KEY": ["OPENAI_API_KEY", "openai_api_key", "OPENAI_KEY", "openai_key", "api_key"],
+    "OPENAI_API_KEY": ["OPENAI_API_KEY", "openai_api_key"],
     "IMAGES_BUCKET": ["IMAGES_BUCKET", "images_bucket"],
     "AUDIO_BUCKET": ["AUDIO_BUCKET", "audio_bucket"],
     "VIDEOS_BUCKET": ["VIDEOS_BUCKET", "videos_bucket"],
@@ -28,8 +28,18 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
     "IMAGES_BUCKET": (("supabase", "images_bucket"), ("buckets", "images")),
     "AUDIO_BUCKET": (("supabase", "audio_bucket"), ("buckets", "audio")),
     "VIDEOS_BUCKET": (("supabase", "videos_bucket"), ("buckets", "videos")),
-    "PEXELS_API_KEY": (("pexels", "api_key"), ("broll", "pexels_api_key")),
-    "PIXABAY_API_KEY": (("pixabay", "api_key"), ("broll", "pixabay_api_key")),
+    "PEXELS_API_KEY": (
+        ("pexels", "api_key"),
+        ("broll", "pexels_api_key"),
+        ("api_keys", "pexels"),
+        ("api_keys", "pexels_api_key"),
+    ),
+    "PIXABAY_API_KEY": (
+        ("pixabay", "api_key"),
+        ("broll", "pixabay_api_key"),
+        ("api_keys", "pixabay"),
+        ("api_keys", "pixabay_api_key"),
+    ),
 }
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
@@ -60,12 +70,28 @@ def streamlit_secrets_detected() -> bool:
     return _safe_streamlit_secrets() is not None
 
 
+def _read_key(container: Any, key: str) -> tuple[bool, Any]:
+    """Return (found, value) for dict-like and attrdict-like containers."""
+    if isinstance(container, Mapping):
+        if key in container:
+            return True, container[key]
+        return False, None
+
+    # Streamlit's secrets object supports key access but may not implement Mapping.
+    try:
+        value = container[key]
+    except Exception:
+        return False, None
+    return True, value
+
+
 def _mapping_path_get(mapping: Any, path: tuple[str, ...]) -> str:
     current = mapping
     for key in path:
-        if not isinstance(current, Mapping) or key not in current:
+        found, value = _read_key(current, key)
+        if not found:
             return ""
-        current = current[key]
+        current = value
     return _normalize(current)
 
 
@@ -75,10 +101,8 @@ def _read_streamlit_secret(key: str) -> str | None:
         return None
 
     try:
-        if isinstance(secrets, Mapping) and key in secrets:
-            value = _normalize(secrets[key])
-        else:
-            value = _normalize(secrets.get(key, ""))
+        found, raw_value = _read_key(secrets, key)
+        value = _normalize(raw_value) if found else ""
         if value:
             return value
 
