@@ -1065,14 +1065,20 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
     update_step_status(project_id, "timeline", StepStatus.IN_PROGRESS)
     project_path = project_dir(project_id)
     scene_captions = [str(getattr(scene, "subtitle_text", "") or getattr(scene, "narration_text", "") or getattr(scene, "script_excerpt", "") or "") for scene in scenes]
-    music_volume_db = -6.0
+    # Base attenuation ensures music stays well below a loudnorm'd voiceover
+    # (-16 LUFS) even when the slider is at maximum.  The slider ratio maps
+    # linearly in dB from this base: ratio=1.0 → -12 dB, ratio=0.25 → -24 dB.
+    _MUSIC_BASE_ATTENUATION_DB = -12.0
+    music_volume_db = _MUSIC_BASE_ATTENUATION_DB
     try:
-        ratio = max(0.0, float(cfg.music_volume_relative_to_voiceover))
+        import math
+        ratio = max(0.0, min(1.0, float(cfg.music_volume_relative_to_voiceover)))
         if ratio > 0:
-            import math
-            music_volume_db = 20.0 * math.log10(ratio)
+            music_volume_db = round(20.0 * math.log10(ratio) + _MUSIC_BASE_ATTENUATION_DB, 2)
+        else:
+            music_volume_db = -96.0  # effectively muted
     except Exception:
-        music_volume_db = -6.0
+        music_volume_db = _MUSIC_BASE_ATTENUATION_DB
     logger.info(
         "automation_resolved_settings aspect_ratio=%s output_size=%sx%s subtitles_enabled=%s effects_style=%s music_enabled=%s music_track=%s",
         resolved_settings.aspect_ratio,
@@ -1099,7 +1105,7 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
                 "video_effects_style": resolved_settings.effects_style,
                 "resolution": resolved_settings.output_size,
                 "selected_music_track": resolved_music_track,
-                "music": {"path": resolved_music_track, "volume_db": music_volume_db},
+                "music": {"path": resolved_music_track, "volume_db": music_volume_db, "ducking": {"enabled": True, "threshold_db": -28, "ratio": 8, "attack": 15, "release": 250}},
                 "transition_types": _build_transition_types(cfg.scene_transition_type, len(scenes)),
             },
         )
@@ -1278,19 +1284,30 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     timeline.meta.include_music = bool(resolved_settings.music_enabled)
     timeline.meta.video_effects_style = resolved_settings.effects_style
     if timeline.meta.include_music:
-        music_volume_db = -6.0
+        # Base attenuation ensures music stays well below a loudnorm'd voiceover
+        # (-16 LUFS) even when the slider is at maximum.  The slider ratio maps
+        # linearly in dB from this base: ratio=1.0 → -12 dB, ratio=0.25 → -24 dB.
+        _MUSIC_BASE_ATTENUATION_DB = -12.0
+        music_volume_db = _MUSIC_BASE_ATTENUATION_DB
         try:
-            ratio = max(0.0, float(cfg.music_volume_relative_to_voiceover))
+            import math
+            ratio = max(0.0, min(1.0, float(cfg.music_volume_relative_to_voiceover)))
             if ratio > 0:
-                import math
-                music_volume_db = 20.0 * math.log10(ratio)
+                music_volume_db = round(20.0 * math.log10(ratio) + _MUSIC_BASE_ATTENUATION_DB, 2)
+            else:
+                music_volume_db = -96.0  # effectively muted
         except Exception:
-            music_volume_db = -6.0
+            music_volume_db = _MUSIC_BASE_ATTENUATION_DB
         if not timeline.meta.music:
             from src.video.timeline_schema import Music, Ducking
-            timeline.meta.music = Music(path=resolved_music_track, volume_db=music_volume_db, ducking=Ducking(enabled=False))
+            timeline.meta.music = Music(path=resolved_music_track, volume_db=music_volume_db, ducking=Ducking(enabled=True))
         timeline.meta.music.path = resolved_music_track
         timeline.meta.music.volume_db = music_volume_db
+        if timeline.meta.music.ducking is None:
+            from src.video.timeline_schema import Ducking
+            timeline.meta.music.ducking = Ducking(enabled=True)
+        else:
+            timeline.meta.music.ducking.enabled = True
     else:
         timeline.meta.music = None
 
