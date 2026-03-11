@@ -241,8 +241,38 @@ def _render_quick_scene_edits(project_id: str, scenes: list[Any]) -> None:
         st.success("Scene updates saved. Re-run prompts/images/render to apply changes to the final video.")
 
 
+
+
+def _load_daily_run_history() -> list[dict[str, Any]]:
+    path = Path("data/daily_run_history.json")
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _render_daily_automation_status() -> None:
+    st.markdown("#### Daily Automation Status (read-only)")
+    history = _load_daily_run_history()
+    last = history[-1] if history else {}
+    st.caption("Next scheduled mode: Headless daily topic → 60s short video at 07:00 UTC (editable in .github/workflows/daily-video.yml).")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.text(f"Last daily run: {last.get('timestamp', 'n/a')}")
+        st.text(f"Last topic: {last.get('topic', 'n/a')}")
+        st.text(f"Last project ID: {last.get('project_id', 'n/a')}")
+    with col2:
+        st.text(f"Last render path: {last.get('final_render_path', 'n/a')}")
+        upload_value = last.get('bucket_path') or last.get('public_url') or 'n/a'
+        st.text(f"Last bucket upload: {upload_value}")
+        st.text("Daily preset subtitles: OFF")
+
 def tab_automation(project_id: str) -> None:
     st.subheader("Automation")
+    _render_daily_automation_status()
     project_path = project_dir(project_id)
     payload = load_project_payload(project_id)
     state = load_workflow_state(project_id)

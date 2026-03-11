@@ -505,3 +505,99 @@ Automation now enforces selected render settings all the way through timeline sy
 - **Video effects style options:** Automation now supports `Off`, `Ken Burns - Standard`, `Ken Burns - Strong`, and `Ken Burns - Dramatic` with stronger, aspect-aware motion presets.
 - **Background music enforcement:** when music is enabled, a selected track is required and explicitly mixed with voiceover (default target remains 50% of voiceover level).
 - **Settings-sensitive rebuilds:** timeline/render artifacts are invalidated and regenerated when key Automation settings change (aspect ratio, subtitles, effects style, music on/off, selected music track, mix level).
+
+## Daily automated short-video workflow (headless)
+
+The project now includes a scheduler-ready daily workflow that runs fully headless (no Streamlit UI required).
+
+### Daily preset defaults
+
+`src/workflow/presets.py` defines `DAILY_SHORT_PRESET` with these initial defaults:
+
+- Mode: `topic_to_short_video`
+- Aspect ratio: `9:16` (`720x1280`)
+- Visual style: `Dramatic illustration`
+- Effects style: `Ken Burns - Standard`
+- Voice provider/model/voice: `openai` + `gpt-4o-mini-tts` + `ash`
+- Target script: ~`150` words / ~`60` seconds
+- Scene count: exactly `14`
+- Final scene CTA required: subscribe to **History Crossroads**
+- Subtitles: OFF (`subtitles_enabled=false`, `burn_subtitles=false`, `generate_srt=false`)
+- Background music: enabled at `0.15` relative to voiceover
+
+These are code-level defaults and can be edited later in code (and exposed in UI later if desired).
+
+### Topic generation + duplicate prevention
+
+`src/topics/daily_topics.py` provides:
+
+- `generate_daily_topic()`
+- `load_used_topics()`
+- `save_used_topic()`
+
+Behavior:
+
+- Tries generating a high-retention history topic via OpenAI.
+- Avoids duplicates from `data/daily_topics_used.json`.
+- Falls back to a curated short-form topic bank if OpenAI generation fails.
+- Stores used topics with run dates for duplicate prevention.
+
+### Headless daily job entrypoint
+
+`src/workflow/daily_job.py` provides:
+
+- `run_daily_video_job(run_date: date | None = None) -> dict`
+
+Workflow:
+
+1. Select/generate a fresh topic.
+2. Generate a ~60-second script with CTA for **History Crossroads**.
+3. Create/update a daily project for the date.
+4. Apply the daily preset automatically.
+5. Run full workflow: voiceover → scenes (14) → narrative mapping → prompts → images → effects → render.
+6. Upload the final render to Supabase `generated-videos` bucket.
+7. Save run metadata to `data/daily_run_history.json`.
+
+CLI options:
+
+- `python -m src.workflow.daily_job`
+- `python scripts/run_daily_video_job.py`
+
+The CLI prints a success/failure summary and exits non-zero on failure.
+
+### Supabase output location
+
+After local render, the daily job uploads to:
+
+- Bucket: `generated-videos`
+- Object path pattern: `daily-renders/<YYYY-MM-DD>/<project_id>_final.mp4`
+
+Run history stores project, topic, local render path, bucket path, public URL (when available), and status.
+
+### GitHub Actions scheduler
+
+A scheduled workflow is included at:
+
+- `.github/workflows/daily-video.yml`
+
+It runs daily at **07:00 UTC** (`cron: '0 7 * * *'`) and supports manual dispatch.
+
+> GitHub Actions cron schedules are UTC. Adjust cron expression if you need 7:00 AM in a different local timezone.
+
+Required secrets/environment values for scheduled runs:
+
+- `OPENAI_API_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_KEY` (or equivalent service key used by your setup)
+- `SUPABASE_ANON_KEY` (optional fallback in this repo)
+
+### Subtitle behavior for the daily workflow
+
+Daily automation is configured to produce videos with **NO subtitles by default**:
+
+- no `.srt` generation
+- no `.ass` generation
+- no subtitle track attachment
+- no burn-in subtitle overlays in final render
+
+A read-only status block in the **Automation** tab displays latest daily-run metadata and confirms `Daily preset subtitles: OFF`.
