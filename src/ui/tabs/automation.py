@@ -37,6 +37,7 @@ from src.workflow.services import (
     run_sync_timeline,
 )
 from src.workflow.state import load_workflow_state, save_workflow_state
+from src.workflow.daily_job import load_daily_automation_settings, save_daily_automation_settings
 
 MUSIC_LIBRARY_ROOT = Path("data/music_library")
 PREFERENCES_PATH = Path("data/user_preferences.json")
@@ -254,11 +255,24 @@ def _load_daily_run_history() -> list[dict[str, Any]]:
     return payload if isinstance(payload, list) else []
 
 
-def _render_daily_automation_status() -> None:
-    st.markdown("#### Daily Automation Status (read-only)")
+def _render_daily_automation_status(project_id: str) -> None:
+    st.markdown("#### Daily Automation")
     history = _load_daily_run_history()
     last = history[-1] if history else {}
-    st.caption("Next scheduled mode: Headless daily topic → 60s short video at 07:00 UTC (editable in .github/workflows/daily-video.yml).")
+    settings = load_daily_automation_settings()
+    preset = settings.get("preset", {}) if isinstance(settings.get("preset"), dict) else {}
+
+    st.caption("Schedule is controlled by `.github/workflows/daily-video.yml` and is editable from this page.")
+
+    cron_default = "0 7 * * *"
+    workflow_path = Path(".github/workflows/daily-video.yml")
+    workflow_text = workflow_path.read_text(encoding="utf-8") if workflow_path.exists() else ""
+    cron_match = None
+    import re
+
+    cron_match = re.search(r"cron:\s*'([^']+)'", workflow_text)
+    current_cron = cron_match.group(1) if cron_match else cron_default
+
     col1, col2 = st.columns(2)
     with col1:
         st.text(f"Last daily run: {last.get('timestamp', 'n/a')}")
@@ -268,11 +282,49 @@ def _render_daily_automation_status() -> None:
         st.text(f"Last render path: {last.get('final_render_path', 'n/a')}")
         upload_value = last.get('bucket_path') or last.get('public_url') or 'n/a'
         st.text(f"Last bucket upload: {upload_value}")
-        st.text("Daily preset subtitles: OFF")
+        st.text(f"Last subtitles enabled: {last.get('subtitles_enabled', 'n/a')}")
+
+    st.markdown("##### Daily Job Settings")
+    schedule_cron = st.text_input("Daily schedule cron (UTC)", value=current_cron, help="Example: 0 7 * * * for 07:00 UTC daily")
+    topic_override = st.text_input("Topic override (optional)", value=str(settings.get("topic_override", "") or ""), help="When set, the daily job uses this topic instead of random selection.")
+    scene_count = st.number_input("Daily scene count", min_value=1, max_value=75, value=int(preset.get("scene_count", 14) or 14), step=1)
+    target_word_count = st.number_input("Script target words", min_value=60, max_value=500, value=int(preset.get("target_word_count", 150) or 150), step=5)
+    target_duration = st.number_input("Target duration (seconds)", min_value=30, max_value=180, value=int(preset.get("target_duration_seconds", 60) or 60), step=5)
+    subtitles_enabled = st.toggle("Enable subtitles in daily automation", value=bool(preset.get("subtitles_enabled", False)))
+    music_enabled = st.toggle("Enable music in daily automation", value=bool(preset.get("music_enabled", True)))
+    music_level = st.slider("Daily music level", min_value=0.0, max_value=1.0, step=0.05, value=float(preset.get("music_relative_level", 0.15) or 0.15), disabled=not music_enabled)
+
+    project_music_tracks = _list_music_tracks(project_dir(project_id) / "assets/music")
+    shared_music_tracks = _list_music_tracks(MUSIC_LIBRARY_ROOT)
+    combined_tracks = [str(p) for p in project_music_tracks + shared_music_tracks]
+    saved_track = str(settings.get("selected_music_track", "") or "")
+    if music_enabled and combined_tracks:
+        selected_idx = combined_tracks.index(saved_track) if saved_track in combined_tracks else 0
+        selected_daily_music = st.selectbox("Daily music track", options=combined_tracks, index=selected_idx)
+    else:
+        selected_daily_music = ""
+
+    if st.button("Save daily automation settings", width="stretch"):
+        save_daily_automation_settings({
+            "topic_override": topic_override.strip(),
+            "selected_music_track": selected_daily_music if music_enabled else "",
+            "preset": {
+                "scene_count": int(scene_count),
+                "target_word_count": int(target_word_count),
+                "target_duration_seconds": int(target_duration),
+                "subtitles_enabled": bool(subtitles_enabled),
+                "music_enabled": bool(music_enabled),
+                "music_relative_level": float(music_level),
+            },
+        })
+        if workflow_path.exists() and schedule_cron.strip() and schedule_cron.strip() != current_cron:
+            updated = re.sub(r"cron:\s*'[^']+'", f"cron: '{schedule_cron.strip()}'", workflow_text, count=1)
+            workflow_path.write_text(updated, encoding="utf-8")
+        st.success("Daily automation settings saved.")
 
 def tab_automation(project_id: str) -> None:
     st.subheader("Automation")
-    _render_daily_automation_status()
+    _render_daily_automation_status(project_id)
     project_path = project_dir(project_id)
     payload = load_project_payload(project_id)
     state = load_workflow_state(project_id)

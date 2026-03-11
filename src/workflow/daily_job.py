@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,82 @@ from src.workflow.project_io import ensure_project_files, load_project_payload, 
 from src.workflow.services import FullWorkflowOptions, run_full_workflow
 
 RUN_HISTORY_PATH = Path("data/daily_run_history.json")
+DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
+
+
+def _default_daily_automation_settings() -> dict[str, Any]:
+    return {
+        "topic_override": "",
+        "selected_music_track": "",
+        "preset": DAILY_SHORT_PRESET.as_dict(),
+    }
+
+
+def load_daily_automation_settings(path: Path = DAILY_AUTOMATION_SETTINGS_PATH) -> dict[str, Any]:
+    defaults = _default_daily_automation_settings()
+    if not path.exists():
+        return defaults
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return defaults
+    if not isinstance(payload, dict):
+        return defaults
+    preset_payload = payload.get("preset") if isinstance(payload.get("preset"), dict) else {}
+    return {
+        "topic_override": str(payload.get("topic_override", "") or "").strip(),
+        "selected_music_track": str(payload.get("selected_music_track", "") or "").strip(),
+        "preset": {**DAILY_SHORT_PRESET.as_dict(), **preset_payload},
+    }
+
+
+def save_daily_automation_settings(settings: dict[str, Any], path: Path = DAILY_AUTOMATION_SETTINGS_PATH) -> None:
+    payload = load_daily_automation_settings(path)
+    payload.update(
+        {
+            "topic_override": str(settings.get("topic_override", payload.get("topic_override", "")) or "").strip(),
+            "selected_music_track": str(settings.get("selected_music_track", payload.get("selected_music_track", "")) or "").strip(),
+        }
+    )
+    preset_updates = settings.get("preset") if isinstance(settings.get("preset"), dict) else {}
+    payload["preset"] = {**DAILY_SHORT_PRESET.as_dict(), **payload.get("preset", {}), **preset_updates}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _coerce_int(value: Any, fallback: int, *, min_value: int, max_value: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(min_value, min(max_value, parsed))
+
+
+def _coerce_float(value: Any, fallback: float, *, min_value: float, max_value: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = fallback
+    return max(min_value, min(max_value, parsed))
+
+
+def _resolve_daily_short_preset(settings: dict[str, Any]) -> DailyShortPreset:
+    preset_payload = settings.get("preset") if isinstance(settings.get("preset"), dict) else {}
+    base = DAILY_SHORT_PRESET
+    return replace(
+        base,
+        visual_style=str(preset_payload.get("visual_style", base.visual_style) or base.visual_style),
+        effects_style=str(preset_payload.get("effects_style", base.effects_style) or base.effects_style),
+        openai_tts_model=str(preset_payload.get("openai_tts_model", base.openai_tts_model) or base.openai_tts_model),
+        openai_tts_voice=str(preset_payload.get("openai_tts_voice", base.openai_tts_voice) or base.openai_tts_voice),
+        scene_count=_coerce_int(preset_payload.get("scene_count", base.scene_count), base.scene_count, min_value=1, max_value=75),
+        subtitles_enabled=bool(preset_payload.get("subtitles_enabled", base.subtitles_enabled)),
+        music_enabled=bool(preset_payload.get("music_enabled", base.music_enabled)),
+        music_relative_level=_coerce_float(preset_payload.get("music_relative_level", base.music_relative_level), base.music_relative_level, min_value=0.0, max_value=1.0),
+        target_word_count=_coerce_int(preset_payload.get("target_word_count", base.target_word_count), base.target_word_count, min_value=60, max_value=500),
+        target_duration_seconds=_coerce_int(preset_payload.get("target_duration_seconds", base.target_duration_seconds), base.target_duration_seconds, min_value=30, max_value=180),
+        last_scene_cta_text=str(preset_payload.get("last_scene_cta_text", base.last_scene_cta_text) or base.last_scene_cta_text),
+    )
 
 
 def _utc_now() -> datetime:
@@ -100,11 +177,14 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
     project_id = _project_id_for_day(target_date)
     timestamp = _utc_now().isoformat()
 
+    settings = load_daily_automation_settings()
+    preset = _resolve_daily_short_preset(settings)
     used_topics = load_used_topics()
-    topic = generate_daily_topic(used_topics=used_topics)
-    script_text = generate_daily_short_script(topic, DAILY_SHORT_PRESET)
-    music_track = _resolve_default_music_track()
-    if not music_track:
+    topic_override = str(settings.get("topic_override", "") or "").strip()
+    topic = topic_override or generate_daily_topic(used_topics=used_topics)
+    script_text = generate_daily_short_script(topic, preset)
+    music_track = str(settings.get("selected_music_track", "") or "").strip() or _resolve_default_music_track()
+    if preset.music_enabled and not music_track:
         raise RuntimeError("No background music track found. Add at least one file to data/music_library.")
 
     ensure_project_files(project_id)
@@ -119,25 +199,25 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
             "script_text": script_text,
             "script_profile": "youtube_short_60s",
             "automation_mode": "existing_script_full_workflow",
-            "aspect_ratio": DAILY_SHORT_PRESET.aspect_ratio,
-            "output_width": DAILY_SHORT_PRESET.output_width,
-            "output_height": DAILY_SHORT_PRESET.output_height,
-            "scene_count": DAILY_SHORT_PRESET.scene_count,
-            "max_scenes": DAILY_SHORT_PRESET.scene_count,
-            "visual_style": DAILY_SHORT_PRESET.visual_style,
+            "aspect_ratio": preset.aspect_ratio,
+            "output_width": preset.output_width,
+            "output_height": preset.output_height,
+            "scene_count": preset.scene_count,
+            "max_scenes": preset.scene_count,
+            "visual_style": preset.visual_style,
             "enable_video_effects": True,
-            "video_effects_style": DAILY_SHORT_PRESET.effects_style,
-            "enable_subtitles": False,
-            "automation_include_captions": False,
-            "burn_subtitles": False,
-            "generate_srt": False,
-            "enable_music": True,
-            "music_volume_relative_to_voiceover": DAILY_SHORT_PRESET.music_relative_level,
-            "selected_music_track": music_track,
-            "tts_provider": DAILY_SHORT_PRESET.voice_provider,
-            "openai_tts_model": DAILY_SHORT_PRESET.openai_tts_model,
-            "openai_tts_voice": DAILY_SHORT_PRESET.openai_tts_voice,
-            "daily_preset": DAILY_SHORT_PRESET.as_dict(),
+            "video_effects_style": preset.effects_style,
+            "enable_subtitles": preset.subtitles_enabled,
+            "automation_include_captions": preset.subtitles_enabled,
+            "burn_subtitles": preset.burn_subtitles,
+            "generate_srt": preset.generate_srt,
+            "enable_music": preset.music_enabled,
+            "music_volume_relative_to_voiceover": preset.music_relative_level,
+            "selected_music_track": music_track if preset.music_enabled else "",
+            "tts_provider": preset.voice_provider,
+            "openai_tts_model": preset.openai_tts_model,
+            "openai_tts_voice": preset.openai_tts_voice,
+            "daily_preset": preset.as_dict(),
             "daily_job_run_date": target_date.isoformat(),
             "daily_job_started_at": timestamp,
         }
@@ -145,7 +225,7 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
     save_project_payload(project_id, payload)
     (project_dir(project_id) / "script.txt").write_text(script_text, encoding="utf-8")
 
-    pipeline = DAILY_SHORT_PRESET.to_pipeline_options(topic=topic, selected_music_track=music_track)
+    pipeline = preset.to_pipeline_options(topic=topic, selected_music_track=music_track if preset.music_enabled else "")
     run_result = run_full_workflow(
         project_id,
         FullWorkflowOptions(
@@ -190,13 +270,13 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
         "bucket": upload_result["bucket"],
         "bucket_path": upload_result["object_path"],
         "public_url": upload_result["public_url"],
-        "subtitles_enabled": False,
-        "tts_provider": DAILY_SHORT_PRESET.voice_provider,
-        "openai_tts_model": DAILY_SHORT_PRESET.openai_tts_model,
-        "openai_tts_voice": DAILY_SHORT_PRESET.openai_tts_voice,
-        "music_track": music_track,
-        "music_relative_level": DAILY_SHORT_PRESET.music_relative_level,
-        "scene_count": DAILY_SHORT_PRESET.scene_count,
+        "subtitles_enabled": preset.subtitles_enabled,
+        "tts_provider": preset.voice_provider,
+        "openai_tts_model": preset.openai_tts_model,
+        "openai_tts_voice": preset.openai_tts_voice,
+        "music_track": music_track if preset.music_enabled else "",
+        "music_relative_level": preset.music_relative_level,
+        "scene_count": preset.scene_count,
     }
     _append_run_history(summary)
 
@@ -205,7 +285,7 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
     payload["daily_job_completed_at"] = _utc_now().isoformat()
     payload["generated_video_bucket_path"] = upload_result["object_path"]
     payload["generated_video_public_url"] = upload_result["public_url"]
-    payload["enable_subtitles"] = False
+    payload["enable_subtitles"] = preset.subtitles_enabled
     save_project_payload(project_id, payload)
     return summary
 
