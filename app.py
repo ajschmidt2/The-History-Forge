@@ -16,6 +16,7 @@ from src.config.validate import validate_runtime_config
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.ui.tabs.ai_video_generator import tab_ai_video_generator
 from src.ui.tabs.automation import tab_automation
+from src.ui.tabs.broll import tab_broll
 from src.ui.tabs.export import tab_export
 from src.ui.tabs.generate_script import tab_generate_script
 from src.ui.tabs.images import tab_create_images
@@ -107,6 +108,7 @@ def main() -> None:
             "⚙️ Automation",
             "🖼️ Title + Thumbnail",
             "🎥 AI Video Generator",
+            "🎞️ B-Roll",
             "📺 YouTube Upload",
         ]
     )
@@ -136,6 +138,8 @@ def main() -> None:
     with tabs[11]:
         tab_ai_video_generator()
     with tabs[12]:
+        tab_broll(active_project_id())
+    with tabs[13]:
         tab_youtube_upload()
 
     save_project_state(active_project_id())
