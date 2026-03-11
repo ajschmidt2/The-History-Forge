@@ -25,6 +25,7 @@ DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
 def _default_daily_automation_settings() -> dict[str, Any]:
     return {
         "topic_override": "",
+        "topic_direction": "",
         "selected_music_track": "",
         "preset": DAILY_SHORT_PRESET.as_dict(),
     }
@@ -43,6 +44,7 @@ def load_daily_automation_settings(path: Path = DAILY_AUTOMATION_SETTINGS_PATH) 
     preset_payload = payload.get("preset") if isinstance(payload.get("preset"), dict) else {}
     return {
         "topic_override": str(payload.get("topic_override", "") or "").strip(),
+        "topic_direction": str(payload.get("topic_direction", "") or "").strip(),
         "selected_music_track": str(payload.get("selected_music_track", "") or "").strip(),
         "preset": {**DAILY_SHORT_PRESET.as_dict(), **preset_payload},
     }
@@ -53,6 +55,7 @@ def save_daily_automation_settings(settings: dict[str, Any], path: Path = DAILY_
     payload.update(
         {
             "topic_override": str(settings.get("topic_override", payload.get("topic_override", "")) or "").strip(),
+            "topic_direction": str(settings.get("topic_direction", payload.get("topic_direction", "")) or "").strip(),
             "selected_music_track": str(settings.get("selected_music_track", payload.get("selected_music_track", "")) or "").strip(),
         }
     )
@@ -181,7 +184,8 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
     preset = _resolve_daily_short_preset(settings)
     used_topics = load_used_topics()
     topic_override = str(settings.get("topic_override", "") or "").strip()
-    topic = topic_override or generate_daily_topic(used_topics=used_topics)
+    topic_direction = str(settings.get("topic_direction", "") or "").strip()
+    topic = topic_override or generate_daily_topic(used_topics=used_topics, topic_direction=topic_direction)
     script_text = generate_daily_short_script(topic, preset)
     music_track = str(settings.get("selected_music_track", "") or "").strip() or _resolve_default_music_track()
     if preset.music_enabled and not music_track:
@@ -195,7 +199,7 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
         {
             "title": f"Daily Video {target_date.isoformat()}",
             "topic": topic,
-            "topic_direction": "",
+            "topic_direction": topic_direction,
             "script_text": script_text,
             "script_profile": "youtube_short_60s",
             "automation_mode": "existing_script_full_workflow",
