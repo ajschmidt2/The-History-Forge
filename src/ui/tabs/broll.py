@@ -72,32 +72,35 @@ def _search_results_key(scene_index: int) -> str:
 
 def _api_keys_configured() -> dict[str, bool]:
     """Return which B-roll API keys are present."""
-    from src.config.secrets import get_secret
-    return {
-        "pexels": bool(get_secret("PEXELS_API_KEY", "").strip()),
-        "pixabay": bool(get_secret("PIXABAY_API_KEY", "").strip()),
-    }
+    from src.broll.config import broll_provider_status
+    return broll_provider_status()
 
 
-def _render_api_key_status() -> None:
+def _render_api_key_status(provider_priority: list[str]) -> dict[str, bool]:
     status = _api_keys_configured()
     cols = st.columns(2)
     with cols[0]:
-        if status["pexels"]:
-            st.success("Pexels API key: configured")
-        else:
-            st.warning("Pexels API key: not set (`PEXELS_API_KEY`)")
+        st.success("Pexels configured: yes") if status["pexels"] else st.warning("Pexels configured: no")
     with cols[1]:
-        if status["pixabay"]:
-            st.success("Pixabay API key: configured")
-        else:
-            st.warning("Pixabay API key: not set (`PIXABAY_API_KEY`)")
+        st.success("Pixabay configured: yes") if status["pixabay"] else st.warning("Pixabay configured: no")
+
+    if not status["pexels"]:
+        st.info("Pexels API key not found. Expected secret name: `PEXELS_API_KEY`.")
+    if not status["pixabay"]:
+        st.info("Pixabay API key not found. Expected secret name: `PIXABAY_API_KEY`.")
 
     if not any(status.values()):
-        st.error(
-            "No B-roll API keys are configured. Add `PEXELS_API_KEY` and/or "
-            "`PIXABAY_API_KEY` to your Streamlit secrets or environment variables."
-        )
+        st.error("No B-roll provider keys are configured. Add `PEXELS_API_KEY` and/or `PIXABAY_API_KEY`, then restart Streamlit.")
+
+    with st.expander("B-roll provider diagnostics", expanded=False):
+        st.write(f"Pexels secret visible: {'yes' if status['pexels'] else 'no'}")
+        st.write(f"Pixabay secret visible: {'yes' if status['pixabay'] else 'no'}")
+        first_provider = provider_priority[0] if provider_priority else "pexels"
+        st.write(f"Provider priority: {', '.join(provider_priority)}")
+        st.write(f"First provider to try: {first_provider}")
+        st.caption("If you changed `.streamlit/secrets.toml`, restart the app to load new values.")
+
+    return status
 
 
 def _scene_has_broll(scene: Any) -> bool:
@@ -171,14 +174,17 @@ def _render_scene_broll_card(scene: Any, settings: dict, project_id: str) -> Non
         aspect_ratio = _active_aspect_ratio()
         provider_names = _provider_priority(settings.get("preferred_provider", "Pexels then Pixabay"))
 
+        provider_status = _api_keys_configured()
+        providers_available = any(provider_status.values())
+
         search_col, _ = st.columns([1, 3])
         with search_col:
-            do_search = st.button("Search B-roll", key=f"broll_search_{idx}", type="primary")
+            do_search = st.button("Search B-roll", key=f"broll_search_{idx}", type="primary", disabled=not providers_available)
 
         if do_search and query.strip():
-            from src.broll.providers import search_broll as _search_broll_direct
+            from src.broll.service import get_last_search_errors, search_broll
             with st.spinner(f"Searching {', '.join(p.title() for p in provider_names)}..."):
-                results = _search_broll_direct(
+                results = search_broll(
                     query.strip(),
                     aspect_ratio=aspect_ratio,
                     per_page=6,
@@ -186,9 +192,15 @@ def _render_scene_broll_card(scene: Any, settings: dict, project_id: str) -> Non
                 )
                 st.session_state[_search_results_key(idx)] = results
                 if not results:
-                    st.warning(
-                        "No results found. Try different keywords or check your API keys."
-                    )
+                    errors = get_last_search_errors()
+                    if errors:
+                        for err in errors:
+                            st.warning(err)
+                    else:
+                        st.warning("No B-roll results found for this scene.")
+
+        if not providers_available:
+            st.warning("Search disabled until at least one provider key is configured.")
 
         # Show cached results
         cached_results = st.session_state.get(_search_results_key(idx), [])
@@ -352,10 +364,12 @@ def tab_broll(project_id: str) -> None:
     scenes = _get_scenes()
     settings = _load_broll_settings(project_id)
 
+    provider_names = _provider_priority(settings.get("preferred_provider", "Pexels then Pixabay"))
+
     # -------------------------------------------------------------------
     # API key status
     # -------------------------------------------------------------------
-    _render_api_key_status()
+    provider_status = _render_api_key_status(provider_names)
     st.divider()
 
     # -------------------------------------------------------------------
@@ -406,7 +420,7 @@ def tab_broll(project_id: str) -> None:
 
         # Run automation button
         st.divider()
-        if st.button("Run B-roll automation now", key=f"broll_run_auto_{project_id}"):
+        if st.button("Run B-roll automation now", key=f"broll_run_auto_{project_id}", disabled=not any(provider_status.values())):
             if not scenes:
                 st.warning("No scenes found. Set up scenes first.")
             else:
