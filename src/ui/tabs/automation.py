@@ -287,6 +287,12 @@ def _render_daily_automation_status(project_id: str) -> None:
     st.markdown("##### Daily Job Settings")
     schedule_cron = st.text_input("Daily schedule cron (UTC)", value=current_cron, help="Example: 0 7 * * * for 07:00 UTC daily")
     topic_override = st.text_input("Topic override (optional)", value=str(settings.get("topic_override", "") or ""), help="When set, the daily job uses this topic instead of random selection.")
+    topic_direction = st.text_area(
+        "Topic direction (optional)",
+        value=str(settings.get("topic_direction", "") or ""),
+        help="Guide daily topic selection with a reusable direction, e.g. historical mysteries or unsung heroes.",
+        height=110,
+    )
     scene_count = st.number_input("Daily scene count", min_value=1, max_value=75, value=int(preset.get("scene_count", 14) or 14), step=1)
     target_word_count = st.number_input("Script target words", min_value=60, max_value=500, value=int(preset.get("target_word_count", 150) or 150), step=5)
     target_duration = st.number_input("Target duration (seconds)", min_value=30, max_value=180, value=int(preset.get("target_duration_seconds", 60) or 60), step=5)
@@ -307,6 +313,7 @@ def _render_daily_automation_status(project_id: str) -> None:
     if st.button("Save daily automation settings", width="stretch"):
         save_daily_automation_settings({
             "topic_override": topic_override.strip(),
+            "topic_direction": topic_direction.strip(),
             "selected_music_track": selected_daily_music if music_enabled else "",
             "preset": {
                 "scene_count": int(scene_count),

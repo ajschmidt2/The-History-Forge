@@ -23,6 +23,7 @@ def test_daily_automation_settings_roundtrip(tmp_path: Path):
     save_daily_automation_settings(
         {
             "topic_override": "Roman Roads",
+            "topic_direction": "Historical mysteries",
             "selected_music_track": "data/music_library/ambient.mp3",
             "preset": {
                 "scene_count": 20,
@@ -35,6 +36,7 @@ def test_daily_automation_settings_roundtrip(tmp_path: Path):
 
     saved = load_daily_automation_settings(path=settings_path)
     assert saved["topic_override"] == "Roman Roads"
+    assert saved["topic_direction"] == "Historical mysteries"
     assert saved["selected_music_track"] == "data/music_library/ambient.mp3"
     assert saved["preset"]["scene_count"] == 20
     assert saved["preset"]["target_word_count"] == 180

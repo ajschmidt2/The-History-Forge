@@ -13,8 +13,22 @@ def test_used_topics_roundtrip(tmp_path):
 
 
 def test_generate_daily_topic_falls_back_to_non_duplicate(monkeypatch):
-    monkeypatch.setattr("src.topics.daily_topics._generate_topic_with_openai", lambda: "")
+    monkeypatch.setattr("src.topics.daily_topics._generate_topic_with_openai", lambda topic_direction="": "")
     used = {"the dancing plague of 1518 that terrified an entire city"}
     topic = generate_daily_topic(used_topics=used)
     assert topic
     assert topic.lower() not in used
+
+
+def test_generate_daily_topic_passes_topic_direction(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def _fake_generate(topic_direction: str = "") -> str:
+        captured["topic_direction"] = topic_direction
+        return "The mystery of the Roanoke colony"
+
+    monkeypatch.setattr("src.topics.daily_topics._generate_topic_with_openai", _fake_generate)
+    topic = generate_daily_topic(topic_direction="historical mysteries")
+
+    assert topic == "The mystery of the Roanoke colony"
+    assert captured["topic_direction"] == "historical mysteries"
