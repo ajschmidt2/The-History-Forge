@@ -89,7 +89,23 @@ GEMINI_API_KEY = "AIza..."
 # Optional overrides
 openai_model = "gpt-4o-mini"
 GOOGLE_AI_STUDIO_IMAGE_MODEL = "gemini-2.5-flash-image"
+
+# Optional free B-roll providers
+PEXELS_API_KEY = "your_pexels_key"
+PIXABAY_API_KEY = "your_pixabay_key"
 ```
+
+### Free B-roll API setup notes (Pexels + Pixabay)
+
+- Expected secret names are exactly:
+  - `PEXELS_API_KEY`
+  - `PIXABAY_API_KEY`
+- Restart Streamlit after editing `.streamlit/secrets.toml`, otherwise new secret values will not be visible to the running app.
+- Pexels video search uses `https://api.pexels.com/videos/search` with the HTTP header:
+  - `Authorization: <PEXELS_API_KEY>`
+- Pixabay video search uses `https://pixabay.com/api/videos/` with the query parameter:
+  - `key=<PIXABAY_API_KEY>`
+- In the **🎞️ B-Roll** tab, use the diagnostics panel to confirm provider configuration before searching.
 
 4. Run the app:
 

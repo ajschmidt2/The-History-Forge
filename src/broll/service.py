@@ -1,35 +1,50 @@
-"""High-level B-roll service functions used by the UI and automation pipeline.
-
-These helpers abstract the per-scene lifecycle:
-  1. Generate a search query from scene metadata
-  2. Search providers for matching clips
-  3. Download the selected clip to a canonical local path
-  4. Assign the clip to the scene object
-
-The functions are intentionally stateless and side-effect-free except for
-``download_broll_asset``, which writes to disk.
-"""
+"""High-level B-roll service functions used by the UI and automation pipeline."""
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
 import requests
 
+from .config import broll_provider_status
 from .models import BrollResult
-from .providers import search_broll
+from .providers import BrollProviderError, search_pexels_videos, search_pixabay_videos
 
 logger = logging.getLogger(__name__)
 
-_DOWNLOAD_TIMEOUT = 120  # seconds
+_DOWNLOAD_TIMEOUT = 120
+_SEARCH_CACHE_TTL_SECONDS = 600.0
+_SEARCH_CACHE: dict[str, tuple[float, list[BrollResult]]] = {}
+_LAST_SEARCH_ERRORS: list[str] = []
 
 
-# ---------------------------------------------------------------------------
-# Query generation
-# ---------------------------------------------------------------------------
+def _cache_key(query: str, aspect_ratio: str, per_page: int, priority: list[str]) -> str:
+    return f"{query.strip().lower()}::{aspect_ratio}::{per_page}::{','.join(priority)}"
+
+
+def _cache_get(key: str) -> list[BrollResult] | None:
+    payload = _SEARCH_CACHE.get(key)
+    if payload is None:
+        return None
+    ts, results = payload
+    if time.monotonic() - ts > _SEARCH_CACHE_TTL_SECONDS:
+        _SEARCH_CACHE.pop(key, None)
+        return None
+    return results
+
+
+def _cache_set(key: str, results: list[BrollResult]) -> None:
+    _SEARCH_CACHE[key] = (time.monotonic(), results)
+
+
+def get_last_search_errors() -> list[str]:
+    return list(_LAST_SEARCH_ERRORS)
+
 
 _STOP_WORDS = frozenset({
     "a", "an", "and", "are", "as", "at", "be", "been", "but", "by",
@@ -43,7 +58,6 @@ _STOP_WORDS = frozenset({
 
 
 def _extract_keywords(text: str, max_keywords: int = 5) -> list[str]:
-    """Extract the most meaningful keywords from a text string."""
     words = re.findall(r"[a-zA-Z]{3,}", str(text or "").lower())
     seen: set[str] = set()
     keywords: list[str] = []
@@ -57,34 +71,73 @@ def _extract_keywords(text: str, max_keywords: int = 5) -> list[str]:
 
 
 def generate_broll_query_for_scene(scene: Any) -> str:
-    """Derive a B-roll search query from scene metadata.
-
-    Priority order for the query source:
-    1. ``scene.broll_query`` if already set (manual override)
-    2. ``scene.visual_intent`` (describes what should be shown)
-    3. ``scene.script_excerpt`` (narration text, used as fallback)
-
-    Returns
-    -------
-    str
-        A concise natural-language search query suitable for stock video APIs.
-    """
-    # Use existing manual override
     existing = str(getattr(scene, "broll_query", "") or "").strip()
     if existing:
         return existing
 
-    # Prefer visual_intent as it describes what should appear on screen
     visual = str(getattr(scene, "visual_intent", "") or "").strip()
     if visual:
         keywords = _extract_keywords(visual, max_keywords=5)
         if keywords:
             return " ".join(keywords)
 
-    # Fall back to script excerpt
     excerpt = str(getattr(scene, "script_excerpt", "") or "").strip()
     keywords = _extract_keywords(excerpt, max_keywords=4)
     return " ".join(keywords) if keywords else "historical documentary"
+
+
+def search_broll(
+    query: str,
+    aspect_ratio: str,
+    provider_priority: list[str] | None = None,
+    per_page: int = 5,
+) -> list[BrollResult]:
+    global _LAST_SEARCH_ERRORS
+    _LAST_SEARCH_ERRORS = []
+
+    safe_query = str(query or "").strip()
+    if not safe_query:
+        _LAST_SEARCH_ERRORS.append("No B-roll query provided.")
+        return []
+
+    priority = [str(p).lower() for p in (provider_priority or ["pexels", "pixabay"])]
+    key = _cache_key(safe_query, aspect_ratio, per_page, priority)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    status = broll_provider_status()
+    provider_map = {
+        "pexels": search_pexels_videos,
+        "pixabay": search_pixabay_videos,
+    }
+
+    for provider_name in priority:
+        fn = provider_map.get(provider_name)
+        if fn is None:
+            _LAST_SEARCH_ERRORS.append(f"Unknown B-roll provider: {provider_name}.")
+            continue
+        if not status.get(provider_name, False):
+            _LAST_SEARCH_ERRORS.append(
+                "Pexels API key not found in Streamlit secrets." if provider_name == "pexels" else "Pixabay API key not found in Streamlit secrets."
+            )
+            continue
+
+        try:
+            results = fn(safe_query, aspect_ratio=aspect_ratio, per_page=per_page)
+        except BrollProviderError as exc:
+            _LAST_SEARCH_ERRORS.append(str(exc))
+            continue
+        except Exception as exc:
+            _LAST_SEARCH_ERRORS.append(f"{provider_name.title()} search failed: {exc}")
+            continue
+
+        if results:
+            _cache_set(key, results)
+            return results
+        _LAST_SEARCH_ERRORS.append(f"No {provider_name.title()} results found for this scene.")
+
+    return []
 
 
 def search_broll_for_scene(
@@ -93,80 +146,21 @@ def search_broll_for_scene(
     per_page: int = 5,
     provider_priority: list[str] | None = None,
 ) -> list[BrollResult]:
-    """Search for B-roll clips matching a scene's visual intent.
-
-    Parameters
-    ----------
-    scene:
-        A Scene-like object with at least ``visual_intent`` and
-        ``script_excerpt`` attributes.
-    aspect_ratio:
-        Target aspect ratio (``"9:16"`` or ``"16:9"``).
-    per_page:
-        Maximum number of results.
-    provider_priority:
-        Provider search order; defaults to ``["pexels", "pixabay"]``.
-
-    Returns
-    -------
-    list[BrollResult]
-    """
     query = generate_broll_query_for_scene(scene)
     if not query:
         return []
-    return search_broll(
-        query,
-        aspect_ratio=aspect_ratio,
-        per_page=per_page,
-        provider_priority=provider_priority,
-    )
+    return search_broll(query, aspect_ratio=aspect_ratio, per_page=per_page, provider_priority=provider_priority)
 
 
-# ---------------------------------------------------------------------------
-# Download
-# ---------------------------------------------------------------------------
-
-def download_broll_asset(
-    project_id: str,
-    scene_index: int,
-    result: BrollResult,
-) -> Path:
-    """Download a B-roll clip to the canonical local path for a scene.
-
-    The clip is stored at:
-        ``data/projects/<project_id>/assets/broll/s<NN>_broll.mp4``
-
-    If the file is already present (same URL cached locally on the result
-    object), the download is skipped.
-
-    Parameters
-    ----------
-    project_id:
-        Active project identifier.
-    scene_index:
-        1-based scene index used to form the canonical filename.
-    result:
-        The BrollResult whose ``video_url`` will be downloaded.
-
-    Returns
-    -------
-    Path
-        Absolute path to the downloaded clip.
-
-    Raises
-    ------
-    RuntimeError
-        If the download fails for any reason.
-    """
+def download_broll_asset(project_id: str, scene_index: int, result: BrollResult) -> Path:
     broll_dir = Path("data/projects") / str(project_id) / "assets" / "broll"
     broll_dir.mkdir(parents=True, exist_ok=True)
 
-    # Canonical naming: s01_broll.mp4, s02_broll.mp4, ...
-    # The "s<NN>" prefix is required by the render pipeline's scene-ID assertions.
-    dest = broll_dir / f"s{scene_index:02d}_broll.mp4"
+    safe_provider = re.sub(r"[^a-z0-9_-]", "", str(result.provider or "unknown").lower()) or "unknown"
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(result.id or "clip")) or "clip"
+    dest = broll_dir / f"s{scene_index:02d}_{safe_provider}_{safe_id}.mp4"
 
     if dest.exists() and dest.stat().st_size > 0:
-        # Already downloaded; trust that it's correct
         result.local_path = str(dest.resolve())
         return dest.resolve()
 
@@ -174,52 +168,38 @@ def download_broll_asset(
     if not video_url:
         raise RuntimeError("BrollResult has no video_url to download.")
 
-    logger.info(
-        "Downloading B-roll for scene %02d from %s (%s) ...",
-        scene_index,
-        result.provider,
-        video_url[:80],
-    )
-
     try:
         with requests.get(video_url, stream=True, timeout=_DOWNLOAD_TIMEOUT) as resp:
             resp.raise_for_status()
             with dest.open("wb") as fh:
-                for chunk in resp.iter_content(chunk_size=1 << 20):  # 1 MiB chunks
-                    fh.write(chunk)
-    except requests.exceptions.RequestException as exc:
+                for chunk in resp.iter_content(chunk_size=1 << 20):
+                    if chunk:
+                        fh.write(chunk)
+    except requests.RequestException as exc:
         if dest.exists():
             dest.unlink(missing_ok=True)
         raise RuntimeError(f"Failed to download B-roll clip: {exc}") from exc
 
+    if not dest.exists() or dest.stat().st_size <= 0:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError("B-roll download failed: file is empty.")
+
+    metadata = {
+        "provider": result.provider,
+        "id": result.id,
+        "source_url": result.video_url,
+        "page_url": result.page_url,
+        "attribution_text": result.attribution_text,
+        "license_note": result.license_note,
+    }
+    meta_path = dest.with_suffix(".json")
+    meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
     result.local_path = str(dest.resolve())
-    logger.info("B-roll scene_%02d saved → %s", scene_index, dest)
     return dest.resolve()
 
 
-# ---------------------------------------------------------------------------
-# Scene assignment
-# ---------------------------------------------------------------------------
-
-def assign_broll_to_scene(
-    scene: Any,
-    result: BrollResult,
-    local_path: Path | str,
-) -> None:
-    """Write all B-roll fields onto a Scene object.
-
-    This mutates *scene* in-place so the data is immediately available in
-    session state and will be persisted on the next ``save_scenes()`` call.
-
-    Parameters
-    ----------
-    scene:
-        A mutable Scene-like object.
-    result:
-        The BrollResult that was selected.
-    local_path:
-        Path to the downloaded clip (as returned by ``download_broll_asset``).
-    """
+def assign_broll_to_scene(scene: Any, result: BrollResult, local_path: Path | str) -> None:
     scene.broll_query = generate_broll_query_for_scene(scene)
     scene.broll_provider = result.provider
     scene.broll_source_url = result.video_url
@@ -231,7 +211,6 @@ def assign_broll_to_scene(
 
 
 def clear_broll_from_scene(scene: Any) -> None:
-    """Remove all B-roll assignments from a Scene object."""
     scene.broll_query = ""
     scene.broll_provider = ""
     scene.broll_source_url = ""

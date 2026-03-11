@@ -1,405 +1,204 @@
-"""Provider implementations for free B-roll video search.
-
-Supported providers
--------------------
-* Pexels  – https://www.pexels.com/api/  (200 req/hr, 20 000 req/month, free)
-* Pixabay – https://pixabay.com/api/docs/ (100 req/60s, responses must be cached 24 h)
-
-Environment / Streamlit secrets
---------------------------------
-``PEXELS_API_KEY``   – Pexels API key
-``PIXABAY_API_KEY``  – Pixabay API key
-
-Neither key is required; if a key is absent the provider is silently skipped
-and the other is tried instead.
-"""
-
 from __future__ import annotations
 
-import json
 import logging
-import time
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 import requests
 
-from src.config.secrets import get_secret
+from .config import get_pexels_api_key, get_pixabay_api_key
 from .models import BrollResult
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Simple in-process request-level cache (keyed by provider + query + orientation).
-# This prevents burning API quota on repeated identical searches within the same
-# Streamlit session.  Cache entries expire after CACHE_TTL_SECONDS.
-# ---------------------------------------------------------------------------
-_CACHE: dict[str, tuple[float, list[BrollResult]]] = {}
-CACHE_TTL_SECONDS: float = 86_400.0  # 24 hours (Pixabay requirement)
-_REQUEST_TIMEOUT = 10  # seconds per HTTP call
-
-
-def _cache_get(key: str) -> list[BrollResult] | None:
-    entry = _CACHE.get(key)
-    if entry is None:
-        return None
-    ts, results = entry
-    if time.monotonic() - ts > CACHE_TTL_SECONDS:
-        del _CACHE[key]
-        return None
-    return results
-
-
-def _cache_set(key: str, results: list[BrollResult]) -> None:
-    _CACHE[key] = (time.monotonic(), results)
-
-
-# ---------------------------------------------------------------------------
-# Orientation helpers
-# ---------------------------------------------------------------------------
-
-def _aspect_ratio_to_pexels_orientation(aspect_ratio: str) -> str:
-    """Map a History Forge aspect ratio string to a Pexels orientation filter."""
-    return "portrait" if str(aspect_ratio or "16:9").strip() == "9:16" else "landscape"
-
-
-def _aspect_ratio_to_pixabay_orientation(aspect_ratio: str) -> str:
-    """Map a History Forge aspect ratio string to a Pixabay video_type-compatible orientation."""
-    # Pixabay does not have an orientation filter on the video endpoint; we do
-    # client-side filtering by comparing width/height in the response.
-    return "vertical" if str(aspect_ratio or "16:9").strip() == "9:16" else "horizontal"
-
-
-def _clip_orientation(width: int, height: int) -> str:
-    """Derive 'vertical' or 'horizontal' from clip dimensions."""
-    return "vertical" if int(height or 0) > int(width or 0) else "horizontal"
-
-
-# ---------------------------------------------------------------------------
-# Pexels
-# ---------------------------------------------------------------------------
+_REQUEST_TIMEOUT = 12
 
 _PEXELS_VIDEO_SEARCH_URL = "https://api.pexels.com/videos/search"
+_PIXABAY_VIDEO_SEARCH_URL = "https://pixabay.com/api/videos/"
 
 
-def _best_pexels_file(video_files: list[dict]) -> dict:
-    """Pick the highest-quality file whose width is ≤ 1920 pixels."""
-    candidates = [f for f in video_files if isinstance(f, dict) and f.get("link")]
-    candidates.sort(key=lambda f: int(f.get("width", 0) or 0), reverse=True)
-    for f in candidates:
-        if int(f.get("width", 0) or 0) <= 1920:
-            return f
-    return candidates[0] if candidates else {}
+class BrollProviderError(RuntimeError):
+    pass
 
 
-def search_pexels_videos(
-    query: str,
-    aspect_ratio: str = "16:9",
-    per_page: int = 5,
-) -> list[BrollResult]:
-    """Search Pexels for free stock video clips matching *query*.
+def _aspect_ratio_to_pexels_orientation(aspect_ratio: str) -> str:
+    ratio = str(aspect_ratio or "16:9").strip()
+    if ratio == "9:16":
+        return "portrait"
+    if ratio == "1:1":
+        return "square"
+    return "landscape"
 
-    Parameters
-    ----------
-    query:
-        Natural-language search string (e.g. ``"ancient Rome soldiers"``)
-    aspect_ratio:
-        ``"9:16"`` for vertical/portrait or ``"16:9"`` for horizontal/landscape.
-    per_page:
-        Maximum number of results to return (1–80).
 
-    Returns
-    -------
-    list[BrollResult]
-        Normalised results, empty list on any error.
-    """
-    api_key = get_secret("PEXELS_API_KEY", "").strip()
+def _is_vertical(width: int, height: int) -> bool:
+    return int(height or 0) > int(width or 0)
+
+
+def _orientation_matches(aspect_ratio: str, width: int, height: int) -> bool:
+    ratio = str(aspect_ratio or "16:9").strip()
+    if ratio == "9:16":
+        return _is_vertical(width, height)
+    return int(width or 0) >= int(height or 0)
+
+
+def _best_pexels_file(video_files: list[dict[str, Any]]) -> dict[str, Any]:
+    candidates = []
+    for file_info in video_files:
+        if not isinstance(file_info, dict):
+            continue
+        if file_info.get("file_type") != "video/mp4":
+            continue
+        if not file_info.get("link"):
+            continue
+        candidates.append(file_info)
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda f: abs(int(f.get("width", 0) or 0) - 1280))
+    return candidates[0]
+
+
+def _best_pixabay_video(videos: dict[str, Any]) -> dict[str, Any]:
+    for size in ("medium", "small", "tiny", "large"):
+        candidate = videos.get(size, {}) if isinstance(videos, dict) else {}
+        if isinstance(candidate, dict) and candidate.get("url"):
+            return candidate
+    return {}
+
+
+def _http_error_message(provider: str, status_code: int) -> str:
+    if status_code in (401, 403):
+        return f"{provider} search failed: unauthorized."
+    if status_code == 429:
+        return f"{provider} search failed: rate limit reached."
+    return f"{provider} search failed: HTTP {status_code}."
+
+
+def search_pexels_videos(query: str, aspect_ratio: str, per_page: int = 5) -> list[BrollResult]:
+    api_key = get_pexels_api_key().strip()
     if not api_key:
-        logger.debug("Pexels search skipped: PEXELS_API_KEY not configured.")
-        return []
+        raise BrollProviderError("Pexels API key not found in Streamlit secrets.")
 
     safe_query = str(query or "").strip()
     if not safe_query:
         return []
 
-    orientation = _aspect_ratio_to_pexels_orientation(aspect_ratio)
-    cache_key = f"pexels::{safe_query}::{orientation}::{per_page}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        logger.debug("Pexels cache hit for %r", safe_query)
-        return cached
-
-    params: dict[str, Any] = {
+    params = {
         "query": safe_query,
-        "orientation": orientation,
-        "per_page": min(max(1, int(per_page)), 80),
+        "per_page": max(1, min(int(per_page), 80)),
+        "orientation": _aspect_ratio_to_pexels_orientation(aspect_ratio),
         "size": "medium",
     }
     headers = {"Authorization": api_key}
 
+    logger.info("Pexels search query=%r orientation=%s per_page=%s", safe_query, params["orientation"], params["per_page"])
     try:
-        response = requests.get(
-            _PEXELS_VIDEO_SEARCH_URL,
-            params=params,
-            headers=headers,
-            timeout=_REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.exceptions.RequestException as exc:
-        logger.warning("Pexels API request failed: %s", exc)
-        return []
-    except (ValueError, KeyError) as exc:
-        logger.warning("Pexels API response parse error: %s", exc)
-        return []
+        response = requests.get(_PEXELS_VIDEO_SEARCH_URL, params=params, headers=headers, timeout=_REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise BrollProviderError(f"Pexels search failed: {exc}") from exc
+
+    if response.status_code != 200:
+        raise BrollProviderError(_http_error_message("Pexels", response.status_code))
+
+    try:
+        payload = response.json()
+        videos = payload.get("videos", [])
+    except Exception as exc:
+        raise BrollProviderError("Pexels search failed: malformed response.") from exc
 
     results: list[BrollResult] = []
-    for video in data.get("videos", []):
-        try:
-            vid_id = str(video.get("id", ""))
-            duration = float(video.get("duration", 0) or 0)
-            vid_files = video.get("video_files", [])
-            best_file = _best_pexels_file(vid_files)
-            if not best_file.get("link"):
-                continue
-
-            w = int(best_file.get("width", video.get("width", 0)) or 0)
-            h = int(best_file.get("height", video.get("height", 0)) or 0)
-            clip_orient = _clip_orientation(w, h)
-
-            # Use the first picture as preview thumbnail
-            preview_url = ""
-            pictures = video.get("video_pictures", [])
-            if pictures and isinstance(pictures[0], dict):
-                preview_url = str(pictures[0].get("picture", "") or "")
-
-            photographer = str(video.get("user", {}).get("name", "") or "")
-            page_url = str(video.get("url", "") or "")
-
-            results.append(BrollResult(
-                provider="pexels",
-                id=vid_id,
-                title=f"Pexels #{vid_id}",
-                duration_sec=duration,
-                width=w,
-                height=h,
-                orientation=clip_orient,
-                preview_image_url=preview_url,
-                video_url=str(best_file["link"]),
-                page_url=page_url,
-                attribution_text=f"Video by {photographer} on Pexels" if photographer else "Pexels video",
-                license_note="Pexels License – free for commercial and personal use, no attribution required.",
-            ))
-        except Exception as exc:
-            logger.debug("Skipping Pexels video entry due to error: %s", exc)
+    for video in videos:
+        if not isinstance(video, dict):
+            continue
+        selected = _best_pexels_file(video.get("video_files", []))
+        if not selected:
             continue
 
-    _cache_set(cache_key, results)
-    logger.info("Pexels returned %d results for %r", len(results), safe_query)
+        width = int(selected.get("width", video.get("width", 0)) or 0)
+        height = int(selected.get("height", video.get("height", 0)) or 0)
+        orientation = "vertical" if _is_vertical(width, height) else "horizontal"
+        pictures = video.get("video_pictures", [])
+        preview = pictures[0].get("picture", "") if pictures and isinstance(pictures[0], dict) else ""
+        user = video.get("user", {}) if isinstance(video.get("user", {}), dict) else {}
+
+        results.append(BrollResult(
+            provider="pexels",
+            id=str(video.get("id", "")),
+            title=str(video.get("url", "") or f"Pexels {video.get('id', '')}"),
+            duration_sec=float(video.get("duration", 0) or 0),
+            width=width,
+            height=height,
+            orientation=orientation,
+            preview_image_url=str(preview or ""),
+            video_url=str(selected.get("link", "") or ""),
+            page_url=str(video.get("url", "") or ""),
+            attribution_text=(f"Video by {user.get('name', '')} on Pexels" if user.get("name") else "Video on Pexels"),
+            license_note="Pexels License – free for commercial and personal use.",
+        ))
+
     return results
 
 
-# ---------------------------------------------------------------------------
-# Pixabay
-# ---------------------------------------------------------------------------
-
-_PIXABAY_VIDEO_SEARCH_URL = "https://pixabay.com/api/videos/"
-
-
-def _best_pixabay_file(hits_entry: dict) -> dict:
-    """Return the best video file dict from a Pixabay video hit.
-
-    Pixabay returns a ``videos`` key with sizes: large, medium, small, tiny.
-    We prefer the largest size that is ≤ 1920px wide.
-    """
-    videos = hits_entry.get("videos", {})
-    preference = ["large", "medium", "small", "tiny"]
-    for size in preference:
-        file_info = videos.get(size, {})
-        if isinstance(file_info, dict) and file_info.get("url"):
-            w = int(file_info.get("width", 0) or 0)
-            if w <= 1920:
-                return file_info
-    # If nothing ≤ 1920, just return the first available size
-    for size in preference:
-        file_info = videos.get(size, {})
-        if isinstance(file_info, dict) and file_info.get("url"):
-            return file_info
-    return {}
-
-
-def search_pixabay_videos(
-    query: str,
-    aspect_ratio: str = "16:9",
-    per_page: int = 5,
-) -> list[BrollResult]:
-    """Search Pixabay for free stock video clips matching *query*.
-
-    Parameters
-    ----------
-    query:
-        Natural-language search string.
-    aspect_ratio:
-        ``"9:16"`` or ``"16:9"``.
-    per_page:
-        Maximum number of results (3–200).
-
-    Returns
-    -------
-    list[BrollResult]
-        Normalised results, empty list on any error.
-    """
-    api_key = get_secret("PIXABAY_API_KEY", "").strip()
+def search_pixabay_videos(query: str, aspect_ratio: str, per_page: int = 5) -> list[BrollResult]:
+    api_key = get_pixabay_api_key().strip()
     if not api_key:
-        logger.debug("Pixabay search skipped: PIXABAY_API_KEY not configured.")
-        return []
+        raise BrollProviderError("Pixabay API key not found in Streamlit secrets.")
 
     safe_query = str(query or "").strip()
     if not safe_query:
         return []
 
-    want_orientation = _aspect_ratio_to_pixabay_orientation(aspect_ratio)
-    cache_key = f"pixabay::{safe_query}::{want_orientation}::{per_page}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        logger.debug("Pixabay cache hit for %r", safe_query)
-        return cached
-
-    params: dict[str, Any] = {
+    params = {
         "key": api_key,
         "q": safe_query,
-        "video_type": "all",
-        "per_page": min(max(3, int(per_page * 3)), 200),  # over-fetch to allow orientation filter
+        "per_page": max(3, min(int(per_page * 3), 200)),
         "safesearch": "true",
-        "lang": "en",
     }
+
+    logger.info("Pixabay search query=%r per_page=%s", safe_query, params["per_page"])
+    try:
+        response = requests.get(_PIXABAY_VIDEO_SEARCH_URL, params=params, timeout=_REQUEST_TIMEOUT)
+    except requests.RequestException as exc:
+        raise BrollProviderError(f"Pixabay search failed: {exc}") from exc
+
+    if response.status_code != 200:
+        raise BrollProviderError(_http_error_message("Pixabay", response.status_code))
 
     try:
-        response = requests.get(
-            _PIXABAY_VIDEO_SEARCH_URL,
-            params=params,
-            timeout=_REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.exceptions.RequestException as exc:
-        logger.warning("Pixabay API request failed: %s", exc)
-        return []
-    except (ValueError, KeyError) as exc:
-        logger.warning("Pixabay API response parse error: %s", exc)
-        return []
+        payload = response.json()
+        hits = payload.get("hits", [])
+    except Exception as exc:
+        raise BrollProviderError("Pixabay search failed: malformed response.") from exc
 
     results: list[BrollResult] = []
-    for hit in data.get("hits", []):
-        try:
-            vid_id = str(hit.get("id", ""))
-            duration = float(hit.get("duration", 0) or 0)
-            tags = str(hit.get("tags", "") or "")
-            page_url = str(hit.get("pageURL", "") or "")
-            preview_url = str(hit.get("userImageURL", "") or "")
-            user = str(hit.get("user", "") or "")
-
-            best_file = _best_pixabay_file(hit)
-            if not best_file.get("url"):
-                continue
-
-            w = int(best_file.get("width", 0) or 0)
-            h = int(best_file.get("height", 0) or 0)
-            clip_orient = _clip_orientation(w, h)
-
-            # Client-side orientation filter
-            if clip_orient != want_orientation:
-                continue
-
-            results.append(BrollResult(
-                provider="pixabay",
-                id=vid_id,
-                title=tags or f"Pixabay #{vid_id}",
-                duration_sec=duration,
-                width=w,
-                height=h,
-                orientation=clip_orient,
-                preview_image_url=preview_url,
-                video_url=str(best_file["url"]),
-                page_url=page_url,
-                attribution_text=f"Video by {user} on Pixabay" if user else "Pixabay video",
-                license_note="Pixabay Content License – free for commercial and personal use.",
-            ))
-
-            if len(results) >= per_page:
-                break
-
-        except Exception as exc:
-            logger.debug("Skipping Pixabay hit due to error: %s", exc)
+    fallback: list[BrollResult] = []
+    for hit in hits:
+        if not isinstance(hit, dict):
             continue
 
-    _cache_set(cache_key, results)
-    logger.info("Pixabay returned %d results (orientation=%s) for %r", len(results), want_orientation, safe_query)
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Unified search entry point
-# ---------------------------------------------------------------------------
-
-_DEFAULT_PROVIDER_PRIORITY = ["pexels", "pixabay"]
-
-
-def search_broll(
-    query: str,
-    aspect_ratio: str = "16:9",
-    per_page: int = 5,
-    provider_priority: list[str] | None = None,
-) -> list[BrollResult]:
-    """Search for free B-roll video clips across configured providers.
-
-    Tries each provider in *provider_priority* order and returns the first
-    non-empty result list.  Falls back to the remaining providers if the
-    preferred one returns nothing or is unconfigured.
-
-    Parameters
-    ----------
-    query:
-        Natural-language search string.
-    aspect_ratio:
-        ``"9:16"`` or ``"16:9"``.
-    per_page:
-        Maximum results per provider.
-    provider_priority:
-        Ordered list of provider names to try.  Defaults to
-        ``["pexels", "pixabay"]``.
-
-    Returns
-    -------
-    list[BrollResult]
-        Combined results from the first successful provider, or empty list
-        if all providers fail.
-    """
-    priority = [str(p).lower() for p in (provider_priority or _DEFAULT_PROVIDER_PRIORITY)]
-    safe_query = str(query or "").strip()
-    if not safe_query:
-        return []
-
-    _provider_fns = {
-        "pexels": search_pexels_videos,
-        "pixabay": search_pixabay_videos,
-    }
-
-    all_results: list[BrollResult] = []
-    for provider_name in priority:
-        fn = _provider_fns.get(provider_name)
-        if fn is None:
-            logger.warning("Unknown B-roll provider %r – skipping.", provider_name)
+        selected = _best_pixabay_video(hit.get("videos", {}))
+        if not selected:
             continue
-        try:
-            results = fn(safe_query, aspect_ratio=aspect_ratio, per_page=per_page)
-            if results:
-                all_results.extend(results)
-                if len(all_results) >= per_page:
-                    break
-        except Exception as exc:
-            logger.warning("Provider %r failed: %s", provider_name, exc)
-            continue
+        width = int(selected.get("width", 0) or 0)
+        height = int(selected.get("height", 0) or 0)
+        orientation = "vertical" if _is_vertical(width, height) else "horizontal"
+        item = BrollResult(
+            provider="pixabay",
+            id=str(hit.get("id", "")),
+            title=str(hit.get("tags", "") or f"Pixabay {hit.get('id', '')}"),
+            duration_sec=float(hit.get("duration", 0) or 0),
+            width=width,
+            height=height,
+            orientation=orientation,
+            preview_image_url=str(hit.get("videos", {}).get("tiny", {}).get("thumbnail", "") or ""),
+            video_url=str(selected.get("url", "") or ""),
+            page_url=str(hit.get("pageURL", "") or ""),
+            attribution_text=(f"Video by {hit.get('user', '')} on Pixabay" if hit.get("user") else "Video on Pixabay"),
+            license_note="Pixabay Content License – free for commercial and personal use.",
+        )
+        fallback.append(item)
+        if _orientation_matches(aspect_ratio, width, height):
+            results.append(item)
+        if len(results) >= per_page:
+            break
 
-    return all_results[:per_page]
+    if results:
+        return results[:per_page]
+    return fallback[:per_page]
