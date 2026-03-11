@@ -68,6 +68,19 @@ def _scene_videos_dir(project_id: str) -> Path:
     return d
 
 
+def _safe_fps_value(raw_fps: object, fps_options: list[int], default: int = 24) -> int:
+    """Return a valid FPS value from options, falling back to default when invalid."""
+    try:
+        parsed_fps = int(raw_fps)
+    except (TypeError, ValueError):
+        parsed_fps = default
+
+    if parsed_fps not in fps_options:
+        return default
+
+    return parsed_fps
+
+
 def _apply_effects_clips_to_scene_editor(scenes: list, project_id: str, clips_dir: Path) -> tuple[int, int]:
     """Copy scene-matched effects clips into canonical scene-video slots.
 
@@ -889,8 +902,13 @@ def tab_video_effects() -> None:
             else:
                 global_cfg.output_width, global_cfg.output_height = 1080, 1920
         with fps_col:
+            fps_options = [24, 25, 30]
+            current_fps = _safe_fps_value(global_cfg.output_fps, fps_options)
             global_cfg.output_fps = st.selectbox(
-                "FPS", [24, 25, 30], index=[24, 25, 30].index(int(global_cfg.output_fps)), key="fx_fps"
+                "FPS",
+                fps_options,
+                index=fps_options.index(current_fps),
+                key="fx_fps",
             )
 
     # ── Global Defaults ───────────────────────────────────────────────────────
