@@ -16,6 +16,8 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "IMAGES_BUCKET": ["IMAGES_BUCKET", "images_bucket"],
     "AUDIO_BUCKET": ["AUDIO_BUCKET", "audio_bucket"],
     "VIDEOS_BUCKET": ["VIDEOS_BUCKET", "videos_bucket"],
+    "PEXELS_API_KEY": ["PEXELS_API_KEY", "pexels_api_key", "PEXELS_KEY", "pexels_key"],
+    "PIXABAY_API_KEY": ["PIXABAY_API_KEY", "pixabay_api_key", "PIXABAY_KEY", "pixabay_key"],
 }
 
 _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
@@ -26,6 +28,8 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
     "IMAGES_BUCKET": (("supabase", "images_bucket"), ("buckets", "images")),
     "AUDIO_BUCKET": (("supabase", "audio_bucket"), ("buckets", "audio")),
     "VIDEOS_BUCKET": (("supabase", "videos_bucket"), ("buckets", "videos")),
+    "PEXELS_API_KEY": (("pexels", "api_key"), ("broll", "pexels_api_key")),
+    "PIXABAY_API_KEY": (("pixabay", "api_key"), ("broll", "pixabay_api_key")),
 }
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
@@ -135,27 +139,24 @@ def get_secret(name: str, default: str = "", required: bool = False) -> str:
     Safe secret getter.
     Always returns a string (never None) so calling code can safely do .strip().
     Looks in:
-      1) st.secrets
-      2) environment variables (common variants)
+      1) st.secrets – exact key, then all aliases, then nested section paths
+      2) environment variables – exact key, then all aliases
       3) default
+    Placeholder values (e.g. "paste_key_here") are treated as absent.
     """
-    # Try Streamlit secrets
-    try:
-        val = st.secrets.get(name)
-        if val is not None:
-            return str(val)
-    except Exception:
-        pass
+    all_aliases = _aliases(name)
 
-    # Try env var exact
-    val = os.getenv(name)
-    if val is not None:
-        return str(val)
+    # 1. Streamlit secrets – try every alias and nested path
+    for alias in all_aliases:
+        st_value = _read_streamlit_secret(alias)
+        if st_value:
+            return st_value
 
-    # Try common variants (lowercase)
-    val = os.getenv(name.lower())
-    if val is not None:
-        return str(val)
+    # 2. Environment variables – try every alias
+    for alias in all_aliases:
+        value = _normalize(os.environ.get(alias, ""))
+        if value:
+            return value
 
     if required:
         raise RuntimeError(
