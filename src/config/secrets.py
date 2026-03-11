@@ -49,9 +49,7 @@ def _safe_streamlit_secrets() -> Any | None:
         import streamlit as st  # type: ignore
 
         secrets = getattr(st, "secrets", None)
-        if not secrets:
-            return None
-        if isinstance(secrets, Mapping) and len(secrets) == 0:
+        if secrets is None:
             return None
         return secrets
     except Exception:
