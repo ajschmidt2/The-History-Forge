@@ -890,7 +890,7 @@ def tab_video_effects() -> None:
                 global_cfg.output_width, global_cfg.output_height = 1080, 1920
         with fps_col:
             global_cfg.output_fps = st.selectbox(
-                "FPS", [24, 25, 30], index=[24, 25, 30].index(global_cfg.output_fps), key="fx_fps"
+                "FPS", [24, 25, 30], index=[24, 25, 30].index(int(global_cfg.output_fps)), key="fx_fps"
             )
 
     # ── Global Defaults ───────────────────────────────────────────────────────
