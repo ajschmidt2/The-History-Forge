@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 # ── Defaults ──────────────────────────────────────────────────────────────────
 DEFAULT_WIDTH: int = 1920
 DEFAULT_HEIGHT: int = 1080
-DEFAULT_FPS: int = 24
+DEFAULT_FPS: int = 60
 DEFAULT_CRF: int = 23
 DEFAULT_PRESET: str = "veryfast"
 

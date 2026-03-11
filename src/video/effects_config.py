@@ -63,7 +63,7 @@ class GlobalEffectsConfig:
     # Output
     output_width: int = 1920
     output_height: int = 1080
-    output_fps: int = 24
+    output_fps: int = 60
 
     # ── Serialisation helpers ──────────────────────────────────────────────
 
