@@ -18,6 +18,8 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "VIDEOS_BUCKET": ["VIDEOS_BUCKET", "videos_bucket"],
     "PEXELS_API_KEY": ["PEXELS_API_KEY", "pexels_api_key", "PEXELS_KEY", "pexels_key"],
     "PIXABAY_API_KEY": ["PIXABAY_API_KEY", "pixabay_api_key", "PIXABAY_KEY", "pixabay_key"],
+    "YOUTUBE_CLIENT_SECRETS_FILE": ["YOUTUBE_CLIENT_SECRETS_FILE", "youtube_client_secrets_file"],
+    "YOUTUBE_TOKEN_FILE": ["YOUTUBE_TOKEN_FILE", "youtube_token_file"],
 }
 
 _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
@@ -40,6 +42,8 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
         ("api_keys", "pixabay"),
         ("api_keys", "pixabay_api_key"),
     ),
+    "YOUTUBE_CLIENT_SECRETS_FILE": (("youtube", "client_secrets_file"),),
+    "YOUTUBE_TOKEN_FILE": (("youtube", "token_file"),),
 }
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
