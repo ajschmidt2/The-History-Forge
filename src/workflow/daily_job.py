@@ -333,9 +333,8 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
 def _cli() -> int:
     try:
         result = run_daily_video_job()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         import traceback
-
         print(f"DAILY_JOB_FAILED: {exc}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         return 1
