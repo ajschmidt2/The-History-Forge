@@ -5,6 +5,7 @@ from pathlib import Path
 import streamlit as st
 
 from src.config.secrets import get_secret
+from src.services.youtube_oauth import build_youtube_auth_url
 from src.services.youtube_upload import YouTubeUploadError, upload_video, validate_youtube_credentials
 from src.ui.state import active_project_id, ensure_project_exists
 
@@ -46,6 +47,11 @@ def tab_youtube_upload() -> None:
                 st.success(message)
             else:
                 st.warning(message)
+
+    if st.button("Connect YouTube Account"):
+        auth_url, state = build_youtube_auth_url()
+        st.session_state["youtube_oauth_state"] = state
+        st.link_button("Continue to Google", auth_url)
 
     video_path = st.text_input("Video file path", value=str(default_video_path))
     thumbnail_path = st.text_input("Thumbnail file path (optional)", value=str(default_thumbnail_path))
