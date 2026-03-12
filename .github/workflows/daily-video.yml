@@ -1,28 +1,35 @@
-name: Daily History Video
+name: generate-daily-video
 
 on:
   schedule:
-    # 07:00 UTC daily. GitHub Actions schedules are UTC; adjust this cron for your local timezone.
-    - cron: '0 7 * * *'
+    - cron: "0 11 * * *"
   workflow_dispatch:
 
 jobs:
   generate-daily-video:
     runs-on: ubuntu-latest
     env:
-      openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      VIDEOS_BUCKET: generated-videos
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+
+      - name: Verify OPENAI_API_KEY exists
+        run: |
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY detected"
+          else
+            echo "OPENAI_API_KEY missing"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: |
