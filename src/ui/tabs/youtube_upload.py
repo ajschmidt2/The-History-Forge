@@ -53,8 +53,10 @@ def tab_youtube_upload() -> None:
         st.session_state["youtube_oauth_state"] = state
         st.link_button("Continue to Google", auth_url)
 
-    video_path = st.text_input("Video file path", value=str(default_video_path))
-    thumbnail_path = st.text_input("Thumbnail file path (optional)", value=str(default_thumbnail_path))
+    video_path = st.text_input("Video file path or storage object path", value=str(default_video_path))
+    thumbnail_path = st.text_input("Thumbnail file path or storage object path (optional)", value=str(default_thumbnail_path))
+
+    st.caption("If local file is not found, the app will try Supabase Storage.")
 
     title = st.text_input("Video title", value=st.session_state.get("project_title", "History Forge Video"))
     description = st.text_area("Description", value="Created with The History Forge")

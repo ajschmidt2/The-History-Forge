@@ -15,12 +15,15 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from src.config.secrets import get_secret
+from src.services.storage_resolver import resolve_upload_file
 
 log = logging.getLogger(__name__)
 
 YOUTUBE_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube.upload"
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
+YOUTUBE_RENDER_BUCKET = "history-forge-videos"
+YOUTUBE_THUMBNAIL_BUCKET = "history-forge-images"
 
 
 class YouTubeUploadError(RuntimeError):
@@ -214,9 +217,21 @@ def upload_video(
     client_secrets_file: str | Path | None = None,
     token_file: str | Path | None = None,
 ) -> YouTubeUploadResult:
-    video = Path(video_path).expanduser()
+    temp_files: list[str] = []
+
+    video_ref = str(video_path).strip()
+    local_video = Path(video_ref).expanduser()
+    try:
+        resolved_video_path = resolve_upload_file(video_ref, bucket_name=YOUTUBE_RENDER_BUCKET, suffix=local_video.suffix or ".mp4")
+    except FileNotFoundError as exc:
+        raise YouTubeUploadError(f"Video file not found: {video_ref}") from exc
+
+    video = Path(resolved_video_path).expanduser()
     if not video.exists() or not video.is_file():
-        raise YouTubeUploadError(f"Video file not found: {video}")
+        raise YouTubeUploadError(f"Video file not found: {video_ref}")
+
+    if not local_video.exists():
+        temp_files.append(str(video))
 
     if not title.strip():
         raise YouTubeUploadError("title is required.")
@@ -260,7 +275,20 @@ def upload_video(
 
         thumb_response: dict[str, Any] | None = None
         if thumbnail_path:
-            thumb_response = set_thumbnail(youtube=youtube, video_id=uploaded_video_id, thumbnail_path=thumbnail_path)
+            thumb_ref = str(thumbnail_path).strip()
+            local_thumb = Path(thumb_ref).expanduser()
+            try:
+                resolved_thumbnail_path = resolve_upload_file(
+                    thumb_ref,
+                    bucket_name=YOUTUBE_THUMBNAIL_BUCKET,
+                    suffix=local_thumb.suffix or ".png",
+                )
+            except FileNotFoundError as exc:
+                raise YouTubeUploadError(f"Thumbnail file not found: {thumb_ref}") from exc
+
+            if not local_thumb.exists():
+                temp_files.append(resolved_thumbnail_path)
+            thumb_response = set_thumbnail(youtube=youtube, video_id=uploaded_video_id, thumbnail_path=resolved_thumbnail_path)
 
         return YouTubeUploadResult(video_id=uploaded_video_id, response=response, thumbnail_response=thumb_response)
     except HttpError as exc:
@@ -268,6 +296,12 @@ def upload_video(
         raise YouTubeUploadError(f"YouTube API error: {details}") from exc
     except OSError as exc:
         raise YouTubeUploadError(f"File access error: {exc}") from exc
+    finally:
+        for temp_path in temp_files:
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except OSError:
+                log.warning("Could not remove temporary upload file: %s", temp_path)
 
 
 if __name__ == "__main__":
