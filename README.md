@@ -338,6 +338,36 @@ Automation now runs in this exact order (starting from an existing script):
 
 Automation intentionally stops at render and does **not** auto-upload to YouTube.
 
+## YouTube upload setup (manual tab)
+
+The **📺 YouTube Upload** tab supports:
+
+- OAuth token validation + refresh
+- video upload with title/description/tags/category/privacy
+- optional scheduled publish (`publishAt`)
+- optional thumbnail upload after video upload
+
+Required setup:
+
+1. Create OAuth client credentials in Google Cloud (YouTube Data API v3 enabled) and download `client_secrets.json`.
+2. Generate `token.json` once via local OAuth flow:
+   - `YOUTUBE_RUN_OAUTH=1 python -m src.services.youtube_upload`
+3. Configure paths via environment variables or Streamlit secrets:
+   - `YOUTUBE_CLIENT_SECRETS_FILE`
+   - `YOUTUBE_TOKEN_FILE`
+
+Example `.streamlit/secrets.toml`:
+
+```toml
+YOUTUBE_CLIENT_SECRETS_FILE = "client_secrets.json"
+YOUTUBE_TOKEN_FILE = "token.json"
+```
+
+Notes:
+
+- Scheduled publish requires `privacyStatus = "private"` per YouTube API rules.
+- Keep `token.json` and client secrets out of git.
+
 ### New automation behaviors
 
 - **Canonical naming**: scene media is normalized to stable file names (`assets/images/sNN.png`, `assets/videos/sNN.mp4`).
