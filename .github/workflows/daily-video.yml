@@ -81,8 +81,7 @@ jobs:
 
       - name: Run daily video job
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          HIST_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m src.workflow.daily_job
