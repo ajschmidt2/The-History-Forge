@@ -28,7 +28,7 @@ def _get_openai_api_key() -> tuple[str, str]:
     Supports both uppercase and lowercase env names defensively.
     """
 
-    for env_name in ("OPENAI_API_KEY", "openai_api_key", "HIST_OPENAI_KEY"):
+    for env_name in ("openai_api_key", "OPENAI_API_KEY", "HIST_OPENAI_KEY"):
         value = (os.getenv(env_name) or "").strip()
         if value:
             return value, f"env:{env_name}"
@@ -165,7 +165,7 @@ def generate_daily_short_script(topic: str, preset: DailyShortPreset = DAILY_SHO
         pass
 
     if not api_key:
-        has_openai_env = bool((os.environ.get("OPENAI_API_KEY") or "").strip())
+        has_openai_env = bool((os.environ.get("openai_api_key") or "").strip())
         has_lower_alias = bool((os.environ.get("openai_api_key") or "").strip())
         raise RuntimeError(
             "Missing OpenAI API key for daily short script generation. "
