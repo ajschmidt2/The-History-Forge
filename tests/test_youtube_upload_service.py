@@ -28,3 +28,66 @@ def test_upload_video_requires_private_for_scheduling(tmp_path: Path) -> None:
             privacy_status="public",
             publish_at="2026-03-14T18:30:00Z",
         )
+
+
+def test_upload_video_resolves_non_local_video_and_thumbnail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    resolved_video = tmp_path / "resolved-video.mp4"
+    resolved_thumb = tmp_path / "resolved-thumb.png"
+    resolved_video.write_bytes(b"video")
+    resolved_thumb.write_bytes(b"thumb")
+
+    calls: list[tuple[str, str, str | None]] = []
+
+    def fake_resolve(file_ref: str, bucket_name: str, suffix: str | None = None) -> str:
+        calls.append((file_ref, bucket_name, suffix))
+        if file_ref == "project-a/videos/final.mp4":
+            return str(resolved_video)
+        if file_ref == "project-a/thumbnails/thumb.png":
+            return str(resolved_thumb)
+        raise FileNotFoundError(file_ref)
+
+    class _ThumbSetReq:
+        def execute(self) -> dict[str, str]:
+            return {"kind": "youtube#thumbnailSetResponse"}
+
+    class _ThumbApi:
+        def set(self, **_kwargs):
+            return _ThumbSetReq()
+
+    class _UploadReq:
+        done = False
+
+        def next_chunk(self):
+            if not self.done:
+                self.done = True
+                return None, {"id": "abc123"}
+            return None, {"id": "abc123"}
+
+    class _VideosApi:
+        def insert(self, **_kwargs):
+            return _UploadReq()
+
+    class _Youtube:
+        def videos(self):
+            return _VideosApi()
+
+        def thumbnails(self):
+            return _ThumbApi()
+
+    monkeypatch.setattr(mod, "resolve_upload_file", fake_resolve)
+    monkeypatch.setattr(mod, "get_youtube_service", lambda **_kwargs: _Youtube())
+
+    result = mod.upload_video(
+        video_path="project-a/videos/final.mp4",
+        title="T",
+        description="D",
+        thumbnail_path="project-a/thumbnails/thumb.png",
+    )
+
+    assert result.video_id == "abc123"
+    assert calls == [
+        ("project-a/videos/final.mp4", "history-forge-videos", ".mp4"),
+        ("project-a/thumbnails/thumb.png", "history-forge-images", ".png"),
+    ]
+    assert not resolved_video.exists()
+    assert not resolved_thumb.exists()
