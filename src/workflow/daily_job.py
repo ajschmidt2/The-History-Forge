@@ -22,24 +22,29 @@ from src.workflow.services import FullWorkflowOptions, run_full_workflow
 RUN_HISTORY_PATH = Path("data/daily_run_history.json")
 DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
 
-def _get_openai_api_key() -> str:
+def _get_openai_api_key() -> tuple[str, str]:
     """
-    Resolve the OpenAI API key for headless runs first, then local app config.
+    Resolve OpenAI API key with source metadata for precise diagnostics.
+
+    Resolution order:
+      1) OPENAI_API_KEY from process environment (preferred for headless jobs)
+      2) App config via get_openai_config() (keeps Streamlit/local behavior working)
     """
 
-    env_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    env_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if env_key:
-        return env_key
+        return env_key, "env:OPENAI_API_KEY"
 
     try:
         config = get_openai_config()
         config_key = str(config.get("api_key") or "").strip()
         if config_key:
-            return config_key
+            return config_key, "config:get_openai_config"
     except Exception:
+        # Keep fallback behavior non-fatal so local Streamlit flows still function.
         pass
 
-    return ""
+    return "", "missing"
 
 def _default_daily_automation_settings() -> dict[str, Any]:
     return {
@@ -153,7 +158,7 @@ def _resolve_default_music_track() -> str:
 
 
 def generate_daily_short_script(topic: str, preset: DailyShortPreset = DAILY_SHORT_PRESET) -> str:
-    api_key = _get_openai_api_key()
+    api_key, api_key_source = _get_openai_api_key()
 
     model = "gpt-4o-mini"
     try:
@@ -163,9 +168,14 @@ def generate_daily_short_script(topic: str, preset: DailyShortPreset = DAILY_SHO
         pass
 
     if not api_key:
+        has_openai_env = bool((os.environ.get("OPENAI_API_KEY") or "").strip())
+        has_lower_alias = bool((os.environ.get("openai_api_key") or "").strip())
         raise RuntimeError(
-            "OPENAI_API_KEY is missing from the headless environment. "
-            "Make sure it exists in GitHub Actions secrets and is mapped in the workflow env."
+            "Missing OpenAI API key for daily short script generation. "
+            f"Resolution source={api_key_source}. "
+            f"Env OPENAI_API_KEY present={has_openai_env}; openai_api_key present={has_lower_alias}. "
+            "If running in GitHub Actions, confirm repository secret OPENAI_API_KEY exists and is mapped to job env.OPENAI_API_KEY. "
+            "For local/Streamlit runs, set OPENAI_API_KEY (or openai_api_key) in .streamlit/secrets.toml."
         )
 
     from openai import OpenAI
