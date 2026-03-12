@@ -23,12 +23,13 @@ RUN_HISTORY_PATH = Path("data/daily_run_history.json")
 DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
 
 def _get_openai_api_key() -> tuple[str, str]:
-    """
-    Resolve the OpenAI API key for headless runs first, then local app config.
-    Supports both uppercase and lowercase env names defensively.
-    """
+    import subprocess
+    # Debug: print all env vars containing 'openai' (case-insensitive)
+    for key, val in os.environ.items():
+        if 'openai' in key.lower():
+            print(f"DEBUG found env: {key}=({'SET' if val.strip() else 'EMPTY'})", file=sys.stderr)
 
-    for env_name in ("openai_api_key", "OPENAI_API_KEY", "HIST_OPENAI_KEY"):
+    for env_name in ("OPENAI_API_KEY", "openai_api_key"):
         value = (os.getenv(env_name) or "").strip()
         if value:
             return value, f"env:{env_name}"
