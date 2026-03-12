@@ -21,6 +21,7 @@ Tables expected in Supabase Database
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -193,7 +194,13 @@ def upload_video_bytes(
     """Upload MP4 bytes to Supabase Storage and return public URL if available."""
     if not video_bytes:
         return None
-    return _upload_bytes(bucket, storage_path, video_bytes, content_type)
+    print(f"DEBUG upload attempt: bucket={bucket}, path={storage_path}, size={len(video_bytes)}", file=sys.stderr)
+    try:
+        return _upload_bytes(bucket, storage_path, video_bytes, content_type)
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return ""
 
 
 def get_public_storage_url(bucket: str, storage_path: str) -> Optional[str]:
