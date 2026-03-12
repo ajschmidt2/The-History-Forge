@@ -226,7 +226,8 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
     script_text = generate_daily_short_script(topic, preset)
     music_track = str(settings.get("selected_music_track", "") or "").strip() or _resolve_default_music_track()
     if preset.music_enabled and not music_track:
-        raise RuntimeError("No background music track found. Add at least one file to data/music_library.")
+        print("WARNING: music_enabled=True but no music track found in data/music_library — running without music.", file=sys.stderr)
+        preset = replace(preset, music_enabled=False)
 
     ensure_project_files(project_id)
     upsert_project(project_id, f"Daily Video {target_date.isoformat()}")
