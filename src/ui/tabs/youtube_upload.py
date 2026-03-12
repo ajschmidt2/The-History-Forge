@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.config.secrets import get_secret
 from src.services.youtube_oauth import build_youtube_auth_url
@@ -36,6 +38,30 @@ def tab_youtube_upload() -> None:
     client_secrets_file = st.text_input("OAuth client secrets path", value=env_client_secrets)
     token_file = st.text_input("OAuth token path", value=env_token_file)
 
+    query_params = st.query_params
+    oauth_code = query_params.get("code")
+    oauth_returned_state = query_params.get("state")
+
+    if oauth_code:
+        expected_state = st.session_state.get("youtube_oauth_state")
+        st.info("OAuth callback detected.")
+        st.write(f"Debug: returned code present = {bool(oauth_code)}")
+        st.write(f"Debug: returned state = {oauth_returned_state or '<missing>'}")
+        st.write(f"Debug: expected state = {expected_state or '<missing>'}")
+
+        if not expected_state or oauth_returned_state != expected_state:
+            st.error("OAuth state validation failed. Please click 'Connect YouTube Account' and try again.")
+            st.write("Debug: state validation passed = False")
+            st.session_state["youtube_oauth_state_validated"] = False
+        else:
+            st.success("Authorization code received. Ready for token exchange.")
+            st.write("Debug: state validation passed = True")
+            st.session_state["youtube_oauth_state_validated"] = True
+            st.session_state["youtube_oauth_code"] = oauth_code
+
+        query_params.clear()
+        st.rerun()
+
     validate_col, _ = st.columns([1, 3])
     with validate_col:
         if st.button("Validate credentials"):
@@ -51,7 +77,20 @@ def tab_youtube_upload() -> None:
     if st.button("Connect YouTube Account"):
         auth_url, state = build_youtube_auth_url()
         st.session_state["youtube_oauth_state"] = state
-        st.link_button("Continue to Google", auth_url)
+        st.session_state["youtube_oauth_state_validated"] = False
+        st.write("Debug: OAuth started = True")
+        st.write(f"Debug: generated state = {state}")
+        escaped_auth_url = json.dumps(auth_url)
+        components.html(
+            f"""
+            <script>
+              window.top.location.assign({escaped_auth_url});
+            </script>
+            """,
+            height=0,
+        )
+        st.markdown(f"<a href={escaped_auth_url} target=\"_self\">Continue to Google OAuth</a>", unsafe_allow_html=True)
+        st.stop()
 
     video_path = st.text_input("Video file path or storage object path", value=str(default_video_path))
     thumbnail_path = st.text_input("Thumbnail file path or storage object path (optional)", value=str(default_thumbnail_path))
