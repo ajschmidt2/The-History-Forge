@@ -28,7 +28,7 @@ def _get_openai_api_key() -> tuple[str, str]:
     Supports both uppercase and lowercase env names defensively.
     """
 
-    for env_name in ("OPENAI_API_KEY", "openai_api_key"):
+    for env_name in ("OPENAI_API_KEY", "openai_api_key", "HIST_OPENAI_KEY"):
         value = (os.getenv(env_name) or "").strip()
         if value:
             return value, f"env:{env_name}"
