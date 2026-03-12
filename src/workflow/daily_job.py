@@ -24,24 +24,18 @@ DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
 
 def _get_openai_api_key() -> str:
     """
-    Resolve the OpenAI API key.
-
-    Priority:
-    1. GitHub Actions / environment variable
-    2. Existing Streamlit config
+    Resolve the OpenAI API key for headless runs first, then local app config.
     """
 
-    # First check environment variable (GitHub Actions)
-    key = (os.getenv("OPENAI_API_KEY") or "").strip()
-    if key:
-        return key
+    env_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if env_key:
+        return env_key
 
-    # Fallback to existing app config
     try:
         config = get_openai_config()
-        key = str(config.get("api_key") or "").strip()
-        if key:
-            return key
+        config_key = str(config.get("api_key") or "").strip()
+        if config_key:
+            return config_key
     except Exception:
         pass
 
@@ -159,19 +153,20 @@ def _resolve_default_music_track() -> str:
 
 
 def generate_daily_short_script(topic: str, preset: DailyShortPreset = DAILY_SHORT_PRESET) -> str:
-    config = get_openai_config()
-
     api_key = _get_openai_api_key()
-    model = str(config.get("model") or "gpt-4o-mini").strip()
+
+    model = "gpt-4o-mini"
+    try:
+        config = get_openai_config()
+        model = str(config.get("model") or model).strip()
+    except Exception:
+        pass
 
     if not api_key:
         raise RuntimeError(
             "OPENAI_API_KEY is missing from the headless environment. "
-            "Add it to GitHub Actions secrets and map it into the workflow env."
+            "Make sure it exists in GitHub Actions secrets and is mapped in the workflow env."
         )
-    model = str(config.get("model") or "gpt-4o-mini").strip()
-    if not api_key:
-        raise RuntimeError("OpenAI API key is required for the daily short script generator.")
 
     from openai import OpenAI
 
@@ -182,6 +177,7 @@ def generate_daily_short_script(topic: str, preset: DailyShortPreset = DAILY_SHO
         "Use a strong hook, concise storytelling, and high retention pacing. "
         f"End with a clear call to action: {preset.last_scene_cta_text}"
     )
+
     client = OpenAI(api_key=api_key)
     resp = client.chat.completions.create(
         model=model,
