@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import os
 from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -21,6 +22,30 @@ from src.workflow.services import FullWorkflowOptions, run_full_workflow
 RUN_HISTORY_PATH = Path("data/daily_run_history.json")
 DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
 
+def _get_openai_api_key() -> str:
+    """
+    Resolve the OpenAI API key.
+
+    Priority:
+    1. GitHub Actions / environment variable
+    2. Existing Streamlit config
+    """
+
+    # First check environment variable (GitHub Actions)
+    key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if key:
+        return key
+
+    # Fallback to existing app config
+    try:
+        config = get_openai_config()
+        key = str(config.get("api_key") or "").strip()
+        if key:
+            return key
+    except Exception:
+        pass
+
+    return ""
 
 def _default_daily_automation_settings() -> dict[str, Any]:
     return {
@@ -135,7 +160,15 @@ def _resolve_default_music_track() -> str:
 
 def generate_daily_short_script(topic: str, preset: DailyShortPreset = DAILY_SHORT_PRESET) -> str:
     config = get_openai_config()
-    api_key = str(config.get("api_key") or "").strip()
+
+    api_key = _get_openai_api_key()
+    model = str(config.get("model") or "gpt-4o-mini").strip()
+
+    if not api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY is missing from the headless environment. "
+            "Add it to GitHub Actions secrets and map it into the workflow env."
+        )
     model = str(config.get("model") or "gpt-4o-mini").strip()
     if not api_key:
         raise RuntimeError("OpenAI API key is required for the daily short script generator.")
