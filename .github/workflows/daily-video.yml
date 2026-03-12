@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      openai_api_key: ${{ secrets.OPENAI_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
 
@@ -63,5 +64,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Verify OpenAI env vars exist
+        run: |
+          echo "Checking env vars..."
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY detected"
+          else
+            echo "OPENAI_API_KEY missing"
+          fi
+
+          if [ -n "$openai_api_key" ]; then
+            echo "openai_api_key detected"
+          else
+            echo "openai_api_key missing"
+          fi
+
       - name: Run daily video job
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python -m src.workflow.daily_job

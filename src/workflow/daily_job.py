@@ -22,18 +22,16 @@ from src.workflow.services import FullWorkflowOptions, run_full_workflow
 RUN_HISTORY_PATH = Path("data/daily_run_history.json")
 DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
 
-def _get_OPENAI_API_KEY () -> tuple[str, str]:
+def _get_openai_api_key() -> tuple[str, str]:
     """
-    Resolve OpenAI API key with source metadata for precise diagnostics.
-
-    Resolution order:
-      1) OPENAI_API_KEY from process environment (preferred for headless jobs)
-      2) App config via get_openai_config() (keeps Streamlit/local behavior working)
+    Resolve the OpenAI API key for headless runs first, then local app config.
+    Supports both uppercase and lowercase env names defensively.
     """
 
-    env_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
-    if env_key:
-        return env_key, "env:OPENAI_API_KEY"
+    for env_name in ("OPENAI_API_KEY", "openai_api_key"):
+        value = (os.getenv(env_name) or "").strip()
+        if value:
+            return value, f"env:{env_name}"
 
     try:
         config = get_openai_config()
@@ -41,7 +39,6 @@ def _get_OPENAI_API_KEY () -> tuple[str, str]:
         if config_key:
             return config_key, "config:get_openai_config"
     except Exception:
-        # Keep fallback behavior non-fatal so local Streamlit flows still function.
         pass
 
     return "", "missing"
