@@ -127,7 +127,8 @@ def _utc_now() -> datetime:
 
 
 def _project_id_for_day(run_date: date) -> str:
-    return f"daily_{run_date.isoformat().replace('-', '_')}"
+    ts = datetime.now(timezone.utc).strftime("%H%M")
+    return f"daily_{run_date.isoformat().replace('-', '_')}_{ts}"
 
 
 def _load_run_history(path: Path = RUN_HISTORY_PATH) -> list[dict[str, Any]]:
@@ -199,8 +200,11 @@ def generate_daily_short_script(topic: str, preset: DailyShortPreset = DAILY_SHO
 
 
 def _upload_final_to_generated_bucket(project_id: str, final_path: Path, run_date: date) -> dict[str, str]:
-    if not final_path.exists() or final_path.stat().st_size <= 0:
-        raise RuntimeError(f"Final render not found at {final_path}")
+    if not final_path.exists() or final_path.stat().st_size < 100000:
+        raise RuntimeError(
+            f"Final render too small ({final_path.stat().st_size} bytes) — render likely failed. "
+            f"Path: {final_path}"
+        )
     object_path = f"daily-renders/{run_date.isoformat()}/{project_id}_{final_path.name}"
     public_url = _sb_store.upload_video_bytes(
         bucket=SUPABASE_VIDEO_BUCKET,

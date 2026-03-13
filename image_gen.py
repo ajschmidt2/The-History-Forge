@@ -29,28 +29,28 @@ def _get_secret(name: str, default: str = "") -> str:
 
 
 def _resolve_api_key() -> str:
-    env_keys = (
+    # Check os.environ directly first (e.g. GitHub Actions secrets injected as env vars).
+    for env_name in (
         "GEMINI_API_KEY",
         "GOOGLE_AI_STUDIO_API_KEY",
         "GOOGLE_API_KEY",
         "gemini_api_key",
         "google_ai_studio_api_key",
         "google_api_key",
-    )
-    for key_name in env_keys:
-        value = _get_secret(key_name, "")
+    ):
+        value = _normalize_secret(os.environ.get(env_name, ""))
         if value:
-            return _normalize_secret(str(value))
+            return value
 
-    secret_keys = (
+    # Fall back to the full secrets resolver (covers Streamlit secrets, aliases, etc.).
+    for key_name in (
         "GEMINI_API_KEY",
         "GOOGLE_AI_STUDIO_API_KEY",
         "GOOGLE_API_KEY",
         "gemini_api_key",
         "google_ai_studio_api_key",
         "google_api_key",
-    )
-    for key_name in secret_keys:
+    ):
         value = _get_secret(key_name, "")
         if value:
             return _normalize_secret(str(value))
