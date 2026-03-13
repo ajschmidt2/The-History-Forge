@@ -16,8 +16,10 @@ import streamlit as st
 
 from src.config import get_secret, resolve_openai_key
 from src.constants import SUPABASE_VIDEO_BUCKET
+from app import require_passcode
 
 st.set_page_config(page_title="Video Generation Diagnostics", page_icon="🎬")
+require_passcode()
 st.title("🎬 Video Generation Diagnostics")
 st.caption(
     "Diagnose Google Veo and OpenAI Sora video generation end-to-end. "

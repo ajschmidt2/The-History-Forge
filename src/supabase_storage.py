@@ -194,7 +194,6 @@ def upload_video_bytes(
     """Upload MP4 bytes to Supabase Storage and return public URL if available."""
     if not video_bytes:
         return None
-    print(f"DEBUG upload attempt: bucket={bucket}, path={storage_path}, size={len(video_bytes)}", file=sys.stderr)
     try:
         return _upload_bytes(bucket, storage_path, video_bytes, content_type)
     except Exception as e:

@@ -11,7 +11,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from image_gen import validate_gemini_api_key
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
-from src.config import streamlit_secrets_detected
 from src.config.validate import validate_runtime_config
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, OPENAI_MODEL_OPTIONS
 from src.ui.tabs.ai_video_generator import tab_ai_video_generator
@@ -68,17 +67,6 @@ def main() -> None:
     st.title("The History Forge")
     st.caption("Generate scripts, scene lists, prompts, images, and voiceover from a single workflow.")
 
-    with st.expander("Config diagnostics"):
-        st.write({
-            "streamlit_secrets_detected": streamlit_secrets_detected(),
-            "required_keys_present": runtime_diag["required"],
-            "resolved_buckets": {
-                "images_bucket": runtime_diag["buckets"]["images_bucket"],
-                "audio_bucket": runtime_diag["buckets"]["audio_bucket"],
-                "videos_bucket": runtime_diag["buckets"]["videos_bucket"],
-            },
-        })
-
     with st.sidebar:
         st.header("OpenAI Settings")
         current_model = st.session_state.get("openai_model", DEFAULT_OPENAI_MODEL)
@@ -90,26 +78,35 @@ def main() -> None:
             help="Select the OpenAI model used for script generation and other AI tasks.",
         )
 
-    render_project_selector()
+        st.divider()
+        render_project_selector()
+
+        st.divider()
+        st.markdown("**Project Status**")
+        _script_ready = bool(st.session_state.get("script_text", "").strip())
+        _scenes = st.session_state.get("scenes", [])
+        st.write("📝 Script:", "✅ Ready" if _script_ready else "⬜ Not yet")
+        st.write("🧩 Scenes:", f"✅ {len(_scenes)}" if _scenes else "⬜ None")
+
     upsert_project(active_project_id(), st.session_state.project_title)
     _sb_store.upsert_project(active_project_id(), st.session_state.project_title)
 
     tabs = st.tabs(
         [
-            "📝 Paste Script",
-            "✨ Generate Script",
-            "🧩 Scenes",
-            "🧠 Prompts",
-            "🖼️ Images",
-            "🎙️ Voiceover",
-            "📦 Export",
-            "✨ Video Effects",
-            "🎬 Video Studio",
-            "⚙️ Automation",
-            "🖼️ Title + Thumbnail",
-            "🎥 AI Video Generator",
-            "🎞️ B-Roll",
-            "📺 YouTube Upload",
+            "📝 Paste Script",       # 0
+            "✨ Generate Script",     # 1
+            "⚙️ Automation",         # 2
+            "🧩 Scenes",             # 3
+            "🎞️ B-Roll",             # 4
+            "🧠 Prompts",            # 5
+            "🖼️ Images",             # 6
+            "🎥 AI Video Generator", # 7
+            "🎙️ Voiceover",          # 8
+            "🎨 Video Effects",      # 9
+            "🎬 Video Studio",       # 10
+            "🏷️ Title + Thumbnail",  # 11
+            "📦 Export",             # 12
+            "📺 YouTube Upload",     # 13
         ]
     )
 
@@ -118,27 +115,27 @@ def main() -> None:
     with tabs[1]:
         tab_generate_script()
     with tabs[2]:
-        tab_create_scenes()
-    with tabs[3]:
-        tab_create_prompts()
-    with tabs[4]:
-        tab_create_images()
-    with tabs[5]:
-        tab_voiceover()
-    with tabs[6]:
-        tab_export()
-    with tabs[7]:
-        tab_video_effects()
-    with tabs[8]:
-        tab_video_compile()
-    with tabs[9]:
         tab_automation(active_project_id())
-    with tabs[10]:
-        tab_thumbnail_title()
-    with tabs[11]:
-        tab_ai_video_generator()
-    with tabs[12]:
+    with tabs[3]:
+        tab_create_scenes()
+    with tabs[4]:
         tab_broll(active_project_id())
+    with tabs[5]:
+        tab_create_prompts()
+    with tabs[6]:
+        tab_create_images()
+    with tabs[7]:
+        tab_ai_video_generator()
+    with tabs[8]:
+        tab_voiceover()
+    with tabs[9]:
+        tab_video_effects()
+    with tabs[10]:
+        tab_video_compile()
+    with tabs[11]:
+        tab_thumbnail_title()
+    with tabs[12]:
+        tab_export()
     with tabs[13]:
         tab_youtube_upload()
 
