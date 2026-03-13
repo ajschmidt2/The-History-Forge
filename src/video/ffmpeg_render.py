@@ -106,14 +106,27 @@ def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     y_start = motion.y if motion.type == "pan" and motion.y is not None else motion.y_start
     y_end = motion.y if motion.type == "pan" and motion.y is not None else motion.y_end
 
-    frames = max(1, int(math.ceil(scene.duration * fps)))
-    zoom_expr = f"{zoom_start} + ({zoom_end} - {zoom_start})*on/{frames}"
-    x_expr = f"({x_start} + ({x_end} - {x_start})*on/{frames})*(iw - iw/zoom)"
-    y_expr = f"({y_start} + ({y_end} - {y_start})*on/{frames})*(ih - ih/zoom)"
+    # Render zoompan at 4× the target FPS internally so position is computed at
+    # fine sub-frame resolution, then blend-downsample to the target rate with
+    # minterpolate (mi_mode=blend).  Blend mode averages the 4 internal frames
+    # into each output frame (temporal anti-aliasing), eliminating sub-pixel
+    # timing jitter that causes visible stutter at native FPS.
+    internal_fps = fps * 4
+    frames = max(2, int(math.ceil(scene.duration * internal_fps)))
+
+    # Sinusoidal ease-in/ease-out: t = (1 - cos(PI * on/frames)) / 2
+    # Produces 0 at on=0 and 1 at on=frames with smooth acceleration/deceleration,
+    # avoiding the abrupt mechanical starts and stops of linear interpolation.
+    t_eased = f"(1-cos(PI*on/{frames}))/2"
+    zoom_expr = f"{zoom_start}+({zoom_end}-{zoom_start})*{t_eased}"
+    x_expr = f"({x_start}+({x_end}-{x_start})*{t_eased})*(iw-iw/zoom)"
+    y_expr = f"({y_start}+({y_end}-{y_start})*{t_eased})*(ih-ih/zoom)"
 
     return (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d={frames}:s={width}x{height}:fps={fps},"
+        f"crop={width}:{height},"
+        f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d={frames}:s={width}x{height}:fps={internal_fps},"
+        f"minterpolate=fps={fps}:mi_mode=blend,"
         "format=yuv420p"
     )
 
@@ -346,18 +359,25 @@ def _crossfade_scenes(
         current_label,
         "-r",
         str(fps),
+        "-vsync",
+        "cfr",
         "-c:v",
         "libx264",
         "-preset",
         "veryfast",
         "-crf",
         "24",
+        "-g",
+        str(fps * 2),
         "-pix_fmt",
         "yuv420p",
         str(stitched_path),
     ]
     ffmpeg_commands.append(cmd)
-    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    try:
+        run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    except Exception:
+        raise RuntimeError("xfade filter_complex failed") from None
 
 
 def _subtitle_filter(subtitle_path: Path) -> str:
@@ -527,7 +547,7 @@ def render_video_from_timeline(
     report_path: str | Path | None = None,
     command_timeout_sec: float | None = None,
     max_width: int = 1280,
-    safe_mode: bool = True,
+    safe_mode: bool = False,
 ) -> Path:
     ensure_ffmpeg_exists()
 
