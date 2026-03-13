@@ -92,14 +92,6 @@ def _render_api_key_status(provider_priority: list[str]) -> dict[str, bool]:
     if not any(status.values()):
         st.error("No B-roll provider keys are configured. Add `PEXELS_API_KEY` and/or `PIXABAY_API_KEY`, then restart Streamlit.")
 
-    with st.expander("B-roll provider diagnostics", expanded=False):
-        st.write(f"Pexels secret visible: {'yes' if status['pexels'] else 'no'}")
-        st.write(f"Pixabay secret visible: {'yes' if status['pixabay'] else 'no'}")
-        first_provider = provider_priority[0] if provider_priority else "pexels"
-        st.write(f"Provider priority: {', '.join(provider_priority)}")
-        st.write(f"First provider to try: {first_provider}")
-        st.caption("If you changed `.streamlit/secrets.toml`, restart the app to load new values.")
-
     return status
 
 

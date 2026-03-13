@@ -8,6 +8,7 @@ import streamlit as st
 
 from src.config import get_secret, resolve_openai_key
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL
+from app import require_passcode
 
 PREFERRED_FALLBACK_MODELS = [
     DEFAULT_OPENAI_MODEL,
@@ -19,6 +20,7 @@ PREFERRED_FALLBACK_MODELS = [
 ]
 
 st.set_page_config(page_title="OpenAI Model Access Diagnostics", page_icon="🧪")
+require_passcode()
 st.title("🧪 OpenAI Model Access Diagnostics")
 st.caption(
     "Diagnoses model-access errors like: project does not have access to model `gpt-5-mini`."

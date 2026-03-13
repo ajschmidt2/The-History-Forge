@@ -8,8 +8,10 @@ import traceback
 import streamlit as st
 
 from src.config import get_secret, resolve_openai_key, streamlit_secrets_detected
+from app import require_passcode
 
 st.set_page_config(page_title="API Key Diagnostics", page_icon="🔑")
+require_passcode()
 st.title("🔑 OpenAI API Key Diagnostics")
 st.caption(
     "This page traces every step of the `openai_api_key` lookup so you can "
@@ -31,16 +33,6 @@ def run_diagnostics() -> None:
             "Detected via central config loader." if secrets_available else "No populated Streamlit secrets detected.",
         )
     )
-
-    # Temporary safe debug visibility for secrets wiring (no full key output)
-    st.write("Has OPENAI_API_KEY in st.secrets:", "OPENAI_API_KEY" in st.secrets)
-    st.write("Has openai_api_key in st.secrets:", "openai_api_key" in st.secrets)
-
-    val = st.secrets.get("OPENAI_API_KEY", "") or st.secrets.get("openai_api_key", "")
-    val = str(val)
-    st.write("Key length:", len(val.strip()))
-    if val.strip():
-        st.write("Key preview:", val.strip()[:6] + "..." + val.strip()[-4:])
 
     # ------------------------------------------------------------------
     # 2. openai_api_key in Streamlit secrets (exact key name)

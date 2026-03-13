@@ -10,8 +10,10 @@ import traceback
 import streamlit as st
 
 from src.config import get_secret, streamlit_secrets_detected
+from app import require_passcode
 
 st.set_page_config(page_title="Gemini API Diagnostics", page_icon="🔮")
+require_passcode()
 st.title("🔮 Gemini / Google AI API Diagnostics")
 st.caption(
     "This page traces every step of the Gemini API key lookup so you can "

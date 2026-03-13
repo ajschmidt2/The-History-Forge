@@ -584,28 +584,27 @@ def tab_create_scenes() -> None:
             )
         st.session_state.scene_transition_types = transitions
 
-    left, center, right = st.columns([1.2, 2, 2])
-
-    with left:
-        st.markdown("### Storyboard")
-        for pos, scene in enumerate(scenes):
-            row = st.columns([1, 1, 3])
-            with row[0]:
-                if st.button("↑", key=_scene_widget_key(f"scene_up_{pos}_", scene), disabled=pos == 0, width="stretch"):
-                    _move_scene(pos, -1)
-            with row[1]:
-                if st.button("↓", key=_scene_widget_key(f"scene_down_{pos}_", scene), disabled=pos == len(scenes) - 1, width="stretch"):
-                    _move_scene(pos, 1)
-            with row[2]:
-                is_selected = pos == st.session_state.storyboard_selected_pos
-                label = f"{scene.index:02d} — {scene.title}"
-                if st.button(("✅ " if is_selected else "") + label, key=_scene_widget_key(f"scene_pick_{pos}_", scene), width="stretch"):
-                    st.session_state.storyboard_selected_pos = pos
-                    st.rerun()
+    st.markdown("### Storyboard")
+    for pos, scene in enumerate(scenes):
+        row = st.columns([1, 1, 3])
+        with row[0]:
+            if st.button("↑", key=_scene_widget_key(f"scene_up_{pos}_", scene), disabled=pos == 0, width="stretch"):
+                _move_scene(pos, -1)
+        with row[1]:
+            if st.button("↓", key=_scene_widget_key(f"scene_down_{pos}_", scene), disabled=pos == len(scenes) - 1, width="stretch"):
+                _move_scene(pos, 1)
+        with row[2]:
+            is_selected = pos == st.session_state.storyboard_selected_pos
+            label = f"{scene.index:02d} — {scene.title}"
+            if st.button(("✅ " if is_selected else "") + label, key=_scene_widget_key(f"scene_pick_{pos}_", scene), width="stretch"):
+                st.session_state.storyboard_selected_pos = pos
+                st.rerun()
 
     selected = scenes[st.session_state.storyboard_selected_pos]
 
-    with center:
+    st.divider()
+    scene_editor_tabs = st.tabs(["📝 Scene Editor", "🎨 Prompt & Media"])
+    with scene_editor_tabs[0]:
         st.markdown("### Scene editor")
         selected.title = st.text_input("Title", value=selected.title, key=_scene_widget_key("story_title_", selected))
         selected.script_excerpt = st.text_area(
@@ -637,7 +636,7 @@ def tab_create_scenes() -> None:
         )
         st.caption(f"Estimated duration: {_fmt_runtime(float(selected.estimated_duration_sec))}")
 
-    with right:
+    with scene_editor_tabs[1]:
         st.markdown("### Prompt + media")
         selected.image_prompt = st.text_area(
             "Prompt",

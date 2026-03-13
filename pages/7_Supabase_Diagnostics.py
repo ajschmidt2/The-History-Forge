@@ -5,8 +5,10 @@ quickly confirm cloud storage is working before a production run.
 import traceback
 import streamlit as st
 from src.config import get_secret
+from app import require_passcode
 
 st.set_page_config(page_title="Supabase Diagnostics", page_icon="🔌")
+require_passcode()
 st.title("🔌 Supabase Connection Diagnostics")
 st.caption("Use this page to confirm that the app is connected to Supabase and can write data.")
 

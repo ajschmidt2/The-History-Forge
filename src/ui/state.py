@@ -607,7 +607,7 @@ def render_project_selector() -> None:
         st.session_state.project_selector = default_value
 
     selected_option = st.selectbox(
-        "Create / Select Project",
+        "Active Project",
         options,
         index=options.index(st.session_state.get("project_selector", default_value)),
         key="project_selector",
@@ -642,27 +642,27 @@ def render_project_selector() -> None:
             st.toast(f"Switched to project: {selected}")
             st.rerun()
 
-        st.divider()
-        st.caption("Danger zone")
-        confirmation_key = f"delete_project_confirmation_{selected}"
-        confirmation = st.text_input(
-            f"Type `{selected}` to confirm deletion",
-            key=confirmation_key,
-            placeholder=selected,
-            help="This permanently deletes local project files and clears saved project records.",
-        )
-        if st.button("Delete this project", type="secondary", width="stretch", key=f"delete_project_{selected}"):
-            if slugify_project_id(confirmation) != selected:
-                st.warning(f"Type `{selected}` exactly to confirm deletion.")
-                return
-            removed_local_dirs, errors = delete_project(selected_option)
-            _select_fallback_project_after_delete()
-            if errors:
-                st.error("Project delete completed with issues: " + " | ".join(errors))
-            else:
-                source_summary = "local files + saved records" if removed_local_dirs else "saved records"
-                st.toast(f"Deleted project: {selected} ({source_summary})")
-            st.rerun()
+        with st.expander("⚠️ Danger zone", expanded=False):
+            st.caption("Permanently deletes local project files and saved records.")
+            confirmation_key = f"delete_project_confirmation_{selected}"
+            confirmation = st.text_input(
+                f"Type `{selected}` to confirm deletion",
+                key=confirmation_key,
+                placeholder=selected,
+                help="This permanently deletes local project files and clears saved project records.",
+            )
+            if st.button("Delete this project", type="secondary", width="stretch", key=f"delete_project_{selected}"):
+                if slugify_project_id(confirmation) != selected:
+                    st.warning(f"Type `{selected}` exactly to confirm deletion.")
+                    return
+                removed_local_dirs, errors = delete_project(selected_option)
+                _select_fallback_project_after_delete()
+                if errors:
+                    st.error("Project delete completed with issues: " + " | ".join(errors))
+                else:
+                    source_summary = "local files + saved records" if removed_local_dirs else "saved records"
+                    st.toast(f"Deleted project: {selected} ({source_summary})")
+                st.rerun()
 
 
 def scenes_ready() -> bool:

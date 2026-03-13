@@ -332,6 +332,9 @@ def tab_generate_script() -> None:
         help="When enabled, gathers 3-8 web sources and adds citations [1], [2], ... to the brief.",
     )
 
+    st.divider()
+    st.subheader("Step 1 — Research Brief (optional)")
+
     if st.button("Generate Research Brief", width="stretch"):
         if not st.session_state.topic.strip():
             st.warning("Enter a topic before generating a brief.")
@@ -376,6 +379,9 @@ def tab_generate_script() -> None:
                 "Use this brief to generate script",
                 key="use_research_brief_for_script",
             )
+
+    st.divider()
+    st.subheader("Step 2 — Outline")
 
     st.session_state.reading_level = st.selectbox(
         "Reading level",
@@ -437,6 +443,9 @@ def tab_generate_script() -> None:
         key="outline_json_text",
         help="Edit hook/context/beats/twist/modern relevance/CTA before generating script.",
     )
+
+    st.divider()
+    st.subheader("Step 3 — Generate Script")
 
     if st.button("Generate Script from Outline", width="stretch"):
         if not st.session_state.outline_json_text.strip():
