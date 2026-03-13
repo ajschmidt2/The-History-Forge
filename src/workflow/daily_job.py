@@ -271,6 +271,14 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
     save_project_payload(project_id, payload)
     (project_dir(project_id) / "script.txt").write_text(script_text, encoding="utf-8")
 
+    # Checkpoint 1: verify script is substantial
+    print(f"[Checkpoint 1] Script length: {len(script_text)} characters", file=sys.stderr)
+    if len(script_text) < 50:
+        raise RuntimeError(
+            f"Generated script is too short ({len(script_text)} chars); expected at least 50 characters."
+        )
+
+    # Checkpoint 2: run full workflow
     pipeline = preset.to_pipeline_options(topic=topic, selected_music_track=music_track if preset.music_enabled else "")
     run_result = run_full_workflow(
         project_id,
@@ -286,25 +294,36 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
             pipeline=pipeline,
         ),
     )
+    print(
+        f"[Checkpoint 2] Workflow returned. failed_step={run_result.failed_step!r}  warnings={run_result.warnings}",
+        file=sys.stderr,
+    )
 
-    final_path = Path(run_result.final_output_path or project_dir(project_id) / "renders/final.mp4")
+    # Checkpoint 3: abort on workflow failure
     if run_result.failed_step:
-        error = f"Workflow failed at step '{run_result.failed_step}': {'; '.join(run_result.warnings)}"
-        history = {
-            "timestamp": timestamp,
-            "date": target_date.isoformat(),
-            "project_id": project_id,
-            "topic": topic,
-            "status": "failed",
-            "final_render_path": str(final_path),
-            "bucket_path": "",
-            "error": error,
-        }
-        _append_run_history(history)
-        raise RuntimeError(error)
+        raise RuntimeError(
+            f"Workflow failed at step '{run_result.failed_step}': {'; '.join(run_result.warnings)}"
+        )
 
+    # Checkpoint 4: verify final render file exists and is large enough
+    final_path = Path(run_result.final_output_path or project_dir(project_id) / "renders/final.mp4")
+    if not final_path.exists():
+        raise RuntimeError(
+            f"Final render file not found at {final_path}. "
+            "Image generation likely failed — verify that GEMINI_API_KEY is set correctly."
+        )
+    final_size = final_path.stat().st_size
+    print(f"[Checkpoint 4] Final render file size: {final_size} bytes", file=sys.stderr)
+    if final_size <= 100_000:
+        raise RuntimeError(
+            f"Final render is too small ({final_size} bytes; expected > 100,000). "
+            "Image generation likely failed — verify that GEMINI_API_KEY is set correctly."
+        )
+
+    # Checkpoint 5: upload to Supabase
     upload_result = _upload_final_to_generated_bucket(project_id, final_path, target_date)
     save_used_topic(topic, run_date=target_date)
+    print(f"[Checkpoint 5] Supabase upload complete. public_url={upload_result['public_url']}", file=sys.stderr)
 
     summary = {
         "timestamp": timestamp,
