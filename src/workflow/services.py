@@ -1055,7 +1055,14 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
         run_generate_prompts(project_id, cfg)
         scenes = load_scenes(project_id)
 
-    if any(float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0) <= 0 for scene in scenes):
+    voice_path = project_dir(project_id) / "assets/audio/voiceover.mp3"
+    if voice_path.exists():
+        # Recompute scene durations proportional to word count, scaled to voiceover duration.
+        # This ensures each scene's display time matches its share of the narration text.
+        timing_result = _scene_duration_fit_to_voiceover(project_id)
+        if timing_result.status == StepStatus.COMPLETED:
+            scenes = load_scenes(project_id)
+    elif any(float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0) <= 0 for scene in scenes):
         excerpts = [str(getattr(scene, "script_excerpt", "") or "") for scene in scenes]
         durations = compute_scene_durations(excerpts, wpm=float(payload.get("scene_wpm", 160) or 160))
         for scene, duration in zip(scenes, durations):

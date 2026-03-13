@@ -188,7 +188,6 @@ def _apply_scene_media_assignments(
 
         timeline_scene.id = scene_id
         timeline_scene.image_path = media_path
-        timeline_scene.duration = float(getattr(session_scene, "estimated_duration_sec", timeline_scene.duration) or 3.0)
 
         if not str(timeline_scene.image_path).startswith("storage://"):
             assert Path(timeline_scene.image_path).name.lower().startswith(scene_id.lower()), (
