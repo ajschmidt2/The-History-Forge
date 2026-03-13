@@ -127,7 +127,8 @@ def _utc_now() -> datetime:
 
 
 def _project_id_for_day(run_date: date) -> str:
-    return f"daily_{run_date.isoformat().replace('-', '_')}"
+    ts = datetime.now(timezone.utc).strftime("%H%M")
+    return f"daily_{run_date.isoformat().replace('-', '_')}_{ts}"
 
 
 def _load_run_history(path: Path = RUN_HISTORY_PATH) -> list[dict[str, Any]]:
