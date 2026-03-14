@@ -41,8 +41,8 @@ from src.workflow.daily_job import load_daily_automation_settings, save_daily_au
 
 MUSIC_LIBRARY_ROOT = Path("data/music_library")
 PREFERENCES_PATH = Path("data/user_preferences.json")
-AUTOMATION_STEP_ORDER_TOPIC: tuple[str, ...] = ("script", "voiceover", "scenes", "narrative", "prompts", "images", "effects", "render")
-AUTOMATION_STEP_ORDER_SCRIPT: tuple[str, ...] = ("voiceover", "scenes", "narrative", "prompts", "images", "effects", "render")
+AUTOMATION_STEP_ORDER_TOPIC: tuple[str, ...] = ("script", "voiceover", "scenes", "narrative", "prompts", "images", "effects", "ai_video_clips", "render")
+AUTOMATION_STEP_ORDER_SCRIPT: tuple[str, ...] = ("voiceover", "scenes", "narrative", "prompts", "images", "effects", "ai_video_clips", "render")
 
 
 def _tail_file(path: Path, lines: int = 200) -> str:
@@ -410,6 +410,21 @@ def tab_automation(project_id: str) -> None:
         scene_count = st.number_input("Number of Scenes", min_value=1, max_value=75, value=default_scene_count, step=1)
         enable_video_effects = st.toggle("Video Effects", value=default_enable_effects)
         video_effects_style = st.selectbox("Video Effects Style", options=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"], index=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"].index(default_effect_style), disabled=not enable_video_effects)
+
+    # ── AI Video Clips ─────────────────────────────────────────────
+    st.subheader("🎬 AI Video Clips")
+    _ai_video_provider_options = ["None", "Google Veo (Supabase)", "OpenAI Sora"]
+    _default_ai_video_provider = str(payload.get("ai_video_provider", "None") or "None")
+    if _default_ai_video_provider not in _ai_video_provider_options:
+        _default_ai_video_provider = "None"
+    ai_video_provider = st.selectbox(
+        "AI Video Clip Generator",
+        options=_ai_video_provider_options,
+        index=_ai_video_provider_options.index(_default_ai_video_provider),
+        key="auto_ai_video_provider",
+        help="Generates 2 short AI video clips: one at the start, one at the midpoint of the final video.",
+    )
+
     TRANSITION_LABEL_MAP: dict[str, str] = {
         "Random": "random",
         "Fade": "fade",
@@ -538,6 +553,7 @@ def tab_automation(project_id: str) -> None:
             "automation_overwrite_existing": bool(overwrite_existing),
             "music_volume_relative_to_voiceover": safe_music_volume,
             "scene_transition_type": selected_transition_type,
+            "ai_video_provider": ai_video_provider,
             "tts_provider": selected_provider,
             "voice_id": selected_voice_id,
             "elevenlabs_voice_id": selected_voice_id,

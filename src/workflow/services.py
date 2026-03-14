@@ -269,9 +269,61 @@ def _step_outputs_exist(project_id: str, step: str) -> bool:
     if step == "effects":
         payload = load_project_payload(project_id)
         return "enable_video_effects" in payload
+    if step == "ai_video_clips":
+        payload = load_project_payload(project_id)
+        provider = str(payload.get("ai_video_provider", "None") or "None")
+        if provider == "None":
+            return True  # provider disabled → treat as already done (will be skipped)
+        import tempfile
+        tmp_clip_dir = Path(tempfile.gettempdir()) / f"ai_clips_{project_id}"
+        return (tmp_clip_dir / "ai_clip_opening.mp4").exists() and (tmp_clip_dir / "ai_clip_mid.mp4").exists()
     if step == "render":
         return (project_path / "renders/final.mp4").exists()
     return False
+
+
+def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) -> StepResult:
+    """Generate opening and midpoint AI video clips and store paths in session state."""
+    import streamlit as st
+
+    payload = load_project_payload(project_id)
+    provider = str(payload.get("ai_video_provider", "None") or "None")
+
+    if provider == "None":
+        st.session_state["auto_ai_opening_clip"] = None
+        st.session_state["auto_ai_mid_clip"] = None
+        return StepResult(project_id, "ai_video_clips", StepStatus.SKIPPED, message="AI video clips disabled (provider=None)")
+
+    import tempfile
+    from src.video.ai_video_clips import generate_ai_video_clips
+
+    scenes = load_scenes(project_id)
+    tmp_clip_dir = Path(tempfile.gettempdir()) / f"ai_clips_{project_id}"
+    tmp_clip_dir.mkdir(exist_ok=True)
+
+    try:
+        opening_clip, mid_clip = generate_ai_video_clips(
+            scenes=scenes,
+            tmp_dir=tmp_clip_dir,
+            provider=provider,
+        )
+        st.session_state["auto_ai_opening_clip"] = str(opening_clip) if opening_clip else None
+        st.session_state["auto_ai_mid_clip"] = str(mid_clip) if mid_clip else None
+        generated = sum(1 for c in [opening_clip, mid_clip] if c)
+        return StepResult(
+            project_id,
+            "ai_video_clips",
+            StepStatus.COMPLETED,
+            message=f"Generated {generated}/2 AI video clips via {provider}",
+            outputs={
+                "opening_clip": str(opening_clip) if opening_clip else "",
+                "mid_clip": str(mid_clip) if mid_clip else "",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.session_state["auto_ai_opening_clip"] = None
+        st.session_state["auto_ai_mid_clip"] = None
+        return StepResult(project_id, "ai_video_clips", StepStatus.FAILED, message=str(exc))
 
 
 def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = None) -> FullWorkflowResult:
@@ -314,6 +366,7 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
             ("prompts", cfg.overwrite_prompts, lambda: run_generate_prompts(project_id, cfg.pipeline)),
             ("images", cfg.overwrite_images, lambda: run_generate_images(project_id, cfg.pipeline)),
             ("effects", cfg.overwrite_timeline, lambda: run_apply_video_effects(project_id, cfg.pipeline)),
+            ("ai_video_clips", False, lambda: run_ai_video_clips(project_id, cfg.pipeline)),
             ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
         ])
 
