@@ -27,6 +27,7 @@ from src.ui.tabs.video_effects import tab_video_effects
 from src.ui.tabs.video_studio import tab_video_compile
 from src.ui.tabs.voiceover import tab_voiceover
 from src.ui.tabs.youtube_upload import tab_youtube_upload
+from src.ui.tabs.auto_videos import tab_auto_videos
 
 
 def _load_ui_state_module():
@@ -107,6 +108,7 @@ def main() -> None:
             "🏷️ Title + Thumbnail",  # 11
             "📦 Export",             # 12
             "📺 YouTube Upload",     # 13
+            "🤖 Auto Videos",        # 14
         ]
     )
 
@@ -138,6 +140,8 @@ def main() -> None:
         tab_export()
     with tabs[13]:
         tab_youtube_upload()
+    with tabs[14]:
+        tab_auto_videos()
 
     save_project_state(active_project_id())
 
