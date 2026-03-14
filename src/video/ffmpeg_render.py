@@ -522,6 +522,11 @@ def _resolve_scene_clip(
     workdir: Path | None = None,
     cwd: Path | None = None,
 ) -> bool:
+    # Pre-made video clips (e.g. AI-generated) — copy directly, no Ken Burns
+    if str(scene.image_path).endswith(".mp4") and Path(scene.image_path).exists():
+        shutil.copy2(scene.image_path, scene_out)
+        return False
+
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached_scene = cache_dir / f"{_scene_cache_key(scene, fps, width, height)}.mp4"
     if cached_scene.exists():
@@ -639,6 +644,21 @@ def render_video_from_timeline(
                     cache_hits += 1
                 scene_paths.append(scene_out)
                 durations.append(normalized_duration)
+
+            # ── Splice AI video clips if available ──────────────────────────
+            try:
+                import streamlit as _st_render
+                _opening = _st_render.session_state.get("auto_ai_opening_clip")
+                _mid     = _st_render.session_state.get("auto_ai_mid_clip")
+                if _opening and Path(_opening).exists():
+                    scene_paths.insert(0, Path(_opening))
+                    durations.insert(0, 5.0)
+                if _mid and Path(_mid).exists():
+                    mid_idx = len(scene_paths) // 2
+                    scene_paths.insert(mid_idx, Path(_mid))
+                    durations.insert(mid_idx, 5.0)
+            except Exception:
+                pass
 
             stitched_path = tmp_path / "stitched.mp4"
             if (not safe_mode) and timeline.meta.crossfade and len(scene_paths) > 1:

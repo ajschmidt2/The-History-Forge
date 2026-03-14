@@ -17,6 +17,7 @@ PIPELINE_STEPS: tuple[str, ...] = (
     "ai_video",
     "music",
     "effects",
+    "ai_video_clips",
     "timeline",
     "render",
 )
