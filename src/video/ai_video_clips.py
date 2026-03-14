@@ -1,111 +1,158 @@
 """
 src/video/ai_video_clips.py
 
-Generates two short AI video clips for embedding in the final render:
-  - opening_clip: inserted before scene 1
-  - mid_clip: inserted at the midpoint of the scene list
+Animates the first and middle generated scene images into true AI video clips
+using Google Veo 2 image-to-video via the veo-image-to-video Supabase Edge Function.
 
-Prompts are derived from the first and middle image prompts in the scene list.
-Provider is read from automation settings (ai_video_provider).
+Runs automatically as the ai_video_clips step in the automation workflow.
+The existing veo-generate Edge Function is not touched.
 """
 
+import base64
+import json
+import logging
 import requests
 from pathlib import Path
+
 import streamlit as st
 
+logger = logging.getLogger(__name__)
 
-def _get_video_prompts(scenes: list) -> tuple[str, str]:
-    """Derive opening and midpoint video prompts from existing image prompts."""
-    prompts = []
-    for s in scenes:
-        p = getattr(s, "image_prompt", None) or getattr(s, "prompt", None) or ""
-        if str(p).strip():
-            prompts.append(str(p).strip())
-
-    suffix_open = ", slow cinematic push in, dramatic lighting, documentary film style, 5 seconds"
-    suffix_mid  = ", slow cinematic pan across frame, atmospheric, documentary film style, 5 seconds"
-
-    if not prompts:
-        return (
-            "A dramatic cinematic establishing shot, historical setting" + suffix_open,
-            "A sweeping cinematic historical scene, moody atmosphere" + suffix_mid,
-        )
-
-    mid_idx = len(prompts) // 2
-    return prompts[0] + suffix_open, prompts[mid_idx] + suffix_mid
+POLL_TIMEOUT_SEC = 300
 
 
-def _call_veo(prompt: str, out_path: Path) -> bool:
-    """Call the Supabase veo-generate Edge Function."""
+def _find_scene_images(project_id: str) -> list[Path]:
+    """Return sorted generated scene images for this project."""
+    base = Path("data/projects") / project_id / "assets" / "images"
+    if not base.exists():
+        return []
+    images = sorted(base.glob("s*.png"))
+    if not images:
+        images = sorted(base.glob("*.png"))
+    return images
+
+
+def _find_scene_prompts(project_id: str) -> list[str]:
+    """Return image prompts in scene order from scenes.json."""
+    scenes_path = Path("data/projects") / project_id / "scenes.json"
+    if not scenes_path.exists():
+        return []
     try:
-        url  = st.secrets.get("SUPABASE_URL", "")
-        key  = st.secrets.get("SUPABASE_KEY", st.secrets.get("SUPABASE_ANON_KEY", ""))
-        fn   = st.secrets.get("SUPABASE_VEO_FUNCTION_NAME", "veo-generate")
-        if not url or not key:
-            st.warning("AI Video Clips: SUPABASE_URL or SUPABASE_KEY missing.")
-            return False
-        resp = requests.post(
-            f"{url}/functions/v1/{fn}",
-            json={"prompt": prompt, "duration_seconds": 5, "aspect_ratio": "16:9"},
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            timeout=180,
-        )
+        scenes = json.loads(scenes_path.read_text())
+        return [s.get("image_prompt") or s.get("prompt") or "" for s in scenes]
+    except Exception:
+        return []
+
+
+def _build_motion_prompt(image_prompt: str) -> str:
+    base = image_prompt.strip().rstrip(".")
+    return (
+        f"{base}. Animate with natural cinematic motion — elements move realistically, "
+        "atmosphere shifts, light and shadow animate across the scene. "
+        "Dramatic documentary style, historically immersive, slow deliberate movement."
+    )
+
+
+def _call_veo_image_to_video(
+    image_path: Path,
+    prompt: str,
+    aspect_ratio: str = "9:16",
+    duration_seconds: int = 5,
+) -> bytes | None:
+    """
+    Send an image to the veo-image-to-video Edge Function.
+    Returns raw video bytes on success, None on failure.
+    """
+    supabase_url = st.secrets.get("SUPABASE_URL", "")
+    supabase_key = st.secrets.get("SUPABASE_KEY", st.secrets.get("SUPABASE_ANON_KEY", ""))
+
+    if not supabase_url or not supabase_key:
+        logger.warning("ai_video_clips: SUPABASE_URL or SUPABASE_KEY missing")
+        return None
+
+    # Base64-encode the image
+    image_bytes = image_path.read_bytes()
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    mime_type = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
+
+    endpoint = f"{supabase_url}/functions/v1/veo-image-to-video"
+    headers = {
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "prompt": prompt,
+        "image_base64": image_b64,
+        "image_mime_type": mime_type,
+        "aspect_ratio": aspect_ratio,
+        "duration_seconds": duration_seconds,
+    }
+
+    try:
+        resp = requests.post(endpoint, json=payload, headers=headers, timeout=360)
         resp.raise_for_status()
-        video_url = resp.json().get("video_url") or resp.json().get("videoUrl")
-        if not video_url:
-            st.warning("AI Video Clips: Veo returned no video URL.")
-            return False
-        out_path.write_bytes(requests.get(video_url, timeout=60).content)
-        return True
+        data = resp.json()
+
+        if "error" in data:
+            logger.warning(f"ai_video_clips: Veo error: {data['error']}")
+            return None
+
+        # Response contains base64-encoded video bytes
+        video_b64 = data.get("video_base64")
+        if not video_b64:
+            logger.warning("ai_video_clips: no video_base64 in response")
+            return None
+
+        return base64.b64decode(video_b64)
+
     except Exception as e:
-        st.warning(f"AI Video Clips (Veo) failed: {e}")
-        return False
+        logger.warning(f"ai_video_clips: request failed: {e}")
+        return None
 
 
-def _call_sora(prompt: str, out_path: Path) -> bool:
-    """Call OpenAI Sora."""
-    try:
-        import openai
-        api_key = st.secrets.get("OPENAI_API_KEY", st.secrets.get("openai_api_key", ""))
-        if not api_key:
-            st.warning("AI Video Clips: openai_api_key missing.")
-            return False
-        client = openai.OpenAI(api_key=api_key)
-        response = client.videos.generate(
-            model="sora-2",
-            prompt=prompt,
-            seconds=5,
+def generate_ai_video_clips(
+    project_id: str,
+    tmp_dir: Path,
+    aspect_ratio: str = "9:16",
+    duration_seconds: int = 5,
+) -> tuple:
+    """
+    Main entry point called by the automation step runner.
+    Returns (opening_clip_path | None, mid_clip_path | None).
+    """
+    images = _find_scene_images(project_id)
+    if not images:
+        logger.info("ai_video_clips: no scene images found, skipping")
+        return None, None
+
+    prompts = _find_scene_prompts(project_id)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_prompt(idx: int) -> str:
+        raw = prompts[idx] if idx < len(prompts) else ""
+        return _build_motion_prompt(raw) if raw else (
+            "Animate this historical scene with natural cinematic motion, "
+            "dramatic documentary atmosphere, slow deliberate movement."
         )
-        video_url = response.data[0].url
-        out_path.write_bytes(requests.get(video_url, timeout=60).content)
-        return True
-    except Exception as e:
-        st.warning(f"AI Video Clips (Sora) failed: {e}")
-        return False
 
+    results = []
+    for label, img_idx, out_name in [
+        ("opening", 0, "ai_clip_opening.mp4"),
+        ("mid",     len(images) // 2, "ai_clip_mid.mp4"),
+    ]:
+        image = images[img_idx]
+        prompt = _get_prompt(img_idx)
+        out_path = tmp_dir / out_name
 
-def generate_ai_video_clips(scenes: list, tmp_dir: Path, provider: str) -> tuple:
-    """
-    Generate opening and midpoint AI video clips.
-    Returns (opening_path | None, mid_path | None).
-    """
-    if not provider or provider == "None":
-        return None, None
+        logger.info(f"ai_video_clips: generating {label} clip from {image.name}")
+        video_bytes = _call_veo_image_to_video(image, prompt, aspect_ratio, duration_seconds)
 
-    opening_prompt, mid_prompt = _get_video_prompts(scenes)
-    opening_path = tmp_dir / "ai_clip_opening.mp4"
-    mid_path     = tmp_dir / "ai_clip_mid.mp4"
+        if video_bytes:
+            out_path.write_bytes(video_bytes)
+            logger.info(f"ai_video_clips: {label} clip saved ({len(video_bytes):,} bytes)")
+            results.append(out_path)
+        else:
+            logger.warning(f"ai_video_clips: {label} clip failed, skipping")
+            results.append(None)
 
-    st.info(f"🎬 Generating AI video clips via {provider}...")
-
-    if provider == "Google Veo (Supabase)":
-        ok1 = _call_veo(opening_prompt, opening_path)
-        ok2 = _call_veo(mid_prompt, mid_path)
-    elif provider == "OpenAI Sora":
-        ok1 = _call_sora(opening_prompt, opening_path)
-        ok2 = _call_sora(mid_prompt, mid_path)
-    else:
-        return None, None
-
-    return (opening_path if ok1 and opening_path.exists() else None,
-            mid_path     if ok2 and mid_path.exists()     else None)
+    return results[0], results[1]
