@@ -14,7 +14,7 @@ import logging
 import requests
 from pathlib import Path
 
-import streamlit as st
+from src.config import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +63,8 @@ def _call_veo_image_to_video(
     Send an image to the veo-image-to-video Edge Function.
     Returns raw video bytes on success, None on failure.
     """
-    supabase_url = st.secrets.get("SUPABASE_URL", "")
-    supabase_key = st.secrets.get("SUPABASE_KEY", st.secrets.get("SUPABASE_ANON_KEY", ""))
+    supabase_url = get_secret("SUPABASE_URL")
+    supabase_key = get_secret("SUPABASE_KEY") or get_secret("SUPABASE_ANON_KEY")
 
     if not supabase_url or not supabase_key:
         logger.warning("ai_video_clips: SUPABASE_URL or SUPABASE_KEY missing")
