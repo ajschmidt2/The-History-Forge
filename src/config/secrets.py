@@ -3,7 +3,10 @@ from __future__ import annotations
 """Do not read secrets via st.secrets or os.getenv directly anywhere else. Always use get_secret()."""
 
 import os
+import tomllib
 from collections.abc import Mapping
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
@@ -47,6 +50,19 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
 }
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
+
+
+@lru_cache(maxsize=None)
+def _load_toml_secrets() -> dict:
+    """Load .streamlit/secrets.toml using stdlib tomllib (no Streamlit runtime required)."""
+    toml_path = Path(".streamlit/secrets.toml")
+    if toml_path.exists():
+        try:
+            with open(toml_path, "rb") as f:
+                return tomllib.load(f)
+        except Exception:
+            return {}
+    return {}
 
 
 def _normalize(value: Any) -> str:
@@ -183,6 +199,15 @@ def get_secret(name: str, default: str = "", required: bool = False) -> str:
         value = _normalize(os.environ.get(alias, ""))
         if value:
             return value
+
+    # 3. .streamlit/secrets.toml parsed directly (headless / MCP-compatible fallback)
+    toml_secrets = _load_toml_secrets()
+    for alias in all_aliases:
+        val = toml_secrets.get(alias)
+        if val:
+            normalized = _normalize(val)
+            if normalized:
+                return normalized
 
     if required:
         raise RuntimeError(

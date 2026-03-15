@@ -631,3 +631,75 @@ Daily automation is configured to produce videos with **NO subtitles by default*
 - no burn-in subtitle overlays in final render
 
 A read-only status block in the **Automation** tab displays latest daily-run metadata and confirms `Daily preset subtitles: OFF`.
+
+## MCP Server
+
+The History Forge exposes its video automation workflow as an MCP server so you can trigger and inspect runs directly from Claude Code.
+
+### Starting the server
+
+```bash
+python -m src.mcp.server
+```
+
+Or via the convenience launcher:
+
+```bash
+python scripts/run_mcp_server.py
+```
+
+### Connecting from Claude Code
+
+The `.claude/mcp.json` file configures the server automatically for Claude Code sessions in this repository. The server uses **stdio transport only** (no HTTP). Required environment variables:
+
+- `OPENAI_API_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+- `GEMINI_API_KEY`
+
+### Available tools
+
+| Tool | Description |
+|------|-------------|
+| `run_daily_short_video` | Run the full pipeline: topic → script → voiceover → images → effects → render → upload |
+| `generate_topic` | Generate a single high-retention history topic (OpenAI with curated fallback) |
+| `get_recent_daily_runs` | Read recent run records from `data/daily_run_history.json` |
+| `rerun_project_render` | Re-render an existing completed project without regenerating assets |
+
+### Default preset values for `run_daily_short_video`
+
+All inputs are optional. When not provided, these MCP defaults are applied:
+
+| Setting | Default |
+|---------|---------|
+| `aspect_ratio` | `9:16` |
+| `visual_style` | `Dramatic illustration` |
+| `effects_style` | `Ken Burns - Standard` |
+| `voice_provider` | `openai` |
+| `openai_tts_model` | `gpt-4o-mini-tts` |
+| `openai_tts_voice` | `ash` |
+| `target_word_count` | `150` |
+| `target_duration_seconds` | `60` |
+| `scene_count` | `14` |
+| `subtitles_enabled` | `false` |
+| `music_enabled` | `true` |
+| `music_relative_level` | `0.15` |
+| Final scene CTA | `Subscribe to History Crossroads` |
+
+### Supabase upload
+
+MCP-triggered videos upload to the `generated-videos` Supabase bucket identically to scheduled GitHub Actions runs:
+
+- Object path: `daily-renders/<YYYY-MM-DD>/<project_id>_final.mp4`
+
+### Identifying MCP runs
+
+Every MCP-triggered run records `"trigger_source": "mcp"` in both the project workflow log and the `data/daily_run_history.json` entry, distinguishing it from Streamlit UI runs and GitHub Actions runs.
+
+### Running the smoke test
+
+```bash
+python scripts/test_mcp_tools.py
+```
+
+This calls all tool functions directly (no MCP protocol layer) to verify the pipeline works headlessly before connecting via Claude Code.

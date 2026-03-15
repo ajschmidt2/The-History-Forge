@@ -278,13 +278,21 @@ def _step_outputs_exist(project_id: str, step: str) -> bool:
     return False
 
 
+def _try_set_session_state(key: str, value: object) -> None:
+    """Set a Streamlit session_state key when running inside a Streamlit runtime; no-op otherwise."""
+    try:
+        import streamlit as st
+        st.session_state[key] = value
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     """Generate opening and midpoint AI video clips and store paths in session state."""
-    import streamlit as st
-
     import tempfile
     from src.video.ai_video_clips import generate_ai_video_clips
 
+    _logger = logging.getLogger(__name__)
     aspect_ratio = (options.aspect_ratio if options else None) or "9:16"
     tmp_clip_dir = Path(tempfile.gettempdir()) / f"ai_clips_{project_id}"
     tmp_clip_dir.mkdir(exist_ok=True)
@@ -296,8 +304,9 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             aspect_ratio=aspect_ratio,
             duration_seconds=5,
         )
-        st.session_state["auto_ai_opening_clip"] = str(opening_clip) if opening_clip else None
-        st.session_state["auto_ai_mid_clip"] = str(mid_clip) if mid_clip else None
+        _logger.info("ai_video_clips project=%s opening=%s mid=%s", project_id, opening_clip, mid_clip)
+        _try_set_session_state("auto_ai_opening_clip", str(opening_clip) if opening_clip else None)
+        _try_set_session_state("auto_ai_mid_clip", str(mid_clip) if mid_clip else None)
         generated = sum(1 for c in [opening_clip, mid_clip] if c)
         return StepResult(
             project_id,
@@ -310,8 +319,9 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             },
         )
     except Exception as exc:  # noqa: BLE001
-        st.session_state["auto_ai_opening_clip"] = None
-        st.session_state["auto_ai_mid_clip"] = None
+        _logger.warning("ai_video_clips project=%s failed: %s", project_id, exc)
+        _try_set_session_state("auto_ai_opening_clip", None)
+        _try_set_session_state("auto_ai_mid_clip", None)
         return StepResult(project_id, "ai_video_clips", StepStatus.FAILED, message=str(exc))
 
 
