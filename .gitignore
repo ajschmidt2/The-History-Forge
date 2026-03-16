@@ -19,3 +19,12 @@ htmlcov/
 # OS artefacts
 .DS_Store
 Thumbs.db
+client_secret.json
+client_secrets.json
+token.json
+youtube_credentials.json
+data/projects/
+data/daily_run_history.json
+data/daily_topics_used.json
+data/history_forge.db
+ffprobe

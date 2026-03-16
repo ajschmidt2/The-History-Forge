@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from src.config import get_openai_config
+from src.config.secrets import get_secret
 from src.constants import SUPABASE_VIDEO_BUCKET
+from src.services.youtube_upload import upload_video as _yt_upload_video
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.topics.daily_topics import generate_daily_topic, load_used_topics, save_used_topic
@@ -319,6 +321,34 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
     save_used_topic(topic, run_date=target_date)
     print(f"[Checkpoint 5] Supabase upload complete. public_url={upload_result['public_url']}", file=sys.stderr)
 
+    # Checkpoint 6: YouTube upload (non-fatal; skipped if credentials are absent)
+    youtube_video_id = ""
+    youtube_url = ""
+    _yt_client_secrets = Path(get_secret("YOUTUBE_CLIENT_SECRETS_FILE", "client_secrets.json")).expanduser()
+    _yt_token = Path(get_secret("YOUTUBE_TOKEN_FILE", "token.json")).expanduser()
+    if _yt_client_secrets.exists() and _yt_token.exists():
+        try:
+            _yt_title = f"{topic} #shorts #history"
+            _yt_description = f"{topic}\n\nSubscribe to History Crossroads for more!"
+            _yt_tags = [w.lower() for w in topic.split() if w.isalpha()] + ["history", "shorts", "historycrossroads"]
+            _yt_result = _yt_upload_video(
+                video_path=final_path,
+                title=_yt_title,
+                description=_yt_description,
+                tags=_yt_tags,
+                category_id="27",
+                privacy_status="private",
+                client_secrets_file=_yt_client_secrets,
+                token_file=_yt_token,
+            )
+            youtube_video_id = _yt_result.video_id
+            youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
+            print(f"[Checkpoint 6] YouTube upload complete. video_id={youtube_video_id} url={youtube_url}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[Checkpoint 6] YouTube upload failed (non-fatal): {exc}", file=sys.stderr)
+    else:
+        print("[Checkpoint 6] YouTube credentials not found — skipping YouTube upload.", file=sys.stderr)
+
     summary = {
         "timestamp": timestamp,
         "date": target_date.isoformat(),
@@ -336,6 +366,8 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
         "music_track": music_track if preset.music_enabled else "",
         "music_relative_level": preset.music_relative_level,
         "scene_count": preset.scene_count,
+        "youtube_video_id": youtube_video_id,
+        "youtube_url": youtube_url,
     }
     _append_run_history(summary)
 
@@ -345,6 +377,8 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
     payload["generated_video_bucket_path"] = upload_result["object_path"]
     payload["generated_video_public_url"] = upload_result["public_url"]
     payload["enable_subtitles"] = preset.subtitles_enabled
+    payload["youtube_video_id"] = youtube_video_id
+    payload["youtube_url"] = youtube_url
     save_project_payload(project_id, payload)
     return summary
 

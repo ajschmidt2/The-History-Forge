@@ -9,8 +9,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import streamlit as st
-
 _ALIAS_MAP: dict[str, list[str]] = {
     "SUPABASE_URL": ["SUPABASE_URL", "supabase_url", "SUPABASE__URL"],
     "SUPABASE_ANON_KEY": ["SUPABASE_ANON_KEY", "SUPABASE_KEY", "supabase_anon_key", "supabase_key"],
@@ -157,7 +155,24 @@ def _aliases(name: str) -> list[str]:
 
 
 def resolve_openai_key() -> str:
-    # check Streamlit secrets first
+    """
+    Resolve OpenAI API key.
+    Order: env vars → .streamlit/secrets.toml → st.secrets (Streamlit runtime only)
+    This order ensures headless/MCP/CI execution works without a Streamlit context.
+    """
+    # 1. Environment variables first (headless / MCP / CI)
+    import os
+    for k in ("OPENAI_API_KEY", "openai_api_key"):
+        v = os.getenv(k, "").strip()
+        if v:
+            return v
+    # 2. .streamlit/secrets.toml parsed directly (headless fallback)
+    toml_secrets = _load_toml_secrets()
+    for k in ("OPENAI_API_KEY", "openai_api_key"):
+        v = str(toml_secrets.get(k, "")).strip()
+        if v:
+            return v
+    # 3. st.secrets — only when running inside a live Streamlit runtime
     try:
         import streamlit as st
         for k in ("OPENAI_API_KEY", "openai_api_key"):
@@ -166,14 +181,6 @@ def resolve_openai_key() -> str:
                 return str(v).strip()
     except Exception:
         pass
-
-    # then env vars
-    import os
-    for k in ("OPENAI_API_KEY", "openai_api_key"):
-        v = os.getenv(k)
-        if v is not None and str(v).strip():
-            return str(v).strip()
-
     return ""
 
 def get_secret(name: str, default: str = "", required: bool = False) -> str:
@@ -181,26 +188,20 @@ def get_secret(name: str, default: str = "", required: bool = False) -> str:
     Safe secret getter.
     Always returns a string (never None) so calling code can safely do .strip().
     Looks in:
-      1) st.secrets – exact key, then all aliases, then nested section paths
-      2) environment variables – exact key, then all aliases
-      3) default
+      1) environment variables – exact key, then all aliases
+      2) .streamlit/secrets.toml parsed directly (headless / CI / MCP-compatible)
+      3) st.secrets – only when running inside a live Streamlit runtime
     Placeholder values (e.g. "paste_key_here") are treated as absent.
     """
     all_aliases = _aliases(name)
 
-    # 1. Streamlit secrets – try every alias and nested path
-    for alias in all_aliases:
-        st_value = _read_streamlit_secret(alias)
-        if st_value:
-            return st_value
-
-    # 2. Environment variables – try every alias
+    # 1. Environment variables – try every alias (works headless and in CI)
     for alias in all_aliases:
         value = _normalize(os.environ.get(alias, ""))
         if value:
             return value
 
-    # 3. .streamlit/secrets.toml parsed directly (headless / MCP-compatible fallback)
+    # 2. .streamlit/secrets.toml parsed directly (headless / MCP-compatible fallback)
     toml_secrets = _load_toml_secrets()
     for alias in all_aliases:
         val = toml_secrets.get(alias)
@@ -208,6 +209,12 @@ def get_secret(name: str, default: str = "", required: bool = False) -> str:
             normalized = _normalize(val)
             if normalized:
                 return normalized
+
+    # 3. Streamlit secrets – only available when running inside a Streamlit runtime
+    for alias in all_aliases:
+        st_value = _read_streamlit_secret(alias)
+        if st_value:
+            return st_value
 
     if required:
         raise RuntimeError(
