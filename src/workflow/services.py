@@ -76,6 +76,7 @@ class PipelineOptions:
     topic: str = ""
     topic_direction: str = ""
     script_profile: str = "youtube_short_60s"
+    ai_video_provider: str = "veo"
 
 
 @dataclass(slots=True)
@@ -294,6 +295,22 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
 
     _logger = logging.getLogger(__name__)
     aspect_ratio = (options.aspect_ratio if options else None) or "9:16"
+    provider = (options.ai_video_provider if options else None) or "veo"
+
+    # Allow session_state overrides from the Automation tab per-run settings
+    try:
+        import streamlit as st
+        provider = st.session_state.get("automation_run_provider", provider)
+        aspect_ratio = st.session_state.get("automation_clip_aspect_ratio", aspect_ratio)
+        duration_seconds = st.session_state.get("automation_clip_duration", 5)
+    except Exception:  # noqa: BLE001
+        duration_seconds = 5
+
+    _logger.info(
+        "ai_video_clips project=%s provider=%s aspect=%s duration=%ss",
+        project_id, provider, aspect_ratio, duration_seconds,
+    )
+
     tmp_clip_dir = Path(tempfile.gettempdir()) / f"ai_clips_{project_id}"
     tmp_clip_dir.mkdir(exist_ok=True)
 
@@ -302,7 +319,8 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             project_id=project_id,
             tmp_dir=tmp_clip_dir,
             aspect_ratio=aspect_ratio,
-            duration_seconds=5,
+            duration_seconds=duration_seconds,
+            provider=provider,
         )
         _logger.info("ai_video_clips project=%s opening=%s mid=%s", project_id, opening_clip, mid_clip)
         _try_set_session_state("auto_ai_opening_clip", str(opening_clip) if opening_clip else None)
@@ -312,7 +330,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             project_id,
             "ai_video_clips",
             StepStatus.COMPLETED,
-            message=f"Generated {generated}/2 AI video clips via Veo image-to-video",
+            message=f"Generated {generated}/2 AI video clips via {provider}",
             outputs={
                 "opening_clip": str(opening_clip) if opening_clip else "",
                 "mid_clip": str(mid_clip) if mid_clip else "",
