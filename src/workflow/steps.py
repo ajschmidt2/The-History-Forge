@@ -8,6 +8,7 @@ from typing import Any
 
 from src.workflow.models import PIPELINE_STEPS
 from src.workflow.services import (
+    run_ai_video_clips,
     run_apply_scene_narrative,
     run_apply_video_effects,
     run_generate_images,
@@ -53,6 +54,7 @@ def automation_steps() -> list[WorkflowStep]:
         "ai_video": noop_step_handler,
         "music": noop_step_handler,
         "effects": lambda project_id: run_apply_video_effects(project_id).outputs,
+        "ai_video_clips": lambda project_id: run_ai_video_clips(project_id).outputs,
         "timeline": lambda project_id: run_sync_timeline(project_id).outputs,
         "render": lambda project_id: run_render_video(project_id).outputs,
     }
