@@ -15,6 +15,8 @@ from src.audio import (
     get_tts_provider_options,
     resolve_tts_settings,
 )
+from src.ai_video_generation import veo_configured, sora_configured
+from src.video.ai_video_clips import SUPPORTED_PROVIDERS
 from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import DEFAULT_VOICE_ID
 from src.workflow.models import PIPELINE_STEPS
@@ -425,6 +427,63 @@ def tab_automation(project_id: str) -> None:
         help="Generates 2 short AI video clips: one at the start, one at the midpoint of the final video.",
     )
 
+    with st.expander("⚙️ AI Video Settings", expanded=False):
+        _veo_ok = veo_configured()
+        _sora_ok = sora_configured()
+        _available = [p for p in SUPPORTED_PROVIDERS
+                      if (p == "veo" and _veo_ok) or (p == "sora" and _sora_ok)]
+
+        if not _available:
+            st.warning(
+                "No AI video providers are configured. "
+                "Set SUPABASE credentials for Veo or openai_api_key for Sora."
+            )
+            _run_provider = "veo"
+        else:
+            _global_default = st.session_state.get("ai_video_provider", _available[0])
+            if _global_default not in _available:
+                _global_default = _available[0]
+
+            _run_provider = st.selectbox(
+                "Provider for this run",
+                _available,
+                index=_available.index(_global_default),
+                format_func=lambda p: f"{'🎬 Veo' if p == 'veo' else '🤖 Sora'}",
+                help="Overrides the sidebar default for this automation run only.",
+                key="automation_provider_override",
+            )
+
+        _aspect = st.selectbox(
+            "Clip aspect ratio",
+            ["9:16", "16:9", "1:1"],
+            index=0,
+            help="9:16 for Shorts/Reels, 16:9 for YouTube landscape.",
+            key="automation_clip_aspect_ratio",
+        )
+        _duration = st.slider(
+            "Clip duration (seconds)",
+            min_value=4,
+            max_value=12,
+            value=5,
+            step=1,
+            help="Sora snaps to 4, 8, or 12. Veo uses the value as-is.",
+            key="automation_clip_duration",
+        )
+
+        if _run_provider == "sora":
+            st.info(
+                "Sora will attempt image-to-video using generated scene images. "
+                "If no image is available or the request fails, it falls back to text-to-video."
+            )
+        else:
+            st.info(
+                "Veo requires generated scene images. "
+                "Run the Images step before AI Video Clips."
+            )
+
+    # Store resolved provider for use in the step runner
+    st.session_state["automation_run_provider"] = _run_provider
+
     TRANSITION_LABEL_MAP: dict[str, str] = {
         "Random": "random",
         "Fade": "fade",
@@ -601,6 +660,7 @@ def tab_automation(project_id: str) -> None:
         topic=topic_input.strip(),
         topic_direction=topic_direction.strip(),
         script_profile="youtube_short_60s" if selected_mode == "topic_to_short_video" else str(payload.get("script_profile", "") or ""),
+        ai_video_provider=st.session_state.get("automation_run_provider", "veo"),
     )
 
     st.markdown("#### Controls")
