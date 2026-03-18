@@ -647,9 +647,18 @@ def render_video_from_timeline(
 
             # ── Splice AI video clips if available ──────────────────────────
             try:
-                import streamlit as _st_render
-                _opening = _st_render.session_state.get("auto_ai_opening_clip")
-                _mid     = _st_render.session_state.get("auto_ai_mid_clip")
+                from src.workflow.project_io import load_project_payload
+                _proj_payload = load_project_payload(project_slug)
+                _opening = str(_proj_payload.get("ai_opening_clip_path", "") or "")
+                _mid = str(_proj_payload.get("ai_mid_clip_path", "") or "")
+                # Fall back to Streamlit session state (UI path)
+                if not _opening or not _mid:
+                    try:
+                        import streamlit as _st_render
+                        _opening = _opening or str(_st_render.session_state.get("auto_ai_opening_clip") or "")
+                        _mid = _mid or str(_st_render.session_state.get("auto_ai_mid_clip") or "")
+                    except Exception:
+                        pass
                 if _opening and Path(_opening).exists():
                     scene_paths.insert(0, Path(_opening))
                     durations.insert(0, 5.0)

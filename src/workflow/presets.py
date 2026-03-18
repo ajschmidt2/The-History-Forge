@@ -29,6 +29,7 @@ class DailyShortPreset:
     target_duration_seconds: int = 60
     require_last_scene_cta: bool = True
     last_scene_cta_text: str = "Subscribe to History Crossroads for more 60-second history stories."
+    ai_video_provider: str = "sora"
 
     def to_pipeline_options(self, *, topic: str = "", selected_music_track: str = "") -> PipelineOptions:
         return PipelineOptions(
@@ -48,6 +49,7 @@ class DailyShortPreset:
             automation_mode="existing_script_full_workflow",
             topic=topic,
             script_profile="youtube_short_60s",
+            ai_video_provider=self.ai_video_provider,
         )
 
     def as_dict(self) -> dict[str, object]:

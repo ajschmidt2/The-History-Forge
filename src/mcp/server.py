@@ -21,6 +21,7 @@ from src.mcp.tools import (
     get_recent_daily_runs,
     rerun_project_render,
     run_daily_short_video,
+    upload_project_video,
 )
 
 logging.basicConfig(
@@ -170,6 +171,24 @@ TOOL_SCHEMAS: list[types.Tool] = [
             "required": ["project_id"],
         },
     ),
+    types.Tool(
+        name="upload_project_video",
+        description=(
+            "Upload an existing rendered project video to Supabase storage and YouTube. "
+            "Use this when a render completed successfully but upload was skipped or failed. "
+            "Updates the project payload and appends to run history."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "The project ID whose final.mp4 should be uploaded (required).",
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
 ]
 
 _TOOL_HANDLERS = {
@@ -177,6 +196,7 @@ _TOOL_HANDLERS = {
     "generate_topic": generate_topic,
     "get_recent_daily_runs": get_recent_daily_runs,
     "rerun_project_render": rerun_project_render,
+    "upload_project_video": upload_project_video,
 }
 
 

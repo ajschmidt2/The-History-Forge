@@ -76,7 +76,7 @@ class PipelineOptions:
     topic: str = ""
     topic_direction: str = ""
     script_profile: str = "youtube_short_60s"
-    ai_video_provider: str = "veo"
+    ai_video_provider: str = "sora"
 
 
 @dataclass(slots=True)
@@ -289,11 +289,12 @@ def _try_set_session_state(key: str, value: object) -> None:
 
 
 def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) -> StepResult:
-    """Generate opening and midpoint AI video clips and store paths in session state."""
+    """Generate opening and midpoint AI video clips and persist paths to project payload."""
+    import shutil
     import tempfile
     from src.video.ai_video_clips import generate_ai_video_clips
 
-    _logger = logging.getLogger(__name__)
+    _logger = _workflow_logger(project_id)
     aspect_ratio = (options.aspect_ratio if options else None) or "9:16"
     provider = (options.ai_video_provider if options else None) or "veo"
 
@@ -342,17 +343,42 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             clip_done_callback=_clip_done,
         )
         _logger.info("ai_video_clips project=%s opening=%s mid=%s", project_id, opening_clip, mid_clip)
-        _try_set_session_state("auto_ai_opening_clip", str(opening_clip) if opening_clip else None)
-        _try_set_session_state("auto_ai_mid_clip", str(mid_clip) if mid_clip else None)
-        generated = sum(1 for c in [opening_clip, mid_clip] if c)
+
+        # Persist clips to project assets dir so render can find them headlessly
+        videos_dir = project_dir(project_id) / "assets" / "videos"
+        videos_dir.mkdir(parents=True, exist_ok=True)
+        opening_persisted: Path | None = None
+        mid_persisted: Path | None = None
+        if opening_clip and Path(opening_clip).exists() and Path(opening_clip).stat().st_size > 0:
+            opening_persisted = videos_dir / "ai_opening_clip.mp4"
+            shutil.copy2(opening_clip, opening_persisted)
+            _logger.info("ai_video_clips persisted opening_clip path=%s size=%d", opening_persisted, opening_persisted.stat().st_size)
+        if mid_clip and Path(mid_clip).exists() and Path(mid_clip).stat().st_size > 0:
+            mid_persisted = videos_dir / "ai_mid_clip.mp4"
+            shutil.copy2(mid_clip, mid_persisted)
+            _logger.info("ai_video_clips persisted mid_clip path=%s size=%d", mid_persisted, mid_persisted.stat().st_size)
+        if not opening_persisted and not mid_persisted:
+            _logger.warning("ai_video_clips no clips persisted provider=%s", provider)
+
+        # Save to project payload for headless render access
+        payload = load_project_payload(project_id)
+        payload["ai_opening_clip_path"] = str(opening_persisted) if opening_persisted else ""
+        payload["ai_mid_clip_path"] = str(mid_persisted) if mid_persisted else ""
+        save_project_payload(project_id, payload)
+
+        # Also set session state for UI / Streamlit render path
+        _try_set_session_state("auto_ai_opening_clip", str(opening_persisted) if opening_persisted else None)
+        _try_set_session_state("auto_ai_mid_clip", str(mid_persisted) if mid_persisted else None)
+
+        generated = sum(1 for c in [opening_persisted, mid_persisted] if c)
         return StepResult(
             project_id,
             "ai_video_clips",
             StepStatus.COMPLETED,
             message=f"Generated {generated}/2 AI video clips via {provider}",
             outputs={
-                "opening_clip": str(opening_clip) if opening_clip else "",
-                "mid_clip": str(mid_clip) if mid_clip else "",
+                "opening_clip": str(opening_persisted) if opening_persisted else "",
+                "mid_clip": str(mid_persisted) if mid_persisted else "",
             },
         )
     except Exception as exc:  # noqa: BLE001
@@ -460,6 +486,14 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
             logger.info("step=%s status=started", step_name)
         step_result = handler()
         if step_result.status == StepStatus.FAILED:
+            # ai_video_clips is non-fatal — log and continue without clips
+            if step_name == "ai_video_clips":
+                result.warnings.append(f"ai_video_clips skipped (non-fatal): {step_result.message}")
+                result.skipped_steps.append(step_name)
+                logger.warning("step=ai_video_clips status=failed reason=%s continuing_without_clips=True", step_result.message)
+                if progress:
+                    progress({"step": step_name, "status": StepStatus.SKIPPED, "index": idx, "total": total, "message": step_result.message})
+                continue
             result.failed_step = step_name
             result.warnings.append(step_result.message)
             logger.error("step=%s status=failed error=%s", step_name, step_result.message)
@@ -920,9 +954,19 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
     update_step_status(project_id, "images", StepStatus.IN_PROGRESS)
     images_dir = project_dir(project_id) / "assets/images"
     generated = 0
+    logger = _workflow_logger(project_id)
+    scenes_to_generate = scenes[: cfg.number_of_scenes]
+    # Build a cross-scene visual anchor from project metadata so all images share
+    # the same era, palette, and cinematic treatment.
+    payload = load_project_payload(project_id)
+    _topic = str(payload.get("topic", "") or payload.get("project_title", "") or "").strip()
+    _era = str(payload.get("era", "") or "").strip()
+    visual_anchor = ""
+    if _topic:
+        visual_anchor = f"{_topic}. {_era + '. ' if _era else ''}Consistent historical era, unified palette, same cinematic treatment across all scenes."
     try:
-        for scene in scenes[: cfg.number_of_scenes]:
-            updated = generate_image_for_scene(scene, aspect_ratio=cfg.aspect_ratio, visual_style=cfg.visual_style)
+        for scene in scenes_to_generate:
+            updated = generate_image_for_scene(scene, aspect_ratio=cfg.aspect_ratio, visual_style=cfg.visual_style, visual_anchor=visual_anchor)
             if updated.image_bytes:
                 out = images_dir / f"s{updated.index:02d}.png"
                 out.write_bytes(updated.image_bytes)
@@ -932,11 +976,21 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
                 except Exception:
                     pass
                 generated += 1
+            else:
+                err = getattr(updated, "image_error", "") or "unknown error"
+                logger.warning("image_generation_failed scene=%s error=%s", getattr(updated, "index", "?"), err)
         save_scenes(project_id, scenes)
         sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001
         update_step_status(project_id, "images", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "images", StepStatus.FAILED, message=str(exc), outputs={"generated": generated})
+
+    expected_count = len(scenes_to_generate)
+    if generated < expected_count:
+        missing = expected_count - generated
+        msg = f"{missing}/{expected_count} scene images failed to generate"
+        update_step_status(project_id, "images", StepStatus.FAILED, error=msg)
+        return StepResult(project_id, "images", StepStatus.FAILED, message=msg, outputs={"generated": generated})
 
     update_step_status(project_id, "images", StepStatus.COMPLETED)
     return StepResult(project_id, "images", StepStatus.COMPLETED, outputs={"generated": generated})
