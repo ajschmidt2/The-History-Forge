@@ -76,7 +76,7 @@ class PipelineOptions:
     topic: str = ""
     topic_direction: str = ""
     script_profile: str = "youtube_short_60s"
-    ai_video_provider: str = "veo"
+    ai_video_provider: str = "sora"
 
 
 @dataclass(slots=True)
@@ -295,16 +295,38 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
 
     _logger = logging.getLogger(__name__)
     aspect_ratio = (options.aspect_ratio if options else None) or "9:16"
-    provider = (options.ai_video_provider if options else None) or "veo"
+    provider = (options.ai_video_provider if options else None) or "sora"
 
-    # Allow session_state overrides from the Automation tab per-run settings
+    # Allow session_state overrides from the Automation tab per-run settings.
+    # In headless mode st.session_state exists but is inert; detect via ScriptRunContext.
+    _session_state_live = False
     try:
-        import streamlit as st
-        provider = st.session_state.get("automation_run_provider", provider)
-        aspect_ratio = st.session_state.get("automation_clip_aspect_ratio", aspect_ratio)
-        duration_seconds = st.session_state.get("automation_clip_duration", 5)
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        _session_state_live = get_script_run_ctx() is not None
     except Exception:  # noqa: BLE001
+        pass
+
+    if _session_state_live:
+        try:
+            import streamlit as st
+            ss_provider = st.session_state.get("automation_run_provider", "")
+            if ss_provider:
+                provider = ss_provider
+            aspect_ratio = st.session_state.get("automation_clip_aspect_ratio", aspect_ratio)
+            duration_seconds = st.session_state.get("automation_clip_duration", 5)
+        except Exception:  # noqa: BLE001
+            duration_seconds = 5
+    else:
         duration_seconds = 5
+        # Headless: read provider from daily_automation_settings.json if configured
+        try:
+            from src.workflow.daily_job import load_daily_automation_settings
+            _settings = load_daily_automation_settings()
+            _preset_provider = str(_settings.get("preset", {}).get("ai_video_provider", "") or "")
+            if _preset_provider:
+                provider = _preset_provider
+        except Exception:  # noqa: BLE001
+            pass
 
     _logger.info(
         "ai_video_clips project=%s provider=%s aspect=%s duration=%ss",
