@@ -1,0 +1,4 @@
+[server]
+# Prevent file-watcher from restarting the app mid-run
+# (AI clip generation takes 5-10 minutes — a restart would kill the job)
+runOnSave = false

@@ -162,7 +162,13 @@ def _render_workflow_progress(project_id: str, mode: str, progress_holder: Any, 
 
     with progress_holder.container():
         st.progress(ratio)
-        st.write(f"Running step {current_idx} of {len(step_order)}: {current.replace('_', ' ').title()}")
+        step_label = current.replace('_', ' ').title()
+        if current == "ai_video_clips":
+            clips_progress = st.session_state.get("ai_clips_progress", "")
+            detail = f" — {clips_progress}" if clips_progress else " (this takes 5-10 minutes, please keep this tab open)"
+            st.write(f"Running step {current_idx} of {len(step_order)}: {step_label}{detail}")
+        else:
+            st.write(f"Running step {current_idx} of {len(step_order)}: {step_label}")
         cols = st.columns(len(step_order))
         for idx, step in enumerate(step_order):
             status = state.step_statuses.get(step, StepStatus.NOT_STARTED)
@@ -685,6 +691,7 @@ def tab_automation(project_id: str) -> None:
             st.error("Voice ID is required for ElevenLabs voiceover.")
             return
         _persist_current_settings()
+        st.session_state.pop("ai_clips_progress", None)
         result = run_full_workflow(
             project_id,
             FullWorkflowOptions(

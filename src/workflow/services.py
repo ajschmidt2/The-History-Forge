@@ -311,6 +311,23 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
         project_id, provider, aspect_ratio, duration_seconds,
     )
 
+    def _clip_done(label: str, success: bool, done: int, total: int) -> None:
+        """Called after each individual clip completes to push a live UI update."""
+        _status = "done" if success else "failed"
+        _logger.info(
+            "ai_video_clips clip=%s status=%s progress=%d/%d",
+            label, _status, done, total,
+        )
+        _msg = f"AI clip {done}/{total} — {label} {_status}"
+        _try_set_session_state("ai_clips_progress", _msg)
+        # Push an in-app toast notification so the user sees activity in real-time
+        try:
+            import streamlit as _st
+            _icon = "✅" if success else "⚠️"
+            _st.toast(f"{_icon} {_msg}", icon=None)
+        except Exception:  # noqa: BLE001
+            pass
+
     tmp_clip_dir = Path(tempfile.gettempdir()) / f"ai_clips_{project_id}"
     tmp_clip_dir.mkdir(exist_ok=True)
 
@@ -321,6 +338,8 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             aspect_ratio=aspect_ratio,
             duration_seconds=duration_seconds,
             provider=provider,
+            workflow_logger=_logger,
+            clip_done_callback=_clip_done,
         )
         _logger.info("ai_video_clips project=%s opening=%s mid=%s", project_id, opening_clip, mid_clip)
         _try_set_session_state("auto_ai_opening_clip", str(opening_clip) if opening_clip else None)
@@ -464,6 +483,24 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
     final_path = project_dir(project_id) / "renders/final.mp4"
     if final_path.exists():
         result.final_output_path = str(final_path)
+
+    # Ensure YouTube metadata exists in the payload (for existing-script mode that
+    # has no script step — the topic may already be in the payload but metadata not yet set).
+    try:
+        _yt_payload = load_project_payload(project_id)
+        _yt_topic = str(_yt_payload.get("topic", "") or cfg.pipeline.topic or "").strip()
+        if _yt_topic and not _yt_payload.get("youtube_title"):
+            _yt_payload["youtube_title"] = f"{_yt_topic} #shorts #history"
+            _yt_payload["youtube_description"] = (
+                f"{_yt_topic}\n\nSubscribe to History Crossroads for more 60-second history stories!"
+            )
+            _yt_payload["youtube_tags"] = (
+                [w.lower() for w in _yt_topic.split() if w.isalpha()]
+                + ["history", "shorts", "historycrossroads", "historyfacts"]
+            )
+            save_project_payload(project_id, _yt_payload)
+    except Exception:  # noqa: BLE001
+        pass
 
     logger.info(
         "run_summary completed_steps=%s skipped_steps=%s failed_step=%s final_render=%s",
@@ -746,6 +783,15 @@ def run_generate_short_script(project_id: str, options: PipelineOptions | None =
     payload["script_profile"] = "youtube_short_60s"
     payload["automation_mode"] = "topic_to_short_video"
     payload["script_text"] = script_text
+    # Pre-generate YouTube metadata so the upload tab can auto-fill
+    payload["youtube_title"] = f"{topic} #shorts #history"
+    payload["youtube_description"] = (
+        f"{topic}\n\nSubscribe to History Crossroads for more 60-second history stories!"
+    )
+    payload["youtube_tags"] = (
+        [w.lower() for w in topic.split() if w.isalpha()]
+        + ["history", "shorts", "historycrossroads", "historyfacts"]
+    )
     (project_dir(project_id) / "script.txt").write_text(script_text, encoding="utf-8")
     save_project_payload(project_id, payload)
     try:
