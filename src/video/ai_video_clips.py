@@ -367,6 +367,8 @@ def generate_ai_video_clips(
     aspect_ratio: str = "9:16",
     duration_seconds: int = 5,
     provider: str = "veo",
+    workflow_logger=None,
+    clip_done_callback=None,
 ) -> tuple:
     """
     Main entry point called by the automation step runner.
@@ -470,12 +472,22 @@ def generate_ai_video_clips(
                 f"{out_path} ({len(video_bytes):,} bytes)"
             )
             results.append(out_path)
+            if callable(clip_done_callback):
+                try:
+                    clip_done_callback(label, True, len(results), len(clip_targets))
+                except Exception:  # noqa: BLE001
+                    pass
         else:
             logger.warning(
                 f"ai_video_clips [{provider}]: {label} clip returned no bytes"
             )
             results.append(None)
             failures.append(label)
+            if callable(clip_done_callback):
+                try:
+                    clip_done_callback(label, False, len(results), len(clip_targets))
+                except Exception:  # noqa: BLE001
+                    pass
 
     if failures:
         logger.warning(

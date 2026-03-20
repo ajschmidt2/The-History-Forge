@@ -88,6 +88,65 @@ def _refresh_if_needed(credentials: Credentials, token_file: Path) -> Credential
 
 
 
+def exchange_code_for_token(
+    code: str,
+    *,
+    redirect_uri: str,
+    token_file: str | Path | None = None,
+) -> Credentials:
+    """Exchange an OAuth authorization code for access + refresh tokens.
+
+    Reads client_id/client_secret from Streamlit secrets ([google_oauth] section)
+    first, then falls back to client_secrets.json.
+    Saves the resulting Credentials to token_file (defaults to YOUTUBE_TOKEN_FILE).
+    """
+    from google_auth_oauthlib.flow import Flow
+
+    # Try Streamlit secrets first (web OAuth client used by build_youtube_auth_url)
+    _client_id = _client_secret = ""
+    try:
+        import streamlit as _st
+        _client_id = str(_st.secrets["google_oauth"]["client_id"] or "").strip()
+        _client_secret = str(_st.secrets["google_oauth"]["client_secret"] or "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+
+    if _client_id and _client_secret:
+        flow = Flow.from_client_config(
+            {
+                "web": {
+                    "client_id": _client_id,
+                    "client_secret": _client_secret,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "redirect_uris": [redirect_uri],
+                }
+            },
+            scopes=[YOUTUBE_UPLOAD_SCOPE],
+            redirect_uri=redirect_uri,
+        )
+    else:
+        # Fall back to client_secrets.json (installed app)
+        cfg = _resolve_auth_config(token_file=token_file)
+        if not cfg.client_secrets_file.exists():
+            raise YouTubeUploadError(
+                "Cannot exchange OAuth code: [google_oauth] not in secrets and "
+                f"client_secrets.json not found at {cfg.client_secrets_file}."
+            )
+        flow = Flow.from_client_secrets_file(
+            str(cfg.client_secrets_file),
+            scopes=[YOUTUBE_UPLOAD_SCOPE],
+            redirect_uri=redirect_uri,
+        )
+
+    flow.fetch_token(code=code)
+    credentials = flow.credentials
+    resolved_token_file = Path(token_file or get_secret("YOUTUBE_TOKEN_FILE", "token.json")).expanduser()
+    _save_credentials(credentials, resolved_token_file)
+    log.info("YouTube OAuth token exchanged and saved to %s", resolved_token_file)
+    return credentials
+
+
 def _run_oauth_flow(client_secrets_file: Path, token_file: Path) -> Credentials:
     if not client_secrets_file.exists():
         raise YouTubeUploadError(
