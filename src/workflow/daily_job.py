@@ -277,6 +277,10 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
 
     # Checkpoint 2: run full workflow
     pipeline = preset.to_pipeline_options(topic=topic, selected_music_track=music_track if preset.music_enabled else "")
+    # Apply scene_transition_type from settings (not stored on DailyShortPreset)
+    _preset_payload = settings.get("preset") if isinstance(settings.get("preset"), dict) else {}
+    _transition = str(_preset_payload.get("scene_transition_type", "fade") or "fade")
+    pipeline = replace(pipeline, scene_transition_type=_transition)
     run_result = run_full_workflow(
         project_id,
         FullWorkflowOptions(
@@ -385,6 +389,9 @@ def run_daily_video_job(run_date: date | None = None) -> dict[str, Any]:
 
 
 def _cli() -> int:
+    # Always run from the project root so relative paths (data/, .streamlit/) resolve correctly.
+    _project_root = Path(__file__).resolve().parents[2]
+    os.chdir(_project_root)
     try:
         result = run_daily_video_job()
     except Exception as exc:

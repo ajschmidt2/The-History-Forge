@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 MCP_DEFAULT_PRESET: dict[str, Any] = {
     "aspect_ratio": "9:16",
     "visual_style": "Dramatic illustration",
-    "effects_style": "Ken Burns - Standard",
+    "effects_style": "Ken Burns - Strong",
     "voice_provider": "openai",
     "openai_tts_model": "gpt-4o-mini-tts",
     "openai_tts_voice": "ash",
@@ -34,9 +34,11 @@ MCP_DEFAULT_PRESET: dict[str, Any] = {
     "scene_count": 14,
     "subtitles_enabled": False,
     "music_enabled": True,
-    "music_relative_level": 0.15,
+    "music_relative_level": 0.09,
     "cta_text": "Subscribe to History Crossroads",
     "ai_video_provider": "sora",
+    "scene_transition_type": "random",
+    "selected_music_track": "data/music_library/History Track 60 Seconds - String instruments - 4.mp3",
 }
 
 # Preset keys that map directly to DailyShortPreset / settings["preset"] fields
@@ -53,6 +55,7 @@ _PRESET_OVERRIDE_KEYS = (
     "music_enabled",
     "music_relative_level",
     "ai_video_provider",
+    "scene_transition_type",
 )
 
 
@@ -95,6 +98,7 @@ async def run_daily_short_video(arguments: dict[str, Any]) -> list[TextContent]:
         # without requiring an MCP server restart.
         for _mod_name in (
             "src.video.ai_video_clips",
+            "src.video.ffmpeg_render",
             "src.workflow.services",
             "src.workflow.daily_job",
         ):
@@ -136,6 +140,7 @@ async def run_daily_short_video(arguments: dict[str, Any]) -> list[TextContent]:
             "selected_music_track": (
                 arguments.get("selected_music_track")
                 or existing.get("selected_music_track", "")
+                or MCP_DEFAULT_PRESET.get("selected_music_track", "")
             ),
             "preset": merged_preset,
         }
@@ -297,6 +302,14 @@ async def get_recent_daily_runs(arguments: dict[str, Any]) -> list[TextContent]:
 async def rerun_project_render(arguments: dict[str, Any]) -> list[TextContent]:
     """Re-run the render step only for an existing completed project."""
     try:
+        import importlib, sys as _sys
+        for _mod_name in ("src.video.ffmpeg_render", "src.workflow.services"):
+            if _mod_name in _sys.modules:
+                try:
+                    importlib.reload(_sys.modules[_mod_name])
+                except Exception as _e:
+                    logger.warning("mcp: reload of %s failed: %s", _mod_name, _e)
+
         from src.workflow.services import (
             FullWorkflowOptions,
             PipelineOptions,

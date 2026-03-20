@@ -273,7 +273,7 @@ def _step_outputs_exist(project_id: str, step: str) -> bool:
     if step == "ai_video_clips":
         import tempfile
         tmp_clip_dir = Path(tempfile.gettempdir()) / f"ai_clips_{project_id}"
-        return (tmp_clip_dir / "ai_clip_opening.mp4").exists() and (tmp_clip_dir / "ai_clip_mid.mp4").exists()
+        return all((tmp_clip_dir / n).exists() for n in ("ai_clip_opening.mp4", "ai_clip_q2.mp4", "ai_clip_q3.mp4", "ai_clip_q4.mp4"))
     if step == "render":
         return (project_path / "renders/final.mp4").exists()
     return False
@@ -301,7 +301,12 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
     # Allow session_state overrides from the Automation tab per-run settings
     try:
         import streamlit as st
-        provider = st.session_state.get("automation_run_provider", provider)
+        _ss_provider = st.session_state.get("automation_run_provider", provider)
+        # Empty string means user selected "None" — skip AI clips entirely
+        if _ss_provider == "":
+            _logger.info("ai_video_clips project=%s skipped (provider=None selected in UI)", project_id)
+            return StepResult(project_id, "ai_video_clips", StepStatus.SKIPPED, message="AI video clips disabled (provider=None)")
+        provider = _ss_provider
         aspect_ratio = st.session_state.get("automation_clip_aspect_ratio", aspect_ratio)
         duration_seconds = st.session_state.get("automation_clip_duration", 5)
     except Exception:  # noqa: BLE001
@@ -333,7 +338,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
     tmp_clip_dir.mkdir(exist_ok=True)
 
     try:
-        opening_clip, mid_clip = generate_ai_video_clips(
+        opening_clip, q2_clip, q3_clip, q4_clip = generate_ai_video_clips(
             project_id=project_id,
             tmp_dir=tmp_clip_dir,
             aspect_ratio=aspect_ratio,
@@ -342,49 +347,62 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             workflow_logger=_logger,
             clip_done_callback=_clip_done,
         )
-        _logger.info("ai_video_clips project=%s opening=%s mid=%s", project_id, opening_clip, mid_clip)
+        _logger.info("ai_video_clips project=%s opening=%s q2=%s q3=%s q4=%s", project_id, opening_clip, q2_clip, q3_clip, q4_clip)
 
         # Persist clips to project assets dir so render can find them headlessly
         videos_dir = project_dir(project_id) / "assets" / "videos"
         videos_dir.mkdir(parents=True, exist_ok=True)
-        opening_persisted: Path | None = None
-        mid_persisted: Path | None = None
-        if opening_clip and Path(opening_clip).exists() and Path(opening_clip).stat().st_size > 0:
-            opening_persisted = videos_dir / "ai_opening_clip.mp4"
-            shutil.copy2(opening_clip, opening_persisted)
-            _logger.info("ai_video_clips persisted opening_clip path=%s size=%d", opening_persisted, opening_persisted.stat().st_size)
-        if mid_clip and Path(mid_clip).exists() and Path(mid_clip).stat().st_size > 0:
-            mid_persisted = videos_dir / "ai_mid_clip.mp4"
-            shutil.copy2(mid_clip, mid_persisted)
-            _logger.info("ai_video_clips persisted mid_clip path=%s size=%d", mid_persisted, mid_persisted.stat().st_size)
-        if not opening_persisted and not mid_persisted:
+
+        def _persist(src, dest_name: str) -> "Path | None":
+            if src and Path(src).exists() and Path(src).stat().st_size > 0:
+                dest = videos_dir / dest_name
+                shutil.copy2(src, dest)
+                _logger.info("ai_video_clips persisted %s path=%s size=%d", dest_name, dest, dest.stat().st_size)
+                return dest
+            return None
+
+        opening_persisted = _persist(opening_clip, "ai_opening_clip.mp4")
+        q2_persisted      = _persist(q2_clip,      "ai_q2_clip.mp4")
+        q3_persisted      = _persist(q3_clip,      "ai_q3_clip.mp4")
+        q4_persisted      = _persist(q4_clip,      "ai_q4_clip.mp4")
+
+        all_clips = [opening_persisted, q2_persisted, q3_persisted, q4_persisted]
+        if not any(all_clips):
             _logger.warning("ai_video_clips no clips persisted provider=%s", provider)
 
         # Save to project payload for headless render access
         payload = load_project_payload(project_id)
         payload["ai_opening_clip_path"] = str(opening_persisted) if opening_persisted else ""
-        payload["ai_mid_clip_path"] = str(mid_persisted) if mid_persisted else ""
+        payload["ai_q2_clip_path"]      = str(q2_persisted)      if q2_persisted      else ""
+        payload["ai_q3_clip_path"]      = str(q3_persisted)      if q3_persisted      else ""
+        payload["ai_q4_clip_path"]      = str(q4_persisted)      if q4_persisted      else ""
         save_project_payload(project_id, payload)
 
         # Also set session state for UI / Streamlit render path
         _try_set_session_state("auto_ai_opening_clip", str(opening_persisted) if opening_persisted else None)
-        _try_set_session_state("auto_ai_mid_clip", str(mid_persisted) if mid_persisted else None)
+        _try_set_session_state("auto_ai_q2_clip",      str(q2_persisted)      if q2_persisted      else None)
+        _try_set_session_state("auto_ai_q3_clip",      str(q3_persisted)      if q3_persisted      else None)
+        _try_set_session_state("auto_ai_q4_clip",      str(q4_persisted)      if q4_persisted      else None)
 
-        generated = sum(1 for c in [opening_persisted, mid_persisted] if c)
+        generated = sum(1 for c in all_clips if c)
         return StepResult(
             project_id,
             "ai_video_clips",
             StepStatus.COMPLETED,
-            message=f"Generated {generated}/2 AI video clips via {provider}",
+            message=f"Generated {generated}/4 AI video clips via {provider}",
             outputs={
                 "opening_clip": str(opening_persisted) if opening_persisted else "",
-                "mid_clip": str(mid_persisted) if mid_persisted else "",
+                "q2_clip": str(q2_persisted) if q2_persisted else "",
+                "q3_clip": str(q3_persisted) if q3_persisted else "",
+                "q4_clip": str(q4_persisted) if q4_persisted else "",
             },
         )
     except Exception as exc:  # noqa: BLE001
         _logger.warning("ai_video_clips project=%s failed: %s", project_id, exc)
         _try_set_session_state("auto_ai_opening_clip", None)
-        _try_set_session_state("auto_ai_mid_clip", None)
+        _try_set_session_state("auto_ai_q2_clip", None)
+        _try_set_session_state("auto_ai_q3_clip", None)
+        _try_set_session_state("auto_ai_q4_clip", None)
         return StepResult(project_id, "ai_video_clips", StepStatus.FAILED, message=str(exc))
 
 
@@ -1147,7 +1165,10 @@ def _invalidate_render_artifacts_for_settings_change(project_id: str, old_sig: s
 
 
 
-_NAMED_TRANSITIONS = ["fade", "fadeblack", "fadewhite", "wipeleft", "wiperight", "slideleft", "slideright", "smoothleft", "smoothright", "circleopen", "circleclose", "distance"]
+# Keep only well-tested xfade transition types (circleopen/close, distance,
+# smoothleft/right, and dissolve variants are inconsistently supported across
+# FFmpeg builds and can cause the entire crossfade graph to fail silently).
+_NAMED_TRANSITIONS = ["fade", "fadeblack", "wipeleft", "wiperight", "slideleft", "slideright"]
 
 
 def _build_transition_types(transition_type: str, scene_count: int) -> list[str]:
@@ -1284,6 +1305,7 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
                 "selected_music_track": resolved_music_track,
                 "music": {"path": resolved_music_track, "volume_db": music_volume_db, "ducking": {"enabled": True, "threshold_db": -28, "ratio": 8, "attack": 15, "release": 250}},
                 "transition_types": _build_transition_types(cfg.scene_transition_type, len(scenes)),
+                "crossfade": cfg.scene_transition_type not in {"", "fade"},
             },
         )
     except Exception as exc:  # noqa: BLE001
@@ -1299,6 +1321,14 @@ def run_sync_timeline(project_id: str, options: PipelineOptions | None = None) -
 
 
 def run_render_video(project_id: str, options: PipelineOptions | None = None) -> StepResult:
+    # Always reload ffmpeg_render so on-disk fixes are used without server restart
+    try:
+        import importlib as _il, sys as _sys
+        if "src.video.ffmpeg_render" in _sys.modules:
+            _il.reload(_sys.modules["src.video.ffmpeg_render"])
+    except Exception:
+        pass
+
     ensure_project_files(project_id)
     project_state, cfg = _load_options(project_id, options)
     workflow_state = load_workflow_state(project_id)
@@ -1513,7 +1543,7 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     report_path = project_dir(project_id) / "renders" / "render_report.json"
     try:
         ensure_ffmpeg_exists()
-        render_video_from_timeline(timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=2000)
+        render_video_from_timeline(timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=2000, render_warnings=warnings)
         try:
             _sb_store.upload_video(project_id, output_path.name, output_path)
         except Exception:
@@ -1525,7 +1555,7 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
                 fallback_timeline_path = project_dir(project_id) / "renders" / "timeline.no_captions.json"
                 fallback_timeline_path.parent.mkdir(parents=True, exist_ok=True)
                 fallback_timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
-                render_video_from_timeline(fallback_timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=2000)
+                render_video_from_timeline(fallback_timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=2000, render_warnings=warnings)
                 warnings.append(f"Caption render failed ({exc}); continued without burned captions.")
             except Exception as retry_exc:  # noqa: BLE001
                 update_step_status(project_id, "render", StepStatus.FAILED, error=str(retry_exc))

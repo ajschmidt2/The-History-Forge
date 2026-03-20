@@ -19,7 +19,7 @@ from src.storage.supabase_assets import stage_timeline_assets
 from .audio_mix import build_audio_mix_cmd
 from .captions import write_ass_file, write_srt_file
 from .timeline_schema import Timeline
-from .utils import ensure_ffmpeg_exists, ensure_parent_dir, get_media_duration, run_cmd
+from .utils import ensure_ffmpeg_exists, ensure_parent_dir, get_media_duration, resolve_ffmpeg_exe, run_cmd
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
@@ -106,12 +106,12 @@ def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     y_start = motion.y if motion.type == "pan" and motion.y is not None else motion.y_start
     y_end = motion.y if motion.type == "pan" and motion.y is not None else motion.y_end
 
-    # Render zoompan at 4× the target FPS internally so position is computed at
+    # Render zoompan at 8× the target FPS internally so position is computed at
     # fine sub-frame resolution, then blend-downsample to the target rate with
-    # minterpolate (mi_mode=blend).  Blend mode averages the 4 internal frames
+    # minterpolate (mi_mode=blend).  Blend mode averages the 8 internal frames
     # into each output frame (temporal anti-aliasing), eliminating sub-pixel
     # timing jitter that causes visible stutter at native FPS.
-    internal_fps = fps * 4
+    internal_fps = fps * 8
     frames = max(2, int(math.ceil(scene.duration * internal_fps)))
 
     # Sinusoidal ease-in/ease-out: t = (1 - cos(PI * on/frames)) / 2
@@ -376,8 +376,11 @@ def _crossfade_scenes(
     ffmpeg_commands.append(cmd)
     try:
         run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
-    except Exception:
-        raise RuntimeError("xfade filter_complex failed") from None
+    except subprocess.CalledProcessError as exc:
+        _stderr = (exc.stderr or "")[-600:].strip()
+        raise RuntimeError(f"xfade filter_complex failed: {_stderr}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"xfade filter_complex failed: {exc}") from exc
 
 
 def _subtitle_filter(subtitle_path: Path) -> str:
@@ -553,6 +556,7 @@ def render_video_from_timeline(
     command_timeout_sec: float | None = None,
     max_width: int = 1280,
     safe_mode: bool = False,
+    render_warnings: list[str] | None = None,
 ) -> Path:
     ensure_ffmpeg_exists()
 
@@ -650,24 +654,87 @@ def render_video_from_timeline(
                 from src.workflow.project_io import load_project_payload
                 _proj_payload = load_project_payload(project_slug)
                 _opening = str(_proj_payload.get("ai_opening_clip_path", "") or "")
-                _mid = str(_proj_payload.get("ai_mid_clip_path", "") or "")
+                _q2      = str(_proj_payload.get("ai_q2_clip_path", "") or "")
+                _q3      = str(_proj_payload.get("ai_q3_clip_path", "") or "")
+                _q4      = str(_proj_payload.get("ai_q4_clip_path", "") or "")
                 # Fall back to Streamlit session state (UI path)
-                if not _opening or not _mid:
+                try:
+                    import streamlit as _st_render
+                    _opening = _opening or str(_st_render.session_state.get("auto_ai_opening_clip") or "")
+                    _q2      = _q2      or str(_st_render.session_state.get("auto_ai_q2_clip") or "")
+                    _q3      = _q3      or str(_st_render.session_state.get("auto_ai_q3_clip") or "")
+                    _q4      = _q4      or str(_st_render.session_state.get("auto_ai_q4_clip") or "")
+                except Exception:
+                    pass
+
+                def _strip_audio(src: Path, dest: Path) -> Path:
+                    """Re-encode AI clip to match scene format so xfade works correctly.
+
+                    Uses the same target dimensions, fps, codec, and pixel format as the
+                    rendered scene clips so the xfade filter never sees mismatched inputs.
+                    Falls back to the source file if re-encoding fails.
+                    """
+                    import logging as _log_sa
                     try:
-                        import streamlit as _st_render
-                        _opening = _opening or str(_st_render.session_state.get("auto_ai_opening_clip") or "")
-                        _mid = _mid or str(_st_render.session_state.get("auto_ai_mid_clip") or "")
-                    except Exception:
-                        pass
+                        import subprocess as _sp
+                        _ffmpeg_bin = resolve_ffmpeg_exe()
+                        _result = _sp.run(
+                            [
+                                _ffmpeg_bin, "-y", "-i", str(src),
+                                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps},format=yuv420p",
+                                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                                "-an",
+                                str(dest),
+                            ],
+                            check=True, capture_output=True,
+                        )
+                        if dest.exists() and dest.stat().st_size > 0:
+                            return dest
+                        _log_sa.getLogger(__name__).warning("ai_clip_reencode produced empty file src=%s; using original", src)
+                        return src
+                    except Exception as _enc_err:
+                        _stderr = getattr(_enc_err, "stderr", b"")
+                        _stderr_str = (_stderr.decode("utf-8", errors="replace") if isinstance(_stderr, bytes) else str(_stderr))[-400:]
+                        _log_sa.getLogger(__name__).warning(
+                            "ai_clip_reencode_failed src=%s err=%s stderr=%s; using original (xfade may fail)",
+                            src, _enc_err, _stderr_str,
+                        )
+                        return src
+
+                # Insert clips: 1 at the very beginning, then 3 evenly spaced
+                # through the original scene set (at 1/4, 1/2, 3/4 positions).
+                # Insertions are tracked so each subsequent index is offset
+                # correctly for the clips already inserted.
+                _num_orig = len(scene_paths)
+                _clips_in = 0
                 if _opening and Path(_opening).exists():
-                    scene_paths.insert(0, Path(_opening))
+                    _opening_va = tmp_path / "ai_opening_noaudio.mp4"
+                    scene_paths.insert(0, _strip_audio(Path(_opening), _opening_va))
                     durations.insert(0, 5.0)
-                if _mid and Path(_mid).exists():
-                    mid_idx = len(scene_paths) // 2
-                    scene_paths.insert(mid_idx, Path(_mid))
-                    durations.insert(mid_idx, 5.0)
-            except Exception:
-                pass
+                    _clips_in += 1
+                if _q2 and Path(_q2).exists():
+                    _q2_va = tmp_path / "ai_q2_noaudio.mp4"
+                    _idx = _num_orig // 4 + _clips_in
+                    scene_paths.insert(_idx, _strip_audio(Path(_q2), _q2_va))
+                    durations.insert(_idx, 5.0)
+                    _clips_in += 1
+                if _q3 and Path(_q3).exists():
+                    _q3_va = tmp_path / "ai_q3_noaudio.mp4"
+                    _idx = _num_orig // 2 + _clips_in
+                    scene_paths.insert(_idx, _strip_audio(Path(_q3), _q3_va))
+                    durations.insert(_idx, 5.0)
+                    _clips_in += 1
+                if _q4 and Path(_q4).exists():
+                    _q4_va = tmp_path / "ai_q4_noaudio.mp4"
+                    _idx = 3 * _num_orig // 4 + _clips_in
+                    scene_paths.insert(_idx, _strip_audio(Path(_q4), _q4_va))
+                    durations.insert(_idx, 5.0)
+                    _clips_in += 1
+            except Exception as _clips_err:
+                import logging as _log_cl
+                _log_cl.getLogger(__name__).warning(
+                    "ai_video_clips insert failed project=%s err=%s", project_slug, _clips_err
+                )
 
             stitched_path = tmp_path / "stitched.mp4"
             if (not safe_mode) and timeline.meta.crossfade and len(scene_paths) > 1:
@@ -694,10 +761,15 @@ def render_video_from_timeline(
                                     "Crossfade disabled because crossfade_duration is too large for one or more scene durations.\n"
                                 )
                         _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
-                except (RuntimeError, subprocess.CalledProcessError):
+                except (RuntimeError, subprocess.CalledProcessError) as _xfade_err:
+                    _xfade_msg = f"Crossfade graph failed ({_xfade_err}); falling back to concat."
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
-                            handle.write("Crossfade graph failed; falling back to concat.\n")
+                            handle.write(_xfade_msg + "\n")
+                    import logging as _log_mod
+                    _log_mod.getLogger(__name__).warning("xfade_fallback project=%s reason=%s", project_slug, _xfade_err)
+                    if render_warnings is not None:
+                        render_warnings.append(_xfade_msg)
                     _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
             else:
                 if safe_mode and timeline.meta.crossfade and len(scene_paths) > 1 and log_file:

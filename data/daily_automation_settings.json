@@ -1,0 +1,28 @@
+{
+  "topic_override": "",
+  "topic_direction": "",
+  "selected_music_track": "data/music_library/History Track 60 Seconds - String instruments - 4.mp3",
+  "preset": {
+    "mode": "topic_to_short_video",
+    "aspect_ratio": "9:16",
+    "output_width": 720,
+    "output_height": 1280,
+    "visual_style": "Dramatic illustration",
+    "effects_style": "Ken Burns - Strong",
+    "voice_provider": "openai",
+    "openai_tts_model": "gpt-4o-mini-tts",
+    "openai_tts_voice": "ash",
+    "scene_count": 14,
+    "subtitles_enabled": false,
+    "burn_subtitles": false,
+    "generate_srt": false,
+    "music_enabled": true,
+    "music_relative_level": 0.09,
+    "target_word_count": 150,
+    "target_duration_seconds": 60,
+    "require_last_scene_cta": true,
+    "last_scene_cta_text": "Subscribe to History Crossroads",
+    "ai_video_provider": "sora",
+    "scene_transition_type": "random"
+  }
+}

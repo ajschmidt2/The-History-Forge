@@ -308,6 +308,24 @@ def _render_daily_automation_status(project_id: str) -> None:
     music_enabled = st.toggle("Enable music in daily automation", value=bool(preset.get("music_enabled", True)))
     music_level = st.slider("Daily music level", min_value=0.0, max_value=1.0, step=0.05, value=float(preset.get("music_relative_level", 0.15) or 0.15), disabled=not music_enabled)
 
+    _daily_effect_options = ["Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic", "Off"]
+    _daily_effect_default = str(preset.get("effects_style", "Ken Burns - Standard") or "Ken Burns - Standard")
+    if _daily_effect_default not in _daily_effect_options:
+        _daily_effect_default = "Ken Burns - Standard"
+    daily_effects_style = st.selectbox("Daily video effects style", options=_daily_effect_options, index=_daily_effect_options.index(_daily_effect_default))
+
+    _daily_transition_options = {"Random": "random", "Fade": "fade", "Fade to Black": "fadeblack", "Wipe Left": "wipeleft", "Wipe Right": "wiperight", "Slide Left": "slideleft", "Slide Right": "slideright"}
+    _daily_transition_value = str(preset.get("scene_transition_type", "fade") or "fade")
+    _daily_transition_label = {v: k for k, v in _daily_transition_options.items()}.get(_daily_transition_value, "Fade")
+    daily_transition_label = st.selectbox("Daily scene transition", options=list(_daily_transition_options.keys()), index=list(_daily_transition_options.keys()).index(_daily_transition_label))
+    daily_transition_type = _daily_transition_options[daily_transition_label]
+
+    _daily_ai_options = ["None", "sora", "veo"]
+    _daily_ai_default = str(preset.get("ai_video_provider", "sora") or "sora")
+    if _daily_ai_default not in _daily_ai_options:
+        _daily_ai_default = "sora"
+    daily_ai_provider = st.selectbox("Daily AI video provider", options=_daily_ai_options, index=_daily_ai_options.index(_daily_ai_default), format_func=lambda p: {"None": "None", "sora": "OpenAI Sora", "veo": "Google Veo"}.get(p, p))
+
     project_music_tracks = _list_music_tracks(project_dir(project_id) / "assets/music")
     shared_music_tracks = _list_music_tracks(MUSIC_LIBRARY_ROOT)
     combined_tracks = [str(p) for p in project_music_tracks + shared_music_tracks]
@@ -330,6 +348,9 @@ def _render_daily_automation_status(project_id: str) -> None:
                 "subtitles_enabled": bool(subtitles_enabled),
                 "music_enabled": bool(music_enabled),
                 "music_relative_level": float(music_level),
+                "effects_style": daily_effects_style,
+                "scene_transition_type": daily_transition_type,
+                "ai_video_provider": daily_ai_provider if daily_ai_provider != "None" else "",
             },
         })
         if workflow_path.exists() and schedule_cron.strip() and schedule_cron.strip() != current_cron:
@@ -344,6 +365,9 @@ def tab_automation(project_id: str) -> None:
     payload = load_project_payload(project_id)
     state = load_workflow_state(project_id)
     counts = _asset_counts(project_id)
+
+    _daily_settings = load_daily_automation_settings()
+    _daily_preset = _daily_settings.get("preset", {}) if isinstance(_daily_settings.get("preset"), dict) else {}
 
     automation_mode = _automation_mode(payload)
     script_text = str(payload.get("script_text", "") or "").strip()
@@ -405,12 +429,16 @@ def tab_automation(project_id: str) -> None:
 
     payload_enable_effects = payload.get("enable_video_effects")
     default_enable_effects = bool(payload_enable_effects) if payload_enable_effects is not None else True
-    default_effect_style = normalize_video_effects_style(payload.get("video_effects_style", "Ken Burns - Standard"), enable_motion=default_enable_effects)
+    default_effect_style = normalize_video_effects_style(
+        payload.get("video_effects_style") or _daily_preset.get("effects_style", "Ken Burns - Standard"),
+        enable_motion=default_enable_effects,
+    )
     payload_enable_subtitles = payload.get("enable_subtitles", payload.get("automation_include_captions"))
     default_enable_subtitles = bool(payload_enable_subtitles) if payload_enable_subtitles is not None else (selected_mode == "topic_to_short_video")
     payload_enable_music = payload.get("enable_music", payload.get("include_music"))
     default_enable_music = bool(payload_enable_music) if payload_enable_music is not None else False
-    default_music_volume = min(1.0, max(0.0, _coerce_float(payload.get("music_volume_relative_to_voiceover", 0.25), 0.25)))
+    _music_vol_fallback = float(_daily_preset.get("music_relative_level", 0.15) or 0.15)
+    default_music_volume = min(1.0, max(0.0, _coerce_float(payload.get("music_volume_relative_to_voiceover") or _music_vol_fallback, _music_vol_fallback)))
 
     with col_settings_1:
         aspect_ratio = st.selectbox("Aspect Ratio", options=["16:9", "9:16"], index=0 if default_ratio == "16:9" else 1)
@@ -422,7 +450,9 @@ def tab_automation(project_id: str) -> None:
     # ── AI Video Clips ─────────────────────────────────────────────
     st.subheader("🎬 AI Video Clips")
     _ai_video_provider_options = ["None", "Google Veo (Supabase)", "OpenAI Sora"]
-    _default_ai_video_provider = str(payload.get("ai_video_provider", "None") or "None")
+    _ai_provider_internal_to_label = {"sora": "OpenAI Sora", "veo": "Google Veo (Supabase)"}
+    _daily_ai_label = _ai_provider_internal_to_label.get(str(_daily_preset.get("ai_video_provider", "") or ""), "None")
+    _default_ai_video_provider = str(payload.get("ai_video_provider") or _daily_ai_label or "None")
     if _default_ai_video_provider not in _ai_video_provider_options:
         _default_ai_video_provider = "None"
     ai_video_provider = st.selectbox(
@@ -446,7 +476,12 @@ def tab_automation(project_id: str) -> None:
             )
             _run_provider = "veo"
         else:
-            _global_default = st.session_state.get("ai_video_provider", _available[0])
+            _daily_run_provider = str(_daily_preset.get("ai_video_provider", "") or "")
+            _global_default = (
+                st.session_state.get("ai_video_provider")
+                or (_daily_run_provider if _daily_run_provider in _available else None)
+                or _available[0]
+            )
             if _global_default not in _available:
                 _global_default = _available[0]
 
@@ -487,8 +522,14 @@ def tab_automation(project_id: str) -> None:
                 "Run the Images step before AI Video Clips."
             )
 
-    # Store resolved provider for use in the step runner
-    st.session_state["automation_run_provider"] = _run_provider
+    # Store resolved provider for use in the step runner.
+    # If the main selectbox is "None", mark provider as empty so the step is skipped.
+    _label_to_internal = {"Google Veo (Supabase)": "veo", "OpenAI Sora": "sora"}
+    _main_selection_internal = _label_to_internal.get(ai_video_provider, "")
+    if _main_selection_internal:
+        st.session_state["automation_run_provider"] = _run_provider
+    else:
+        st.session_state["automation_run_provider"] = ""
 
     TRANSITION_LABEL_MAP: dict[str, str] = {
         "Random": "random",
@@ -506,7 +547,7 @@ def tab_automation(project_id: str) -> None:
         "Distance": "distance",
     }
     TRANSITION_VALUE_TO_LABEL = {v: k for k, v in TRANSITION_LABEL_MAP.items()}
-    default_transition_type = str(payload.get("scene_transition_type", "fade") or "fade").strip().lower()
+    default_transition_type = str(payload.get("scene_transition_type") or _daily_preset.get("scene_transition_type", "fade") or "fade").strip().lower()
     if default_transition_type not in TRANSITION_LABEL_MAP.values():
         default_transition_type = "fade"
     default_transition_label = TRANSITION_VALUE_TO_LABEL.get(default_transition_type, "Fade")
@@ -530,7 +571,7 @@ def tab_automation(project_id: str) -> None:
     for track in shared_music_tracks:
         combined_music_choices.append((f"Shared · {track.name}", str(track)))
 
-    selected_music_track = str(payload.get("selected_music_track", "") or "")
+    selected_music_track = str(payload.get("selected_music_track") or _daily_settings.get("selected_music_track", "") or "")
     music_volume_relative_to_voiceover = st.slider(
         "Background Music Level (relative to voiceover)",
         min_value=0.0,

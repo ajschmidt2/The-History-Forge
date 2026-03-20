@@ -408,10 +408,13 @@ def generate_ai_video_clips(
         return images[idx] if idx < len(images) else None
 
     # Define clips: (label, image_index, prompt_index, output_filename)
+    # 1 at the opening, then 3 spread evenly at 1/4, 1/2, 3/4 of the image set.
     num_images = max(len(images), 1)
     clip_targets = [
-        ("opening", 0,               0,               "ai_clip_opening.mp4"),
-        ("mid",     num_images // 2, num_images // 2, "ai_clip_mid.mp4"),
+        ("opening", 0,                       0,                       "ai_clip_opening.mp4"),
+        ("q2",      num_images // 4,         num_images // 4,         "ai_clip_q2.mp4"),
+        ("q3",      num_images // 2,         num_images // 2,         "ai_clip_q3.mp4"),
+        ("q4",      3 * num_images // 4,     3 * num_images // 4,     "ai_clip_q4.mp4"),
     ]
 
     results = []
@@ -477,4 +480,4 @@ def generate_ai_video_clips(
             provider, project_id,
         )
 
-    return results[0], results[1]
+    return results[0], results[1], results[2], results[3]
