@@ -21,6 +21,8 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "PIXABAY_API_KEY": ["PIXABAY_API_KEY", "pixabay_api_key", "PIXABAY_KEY", "pixabay_key"],
     "YOUTUBE_CLIENT_SECRETS_FILE": ["YOUTUBE_CLIENT_SECRETS_FILE", "youtube_client_secrets_file"],
     "YOUTUBE_TOKEN_FILE": ["YOUTUBE_TOKEN_FILE", "youtube_token_file"],
+    "YOUTUBE_CLIENT_SECRETS_FILE_CONSPIRACY": ["YOUTUBE_CLIENT_SECRETS_FILE_CONSPIRACY", "youtube_client_secrets_file_conspiracy"],
+    "YOUTUBE_TOKEN_FILE_CONSPIRACY": ["YOUTUBE_TOKEN_FILE_CONSPIRACY", "youtube_token_file_conspiracy"],
 }
 
 _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
