@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import re
+import subprocess
 import requests
 from pathlib import Path
 from typing import Optional
@@ -344,6 +345,140 @@ def _call_sora(
 
 
 # ---------------------------------------------------------------------------
+# Sora: image-to-video with text-to-video fallback
+# ---------------------------------------------------------------------------
+
+def _call_sora_image_to_video(
+    image_path: Path,
+    prompt: str,
+    aspect_ratio: str = "9:16",
+    duration_seconds: int = 5,
+) -> bytes | None:
+    """
+    Attempt Sora image-to-video using input_reference.
+    Falls back to text-to-video if the image reference is rejected or fails.
+    Returns raw MP4 bytes on success, None on failure.
+    """
+    if not sora_configured():
+        raise RuntimeError(
+            "ai_video_clips [sora]: OpenAI API key is not configured."
+        )
+
+    supported = [4, 8, 12]
+    seconds = min(supported, key=lambda x: abs(x - duration_seconds))
+    size = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
+
+    # Try with image reference first
+    if image_path.exists():
+        logger.info(
+            f"ai_video_clips [sora]: attempting image-to-video with {image_path.name}"
+        )
+        image_bytes = image_path.read_bytes()
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        mime_type = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
+        image_data_url = f"data:{mime_type};base64,{image_b64}"
+
+        payload = {
+            "model": "sora-2",
+            "prompt": prompt.strip(),
+            "seconds": str(seconds),
+            "size": size,
+            "input_reference": image_data_url,
+        }
+
+        try:
+            resp = requests.post(
+                _SORA_CREATE_URL, json=payload, headers=_sora_headers(), timeout=60
+            )
+            if resp.ok:
+                job = resp.json()
+                job_id = str(job.get("id") or "").strip()
+                if job_id:
+                    logger.info(
+                        f"ai_video_clips [sora]: image-to-video job submitted — id={job_id}"
+                    )
+                    try:
+                        final_job = poll_video(
+                            job_id, timeout_s=_MAX_POLLS * _POLL_INTERVAL_S
+                        )
+                        if str(final_job.get("status", "")).lower() == "completed":
+                            video_bytes = get_video_content(job_id)
+                            logger.info(
+                                f"ai_video_clips [sora]: image-to-video succeeded "
+                                f"({len(video_bytes):,} bytes)"
+                            )
+                            return video_bytes
+                    except (TimeoutError, RuntimeError) as e:
+                        logger.warning(
+                            f"ai_video_clips [sora]: image-to-video job failed ({e}), "
+                            "falling back to text-to-video"
+                        )
+                else:
+                    logger.warning(
+                        "ai_video_clips [sora]: image-to-video returned no job ID, "
+                        "falling back to text-to-video"
+                    )
+            else:
+                logger.warning(
+                    f"ai_video_clips [sora]: image-to-video submit returned "
+                    f"HTTP {resp.status_code}, falling back to text-to-video"
+                )
+        except Exception as e:
+            logger.warning(
+                f"ai_video_clips [sora]: image-to-video attempt raised {e}, "
+                "falling back to text-to-video"
+            )
+    else:
+        logger.info(
+            f"ai_video_clips [sora]: image not found at {image_path}, "
+            "using text-to-video directly"
+        )
+
+    # Fallback: text-to-video
+    logger.info("ai_video_clips [sora]: running text-to-video fallback")
+    return _call_sora_text_to_video(prompt, aspect_ratio, duration_seconds)
+
+
+# ---------------------------------------------------------------------------
+# Orientation normalization
+# ---------------------------------------------------------------------------
+
+def _normalize_clip_orientation(src: Path, width: int, height: int) -> None:
+    """Re-encode clip in-place to exact dimensions, stripping rotation metadata.
+
+    Sora (and some other generators) occasionally embed a rotation tag that
+    causes the clip to appear sideways when composited. ffmpeg auto-rotates on
+    read by default, so applying scale+crop after decoding always produces the
+    correct pixel layout. We strip all container metadata on write so the tag
+    cannot affect downstream players or the ffmpeg concat step.
+    """
+    tmp = src.with_suffix(".norm.mp4")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(src),
+        "-vf", (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            "setsar=1"
+        ),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-an",
+        "-map_metadata", "-1",
+        str(tmp),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        tmp.replace(src)
+    except subprocess.CalledProcessError as exc:
+        logger.warning(
+            f"ai_video_clips: orientation normalization failed for {src.name} — "
+            f"{exc.stderr.decode(errors='replace')[-300:]}"
+        )
+        if tmp.exists():
+            tmp.unlink()
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -396,6 +531,8 @@ def generate_ai_video_clips(
 
     tmp_dir.mkdir(parents=True, exist_ok=True)
     _wlog.info("ai_video_clips project=%s provider=%s images=%d prompts=%d", project_id, provider, len(images), len(prompts))
+    size_str = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["9:16"])
+    _clip_w, _clip_h = (int(v) for v in size_str.split("x"))
 
     def _get_prompt(idx: int) -> str:
         raw = prompts[idx] if idx < len(prompts) else ""
@@ -449,6 +586,7 @@ def generate_ai_video_clips(
 
         if video_bytes:
             out_path.write_bytes(video_bytes)
+            _normalize_clip_orientation(out_path, _clip_w, _clip_h)
             _wlog.info(
                 "ai_video_clips [%s]: %s clip saved path=%s bytes=%d",
                 provider, label, out_path, len(video_bytes),

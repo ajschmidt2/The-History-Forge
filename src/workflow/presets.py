@@ -24,7 +24,7 @@ class DailyShortPreset:
     burn_subtitles: bool = False
     generate_srt: bool = False
     music_enabled: bool = True
-    music_relative_level: float = 0.15
+    music_relative_level: float = 0.10
     target_word_count: int = 150
     target_duration_seconds: int = 60
     require_last_scene_cta: bool = True
