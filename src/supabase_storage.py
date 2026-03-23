@@ -753,6 +753,59 @@ def remove_clip_assignment(project_id: str, scene_num: int) -> bool:
         return False
 
 
+def cleanup_project_intermediate_assets(project_id: str) -> dict[str, int]:
+    """Delete all intermediate Supabase storage assets for *project_id*.
+
+    Removes everything under the project prefix from every working bucket
+    (scripts, images, audio, per-project videos, AI clips) while leaving the
+    final daily render in ``generated-videos/daily-renders/`` untouched.
+
+    Returns a dict mapping bucket name → number of objects deleted.
+    """
+    sb = get_client()
+    if sb is None or not project_id:
+        return {}
+
+    deleted: dict[str, int] = {}
+
+    # Buckets where ALL files under {project_id}/ should be removed.
+    intermediate_buckets = [
+        "history-forge-scripts",
+        "history-forge-images",
+        "history-forge-audio",
+        "history-forge-videos",
+    ]
+
+    def _delete_prefix(bucket: str, prefix: str) -> int:
+        """List objects under prefix and remove them; returns count deleted."""
+        objects = _list_storage_objects(bucket, prefix)
+        paths = [
+            f"{prefix}/{obj['name']}"
+            for obj in objects
+            if isinstance(obj.get("name"), str) and obj["name"]
+        ]
+        if not paths:
+            return 0
+        try:
+            sb.storage.from_(bucket).remove(paths)
+            return len(paths)
+        except Exception:
+            return 0
+
+    for bucket in intermediate_buckets:
+        n = _delete_prefix(bucket, project_id)
+        if n:
+            deleted[bucket] = n
+
+    # generated-videos: remove per-project AI clip subfolder only.
+    # The daily render lives at daily-renders/{date}/... and must be kept.
+    n = _delete_prefix(SUPABASE_VIDEO_BUCKET, f"{project_id}/generated-videos")
+    if n:
+        deleted[f"{SUPABASE_VIDEO_BUCKET}/ai-clips"] = n
+
+    return deleted
+
+
 def list_generated_videos(project_id: str, limit: int = 25) -> list[dict[str, str]]:
     """List AI generated videos from the configured generated-videos bucket."""
     if not project_id:

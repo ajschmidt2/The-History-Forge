@@ -12,6 +12,7 @@ Provider is selected at call time via the `provider` argument.
 import base64
 import json
 import logging
+import subprocess
 import requests
 from pathlib import Path
 from typing import Optional
@@ -358,6 +359,45 @@ def _call_sora_image_to_video(
 
 
 # ---------------------------------------------------------------------------
+# Orientation normalization
+# ---------------------------------------------------------------------------
+
+def _normalize_clip_orientation(src: Path, width: int, height: int) -> None:
+    """Re-encode clip in-place to exact dimensions, stripping rotation metadata.
+
+    Sora (and some other generators) occasionally embed a rotation tag that
+    causes the clip to appear sideways when composited. ffmpeg auto-rotates on
+    read by default, so applying scale+crop after decoding always produces the
+    correct pixel layout. We strip all container metadata on write so the tag
+    cannot affect downstream players or the ffmpeg concat step.
+    """
+    tmp = src.with_suffix(".norm.mp4")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(src),
+        "-vf", (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            "setsar=1"
+        ),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-an",
+        "-map_metadata", "-1",
+        str(tmp),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        tmp.replace(src)
+    except subprocess.CalledProcessError as exc:
+        logger.warning(
+            f"ai_video_clips: orientation normalization failed for {src.name} — "
+            f"{exc.stderr.decode(errors='replace')[-300:]}"
+        )
+        if tmp.exists():
+            tmp.unlink()
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -411,6 +451,8 @@ def generate_ai_video_clips(
         return None, None
 
     tmp_dir.mkdir(parents=True, exist_ok=True)
+    size_str = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["9:16"])
+    _clip_w, _clip_h = (int(v) for v in size_str.split("x"))
 
     def _get_prompt(idx: int) -> str:
         raw = prompts[idx] if idx < len(prompts) else ""
@@ -467,6 +509,7 @@ def generate_ai_video_clips(
 
         if video_bytes:
             out_path.write_bytes(video_bytes)
+            _normalize_clip_orientation(out_path, _clip_w, _clip_h)
             logger.info(
                 f"ai_video_clips [{provider}]: {label} clip saved → "
                 f"{out_path} ({len(video_bytes):,} bytes)"

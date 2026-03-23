@@ -408,7 +408,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     if _yt_client_secrets.exists() and _yt_token.exists():
         try:
             _yt_hashtags = " ".join(profile.youtube_hashtags)
-            _yt_title = f"{topic} {_yt_hashtags}"
+            _yt_title = f"{topic} {_yt_hashtags}"[:100]
             _yt_description = f"{topic}\n\n{profile.youtube_subscribe_cta}"
             _yt_tags = [w.lower() for w in topic.split() if w.isalpha()] + profile.youtube_extra_tags
             _yt_result = _yt_upload_video(
@@ -428,6 +428,17 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
             print(f"[Checkpoint 6] YouTube upload failed (non-fatal): {exc}", file=sys.stderr)
     else:
         print(f"[Checkpoint 6] YouTube credentials not found for channel={profile.channel_id} — skipping.", file=sys.stderr)
+
+    # Checkpoint 7: clean up intermediate Supabase assets (non-fatal)
+    try:
+        deleted = _sb_store.cleanup_project_intermediate_assets(project_id)
+        if deleted:
+            summary_str = ", ".join(f"{b}={n}" for b, n in deleted.items())
+            print(f"[Checkpoint 7] Supabase cleanup complete: {summary_str}", file=sys.stderr)
+        else:
+            print("[Checkpoint 7] Supabase cleanup: nothing to delete (or Supabase not configured).", file=sys.stderr)
+    except Exception as exc:
+        print(f"[Checkpoint 7] Supabase cleanup failed (non-fatal): {exc}", file=sys.stderr)
 
     summary = {
         "timestamp": timestamp,
