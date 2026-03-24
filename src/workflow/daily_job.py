@@ -46,6 +46,8 @@ class ChannelProfile:
     automation_settings_path: Path
     topics_used_path: Path
     run_history_path: Path
+    youtube_client_secrets_file: str = "client_secrets.json"  # fallback filename
+    youtube_token_file: str = "token.json"                     # fallback filename
     preset_overrides: dict = field(default_factory=dict)
     instagram_enabled: bool = False
     instagram_hashtags: list[str] = field(default_factory=list)
@@ -82,6 +84,8 @@ CONSPIRACY_CHANNEL = ChannelProfile(
     youtube_category_id="24",  # Entertainment
     youtube_client_secrets_secret="YOUTUBE_CLIENT_SECRETS_FILE_CONSPIRACY",
     youtube_token_file_secret="YOUTUBE_TOKEN_FILE_CONSPIRACY",
+    youtube_client_secrets_file="client_secrets_conspiracy.json",
+    youtube_token_file="token_conspiracy.json",
     automation_settings_path=Path("data/conspiracy_automation_settings.json"),
     topics_used_path=Path("data/conspiracy_topics_used.json"),
     run_history_path=Path("data/conspiracy_run_history.json"),
@@ -414,8 +418,8 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     # Checkpoint 6: YouTube upload (non-fatal; skipped if credentials are absent)
     youtube_video_id = ""
     youtube_url = ""
-    _yt_client_secrets = Path(get_secret(profile.youtube_client_secrets_secret, f"client_secrets_{profile.channel_id}.json")).expanduser()
-    _yt_token = Path(get_secret(profile.youtube_token_file_secret, f"token_{profile.channel_id}.json")).expanduser()
+    _yt_client_secrets = Path(get_secret(profile.youtube_client_secrets_secret, profile.youtube_client_secrets_file)).expanduser()
+    _yt_token = Path(get_secret(profile.youtube_token_file_secret, profile.youtube_token_file)).expanduser()
     if _yt_client_secrets.exists() and _yt_token.exists():
         try:
             _yt_hashtags = " ".join(profile.youtube_hashtags)
