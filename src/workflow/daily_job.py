@@ -13,6 +13,8 @@ from typing import Any
 from src.config import get_openai_config
 from src.config.secrets import get_secret
 from src.constants import SUPABASE_VIDEO_BUCKET
+from src.services.instagram_upload import instagram_configured as _ig_configured
+from src.services.instagram_upload import upload_reel as _ig_upload_reel
 from src.services.youtube_upload import upload_video as _yt_upload_video
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
@@ -45,6 +47,8 @@ class ChannelProfile:
     topics_used_path: Path
     run_history_path: Path
     preset_overrides: dict = field(default_factory=dict)
+    instagram_enabled: bool = False
+    instagram_hashtags: list[str] = field(default_factory=list)
 
 
 HISTORY_CHANNEL = ChannelProfile(
@@ -61,6 +65,8 @@ HISTORY_CHANNEL = ChannelProfile(
     topics_used_path=Path("data/daily_topics_used.json"),
     run_history_path=Path("data/daily_run_history.json"),
     preset_overrides={},
+    instagram_enabled=True,
+    instagram_hashtags=["#shorts", "#history", "#historyfacts", "#historycrossroads"],
 )
 
 CONSPIRACY_CHANNEL = ChannelProfile(
@@ -429,16 +435,42 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     else:
         print(f"[Checkpoint 6] YouTube credentials not found for channel={profile.channel_id} — skipping.", file=sys.stderr)
 
-    # Checkpoint 7: clean up intermediate Supabase assets (non-fatal)
+    # Checkpoint 7: Instagram upload (non-fatal; only for enabled channels with credentials)
+    instagram_media_id = ""
+    instagram_permalink = ""
+    if profile.instagram_enabled:
+        if _ig_configured():
+            try:
+                _ig_hashtags = " ".join(profile.instagram_hashtags)
+                _ig_caption = f"{topic}\n\n{_ig_hashtags}\n\n{profile.youtube_subscribe_cta}"
+                # Give instagram upload the Supabase URL so it doesn't re-upload
+                payload["generated_video_public_url"] = upload_result["public_url"]
+                _ig_result = _ig_upload_reel(
+                    video_path=final_path,
+                    caption=_ig_caption,
+                    project_id=project_id,
+                    payload=payload,
+                )
+                instagram_media_id = _ig_result.media_id
+                instagram_permalink = _ig_result.permalink or ""
+                print(f"[Checkpoint 7] Instagram upload complete. media_id={instagram_media_id} permalink={instagram_permalink}", file=sys.stderr)
+            except Exception as exc:
+                print(f"[Checkpoint 7] Instagram upload failed (non-fatal): {exc}", file=sys.stderr)
+        else:
+            print(f"[Checkpoint 7] Instagram credentials not configured — skipping.", file=sys.stderr)
+    else:
+        print(f"[Checkpoint 7] Instagram upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
+
+    # Checkpoint 8: clean up intermediate Supabase assets (non-fatal)
     try:
         deleted = _sb_store.cleanup_project_intermediate_assets(project_id)
         if deleted:
             summary_str = ", ".join(f"{b}={n}" for b, n in deleted.items())
-            print(f"[Checkpoint 7] Supabase cleanup complete: {summary_str}", file=sys.stderr)
+            print(f"[Checkpoint 8] Supabase cleanup complete: {summary_str}", file=sys.stderr)
         else:
-            print("[Checkpoint 7] Supabase cleanup: nothing to delete (or Supabase not configured).", file=sys.stderr)
+            print("[Checkpoint 8] Supabase cleanup: nothing to delete (or Supabase not configured).", file=sys.stderr)
     except Exception as exc:
-        print(f"[Checkpoint 7] Supabase cleanup failed (non-fatal): {exc}", file=sys.stderr)
+        print(f"[Checkpoint 8] Supabase cleanup failed (non-fatal): {exc}", file=sys.stderr)
 
     summary = {
         "timestamp": timestamp,
@@ -461,6 +493,8 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
         "scene_count": preset.scene_count,
         "youtube_video_id": youtube_video_id,
         "youtube_url": youtube_url,
+        "instagram_media_id": instagram_media_id,
+        "instagram_permalink": instagram_permalink,
     }
     _append_run_history(summary, path=profile.run_history_path)
 
@@ -472,6 +506,8 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     payload["enable_subtitles"] = preset.subtitles_enabled
     payload["youtube_video_id"] = youtube_video_id
     payload["youtube_url"] = youtube_url
+    payload["instagram_media_id"] = instagram_media_id
+    payload["instagram_permalink"] = instagram_permalink
     save_project_payload(project_id, payload)
     return summary
 
