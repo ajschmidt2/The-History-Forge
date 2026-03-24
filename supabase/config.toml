@@ -8,3 +8,8 @@ enabled = true
 # service-account JSON secret, so gateway-level JWT checks add no security
 # benefit here and are a common source of 401 errors.
 verify_jwt = false
+
+[functions.storage-cleanup]
+# This function uses a custom bearer token (STORAGE_CLEANUP_SECRET), so
+# gateway JWT verification should be disabled for scheduler compatibility.
+verify_jwt = false
