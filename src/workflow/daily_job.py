@@ -14,6 +14,8 @@ from src.config import get_openai_config
 from src.config.secrets import get_secret
 from src.constants import SUPABASE_VIDEO_BUCKET
 from src.services.instagram_upload import instagram_configured as _ig_configured
+from src.services.instagram_upload import refresh_access_token as _ig_refresh_token
+from src.services.instagram_upload import save_cached_token as _ig_save_token
 from src.services.instagram_upload import upload_reel as _ig_upload_reel
 from src.services.youtube_upload import upload_video as _yt_upload_video
 from src.storage import upsert_project
@@ -450,6 +452,14 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     if profile.instagram_enabled:
         if _ig_configured():
             try:
+                # Refresh token first (resets 60-day expiry; non-fatal if META creds missing)
+                try:
+                    _new_token, _expires_in = _ig_refresh_token()
+                    _ig_save_token(_new_token, _expires_in)
+                    print(f"[Checkpoint 7] Instagram token refreshed. expires_in={_expires_in // 86400}d", file=sys.stderr)
+                except Exception as _refresh_exc:
+                    print(f"[Checkpoint 7] Instagram token refresh skipped: {_refresh_exc}", file=sys.stderr)
+
                 _ig_hashtags = " ".join(profile.instagram_hashtags)
                 _ig_caption = f"{topic}\n\n{_ig_hashtags}\n\n{profile.youtube_subscribe_cta}"
                 # Give instagram upload the Supabase URL so it doesn't re-upload

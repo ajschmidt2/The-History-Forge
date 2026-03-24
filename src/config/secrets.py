@@ -23,6 +23,10 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "YOUTUBE_TOKEN_FILE": ["YOUTUBE_TOKEN_FILE", "youtube_token_file"],
     "YOUTUBE_CLIENT_SECRETS_FILE_CONSPIRACY": ["YOUTUBE_CLIENT_SECRETS_FILE_CONSPIRACY", "youtube_client_secrets_file_conspiracy"],
     "YOUTUBE_TOKEN_FILE_CONSPIRACY": ["YOUTUBE_TOKEN_FILE_CONSPIRACY", "youtube_token_file_conspiracy"],
+    "META_APP_ID": ["META_APP_ID", "meta_app_id"],
+    "META_APP_SECRET": ["META_APP_SECRET", "meta_app_secret"],
+    "INSTAGRAM_USER_ID": ["INSTAGRAM_USER_ID", "instagram_user_id"],
+    "INSTAGRAM_ACCESS_TOKEN": ["INSTAGRAM_ACCESS_TOKEN", "instagram_access_token"],
 }
 
 _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {

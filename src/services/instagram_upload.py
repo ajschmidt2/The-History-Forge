@@ -27,9 +27,11 @@ To get credentials:
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,8 @@ log = logging.getLogger(__name__)
 
 GRAPH_API_VERSION = "v19.0"
 GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+
+_TOKEN_CACHE_PATH = Path("data/instagram_token.json")
 
 PRIVACY_OPTIONS: dict[str, str] = {}  # Instagram Reels don't have an API-level privacy toggle
 
@@ -70,7 +74,31 @@ def _get_user_id() -> str:
     ).strip()
 
 
+def _load_cached_token() -> str:
+    """Return a previously refreshed token if it hasn't expired yet."""
+    try:
+        data = json.loads(_TOKEN_CACHE_PATH.read_text())
+        token = str(data.get("access_token", "")).strip()
+        expires_at = datetime.fromisoformat(data.get("expires_at", ""))
+        if token and expires_at > datetime.now(timezone.utc):
+            return token
+    except Exception:
+        pass
+    return ""
+
+
+def save_cached_token(token: str, expires_in: int) -> None:
+    """Persist a refreshed token to disk so it survives restarts."""
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
+    _TOKEN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _TOKEN_CACHE_PATH.write_text(json.dumps({"access_token": token, "expires_at": expires_at}, indent=2))
+    log.info("instagram: token cached, expires %s", expires_at)
+
+
 def _get_access_token() -> str:
+    cached = _load_cached_token()
+    if cached:
+        return cached
     return (
         get_secret("INSTAGRAM_ACCESS_TOKEN")
         or get_secret("instagram_access_token")
