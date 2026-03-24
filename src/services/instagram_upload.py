@@ -99,7 +99,7 @@ def validate_instagram_credentials() -> tuple[bool, str]:
     try:
         resp = requests.get(
             f"{GRAPH_BASE}/{user_id}",
-            params={"fields": "id,account_type", "access_token": token},
+            params={"fields": "id", "access_token": token},
             timeout=15,
         )
         data = resp.json()
@@ -107,8 +107,7 @@ def validate_instagram_credentials() -> tuple[bool, str]:
             err = data.get("error", {}).get("message", resp.text[:200])
             return False, f"Instagram token validation failed: {err}"
 
-        account_type = data.get("account_type", "unknown")
-        return True, f"Connected as @the_history_crossroads ({account_type})"
+        return True, "Connected as @the_history_crossroads"
     except Exception as exc:  # noqa: BLE001
         return False, f"Instagram validation error: {exc}"
 
