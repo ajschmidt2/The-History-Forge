@@ -98,7 +98,7 @@ def validate_instagram_credentials() -> tuple[bool, str]:
 
     try:
         resp = requests.get(
-            f"{GRAPH_BASE}/{user_id}",
+            f"{GRAPH_BASE}/me",
             params={"fields": "id", "access_token": token},
             timeout=15,
         )
