@@ -41,7 +41,7 @@ from src.config.secrets import get_secret
 
 log = logging.getLogger(__name__)
 
-GRAPH_API_VERSION = "v19.0"
+GRAPH_API_VERSION = "v22.0"
 GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 
 _TOKEN_CACHE_PATH = Path("data/instagram_token.json")
@@ -292,17 +292,19 @@ def upload_reel(
 
     # Step 2 — Create media container
     log.info("instagram: creating Reel container for user %s", user_id)
+    container_payload: dict[str, Any] = {
+        "media_type": "REELS",
+        "video_url": video_url,
+        "caption": caption.strip(),
+        "share_to_feed": share_to_feed,
+        "access_token": token,
+    }
+    if cover_timestamp_ms:
+        container_payload["video_cover_timestamp_ms"] = cover_timestamp_ms
+
     container_resp = requests.post(
         f"{GRAPH_BASE}/{user_id}/media",
-        data={
-            "media_type": "REELS",
-            "video_url": video_url,
-            "caption": caption.strip(),
-            "share_to_feed": "true" if share_to_feed else "false",
-            "cover_url": "",
-            "video_cover_timestamp_ms": cover_timestamp_ms,
-            "access_token": token,
-        },
+        json=container_payload,
         timeout=60,
     )
     container_data = container_resp.json()
