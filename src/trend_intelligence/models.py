@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass
@@ -45,6 +45,39 @@ class TopicScore:
             + (self.brand_alignment * 0.20),
             2,
         )
+
+
+@dataclass
+class TopicScoreBreakdown:
+    total_score: float
+    trend_momentum_score: float
+    watch_time_potential_score: float
+    clickability_score: float
+    competition_gap_score: float
+    brand_alignment_score: float
+
+
+@dataclass
+class TopicInsight:
+    reasoning: str
+    content_angle_ideas: list[str]
+    hook_ideas: list[str]
+    thumbnail_ideas: list[str]
+
+
+@dataclass
+class TopicResult:
+    topic_title: str
+    score: TopicScoreBreakdown
+    insight: TopicInsight
+
+
+@dataclass
+class TrendScanFilters:
+    timeframe: Literal["24h", "7d", "30d"]
+    content_type: Literal["long-form", "shorts", "both"]
+    brand_focus: Literal["ancient history", "war history", "forgotten figures", "mysteries", "all"]
+    minimum_score: int
 
 
 @dataclass
