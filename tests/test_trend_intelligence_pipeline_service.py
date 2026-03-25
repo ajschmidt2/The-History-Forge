@@ -1,5 +1,6 @@
 from src.trend_intelligence.adapters.mock_adapters import GoogleTrendsSeedsAdapter, MockTrendsSourceAdapter, MockYouTubeSourceAdapter
 from src.trend_intelligence.pipeline_service import TrendIntelligencePipelineService
+from src.trend_intelligence.types import TrendScanFilters
 
 
 def test_full_scan_pipeline_returns_normalized_topic_data_with_mocks():
@@ -33,3 +34,47 @@ def test_google_trends_adapter_falls_back_to_mock_on_errors():
 
     assert len(topics) == 2
     assert topics[0].source == "mock_trends"
+
+
+def test_run_trend_intelligence_scan_accepts_filters_and_returns_sorted_topic_results():
+    service = TrendIntelligencePipelineService(
+        trends_adapter=MockTrendsSourceAdapter(),
+        youtube_adapter=MockYouTubeSourceAdapter(),
+    )
+    filters = TrendScanFilters(
+        timeframe="7d",
+        content_type="both",
+        brand_focus="ancient history",
+        minimum_score=0,
+    )
+
+    results = service.run_trend_intelligence_scan(filters, topic_limit=4, videos_per_topic=3, max_workers=2)
+
+    assert len(results) == 4
+    assert all(result.score.overall >= 0 for result in results)
+    assert results == sorted(results, key=lambda result: (-result.score.overall, result.topic.lower()))
+
+    first = results[0]
+    assert "trend=" in first.source
+    assert "analysis=" in first.source
+    assert len(first.sampled_videos) == 3
+    assert first.insight.why_now
+    assert first.insight.opportunities
+    assert first.insight.risks
+
+
+def test_run_trend_intelligence_scan_applies_minimum_score_filter():
+    service = TrendIntelligencePipelineService(
+        trends_adapter=MockTrendsSourceAdapter(),
+        youtube_adapter=MockYouTubeSourceAdapter(),
+    )
+    filters = TrendScanFilters(
+        timeframe="7d",
+        content_type="both",
+        brand_focus="all",
+        minimum_score=95,
+    )
+
+    results = service.run_trend_intelligence_scan(filters, topic_limit=5, videos_per_topic=2, max_workers=3)
+
+    assert all(result.score.overall >= 95 for result in results)
