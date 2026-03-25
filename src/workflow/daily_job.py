@@ -434,7 +434,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
                 description=_yt_description,
                 tags=_yt_tags,
                 category_id=profile.youtube_category_id,
-                privacy_status="private",
+                privacy_status="public",
                 client_secrets_file=_yt_client_secrets,
                 token_file=_yt_token,
             )
