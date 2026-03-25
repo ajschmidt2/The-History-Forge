@@ -7,6 +7,11 @@ from src.trend_intelligence.scoring import (
     scoreTrendMomentum,
     scoreWatchTimePotential,
 )
+from src.trend_intelligence.pipeline_service import (
+    FullScanPipelineResult,
+    PipelineTopicResult,
+    TrendIntelligencePipelineService,
+)
 from src.trend_intelligence.service import TrendIntelligenceService
 from src.trend_intelligence.types import (
     RawTrendTopic,
@@ -28,6 +33,9 @@ __all__ = [
     "TrendScanRun",
     "YouTubeVideoCandidate",
     "build_score_breakdown",
+    "FullScanPipelineResult",
+    "PipelineTopicResult",
+    "TrendIntelligencePipelineService",
     "scoreBrandAlignment",
     "scoreClickability",
     "scoreCompetitionGap",
