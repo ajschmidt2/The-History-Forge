@@ -641,6 +641,14 @@ The trend pipeline now uses a live Google Trends RSS adapter by default (`Google
 - `GOOGLE_TRENDS_GEO` (optional): 2-letter region code for RSS feed scope. Default: `US`.
 - `YOUTUBE_API_KEY` (optional but recommended): enables real YouTube lookup adapter elsewhere in trend workflows.
 
+### Analysis enrichment adapter
+
+Trend Intelligence topic enrichment is routed through `TopicAnalysisAdapter` and defaults to `OpenAITopicAnalysisAdapter` with automatic fallback to `DeterministicTopicAnalysisAdapter`.
+
+- Provider-backed path: uses the existing server-side OpenAI pattern (`OPENAI_API_KEY` + chat completion) and requests strict JSON output for: `why_trending`, `content_angles` (3), `opening_hooks` (3), and `thumbnail_ideas` (3).
+- Fallback path: deterministic local synthesis is always available and preserves the same output schema, so downstream scoring/UI code is not coupled to a single LLM provider.
+- Provider integration point: add a new adapter that implements `TopicAnalysisAdapter.analyze_topic()` and plug it into `TrendIntelligencePipelineService(analysis_adapter=...)`.
+
 ### Behavior details
 
 - Source feed: `https://trends.google.com/trending/rss?geo=<GOOGLE_TRENDS_GEO>`
