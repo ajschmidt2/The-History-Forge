@@ -54,7 +54,7 @@ def render_filter_panel(default_filters: TrendScanFilters) -> TrendScanFilters:
     )
 
 
-def render_topic_card(topic: TopicResult, idx: int) -> None:
+def render_topic_card(topic: TopicResult, idx: int) -> bool:
     with st.container(border=True):
         st.subheader(topic.topic_title)
 
@@ -86,10 +86,13 @@ def render_topic_card(topic: TopicResult, idx: int) -> None:
             for thumb in topic.insight.thumbnail_ideas:
                 st.markdown(f"- {thumb}")
 
-        st.button("Save to Pipeline", key=f"trend_save_pipeline_{idx}", use_container_width=True)
+        return st.button("Save to Pipeline", key=f"trend_save_pipeline_{idx}", use_container_width=True)
 
 
-def render_results_section(results: list[TopicResult]) -> None:
+def render_results_section(results: list[TopicResult]) -> TopicResult | None:
     st.subheader("Results")
+    saved_topic: TopicResult | None = None
     for i, topic in enumerate(results):
-        render_topic_card(topic, i)
+        if render_topic_card(topic, i):
+            saved_topic = topic
+    return saved_topic
