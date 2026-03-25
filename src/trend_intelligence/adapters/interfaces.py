@@ -11,7 +11,12 @@ class TrendsSourceAdapter(ABC):
     source_name: str
 
     @abstractmethod
-    def fetch_trending_topics(self, *, limit: int) -> list[TrendingTopicSeed]:
+    def fetch_trending_topics(
+        self,
+        *,
+        limit: int,
+        timeframe: str = "7d",
+    ) -> list[TrendingTopicSeed]:
         """Return normalized trend topic seeds."""
         raise NotImplementedError
 

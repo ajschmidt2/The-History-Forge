@@ -1,10 +1,11 @@
+from src.trend_intelligence.adapters.mock_adapters import GoogleTrendsSeedsAdapter, MockTrendsSourceAdapter
 from src.trend_intelligence.pipeline_service import TrendIntelligencePipelineService
 
 
 def test_full_scan_pipeline_returns_normalized_topic_data_with_mocks():
-    service = TrendIntelligencePipelineService()
+    service = TrendIntelligencePipelineService(trends_adapter=MockTrendsSourceAdapter())
 
-    result = service.run_full_scan_pipeline(topic_limit=3, videos_per_topic=2)
+    result = service.run_full_scan_pipeline(topic_limit=3, videos_per_topic=2, timeframe="24h")
 
     assert result.sources == ("mock_trends", "mock_youtube", "mock_analysis")
     assert len(result.topics) == 3
@@ -18,3 +19,14 @@ def test_full_scan_pipeline_returns_normalized_topic_data_with_mocks():
     assert first.analysis.angles
     assert first.analysis.hooks
     assert first.analysis.thumbnail_ideas
+    assert first.seed.raw["timeframe"] == "24h"
+
+
+def test_google_trends_adapter_falls_back_to_mock_on_errors():
+    adapter = GoogleTrendsSeedsAdapter(fallback=MockTrendsSourceAdapter())
+    adapter._fetch_from_google_rss = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[attr-defined]
+
+    topics = adapter.fetch_trending_topics(limit=2, timeframe="7d")
+
+    assert len(topics) == 2
+    assert topics[0].source == "mock_trends"
