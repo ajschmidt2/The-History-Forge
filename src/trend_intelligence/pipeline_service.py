@@ -39,6 +39,20 @@ class FullScanPipelineResult:
     topics: tuple[PipelineTopicResult, ...] = field(default_factory=tuple)
 
 
+@dataclass(frozen=True)
+class ScanWarning:
+    source: str
+    message: str
+
+
+@dataclass(frozen=True)
+class TrendScanExecutionResult:
+    scanned_at: datetime
+    filters: TrendScanFilters
+    topics: tuple[TopicResult, ...] = field(default_factory=tuple)
+    warnings: tuple[ScanWarning, ...] = field(default_factory=tuple)
+
+
 class TrendIntelligencePipelineService:
     """Orchestrates modular adapters and exposes deterministic scan outputs."""
 
@@ -83,6 +97,23 @@ class TrendIntelligencePipelineService:
         videos_per_topic: int = 10,
         max_workers: int = 4,
     ) -> list[TopicResult]:
+        return list(
+            self.run_trend_intelligence_scan_with_status(
+                filters,
+                topic_limit=topic_limit,
+                videos_per_topic=videos_per_topic,
+                max_workers=max_workers,
+            ).topics
+        )
+
+    def run_trend_intelligence_scan_with_status(
+        self,
+        filters: TrendScanFilters,
+        *,
+        topic_limit: int = 8,
+        videos_per_topic: int = 10,
+        max_workers: int = 4,
+    ) -> TrendScanExecutionResult:
         """
         Execute the full Trend Intelligence scan pipeline and return ranked topic results.
 
@@ -90,10 +121,11 @@ class TrendIntelligencePipelineService:
         """
         seeds = self.trends_adapter.fetch_trending_topics(limit=topic_limit, timeframe=filters.timeframe)
         if not seeds:
-            return []
+            return TrendScanExecutionResult(scanned_at=datetime.now(UTC), filters=filters)
 
         worker_count = max(1, min(max_workers, len(seeds)))
         ranked_results: list[TopicResult] = []
+        warnings: list[ScanWarning] = []
 
         # NOTE: ThreadPoolExecutor is sufficient here because adapter calls are primarily I/O-bound.
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -101,11 +133,25 @@ class TrendIntelligencePipelineService:
                 executor.submit(self._build_topic_result, seed, filters, videos_per_topic): seed for seed in seeds
             }
             for future in as_completed(future_to_seed):
-                ranked_results.append(future.result())
+                seed = future_to_seed[future]
+                try:
+                    ranked_results.append(future.result())
+                except Exception as exc:
+                    warnings.append(
+                        ScanWarning(
+                            source=f"topic:{seed.source}",
+                            message=f"Failed to analyze '{seed.topic}': {exc}",
+                        )
+                    )
 
         filtered_results = [result for result in ranked_results if result.score.overall >= filters.minimum_score]
         filtered_results.sort(key=lambda result: (-result.score.overall, result.topic.lower()))
-        return filtered_results
+        return TrendScanExecutionResult(
+            scanned_at=datetime.now(UTC),
+            filters=filters,
+            topics=tuple(filtered_results),
+            warnings=tuple(warnings),
+        )
 
     def _build_topic_result(self, seed: TrendingTopicSeed, filters: TrendScanFilters, videos_per_topic: int) -> TopicResult:
         videos = self.youtube_adapter.search_topic_videos(seed.topic, limit=videos_per_topic)

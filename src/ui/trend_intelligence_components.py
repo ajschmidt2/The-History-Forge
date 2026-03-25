@@ -12,60 +12,45 @@ def render_page_header() -> None:
     )
 
 
-def render_filter_panel(default_filters: TrendScanFilters) -> tuple[TrendScanFilters, bool]:
+def render_filter_panel(default_filters: TrendScanFilters) -> TrendScanFilters:
     st.subheader("Filters")
-    filter_col, utility_col = st.columns([4, 1])
+    timeframe = st.selectbox(
+        "Timeframe",
+        options=["24h", "7d", "30d"],
+        index=["24h", "7d", "30d"].index(default_filters.timeframe),
+        key="trend_scan_timeframe",
+    )
 
-    with filter_col:
-        timeframe = st.selectbox(
-            "Timeframe",
-            options=["24h", "7d", "30d"],
-            index=["24h", "7d", "30d"].index(default_filters.timeframe),
-            key="trend_scan_timeframe",
-        )
+    content_type = st.selectbox(
+        "Content Type",
+        options=["long-form", "shorts", "both"],
+        index=["long-form", "shorts", "both"].index(default_filters.content_type),
+        key="trend_scan_content_type",
+    )
 
-        content_type = st.selectbox(
-            "Content Type",
-            options=["long-form", "shorts", "both"],
-            index=["long-form", "shorts", "both"].index(default_filters.content_type),
-            key="trend_scan_content_type",
-        )
-
-        brand_focus = st.selectbox(
-            "Brand Focus",
-            options=["ancient history", "war history", "forgotten figures", "mysteries", "all"],
-            index=["ancient history", "war history", "forgotten figures", "mysteries", "all"].index(
-                default_filters.brand_focus
-            ),
-            key="trend_scan_brand_focus",
-        )
-
-        min_score = st.slider(
-            "Minimum Score (placeholder)",
-            min_value=0,
-            max_value=100,
-            value=default_filters.min_score,
-            step=5,
-            help="Placeholder control. Will drive backend filtering once real scan data is connected.",
-            key="trend_scan_min_score",
-        )
-
-    with utility_col:
-        simulate_error = st.toggle(
-            "Simulate Error",
-            value=False,
-            help="Temporary UI control to test the error state before backend integration.",
-            key="trend_scan_simulate_error",
-        )
-
-    return (
-        TrendScanFilters(
-            timeframe=timeframe,
-            content_type=content_type,
-            brand_focus=brand_focus,
-            min_score=min_score,
+    brand_focus = st.selectbox(
+        "Brand Focus",
+        options=["ancient history", "war history", "forgotten figures", "mysteries", "all"],
+        index=["ancient history", "war history", "forgotten figures", "mysteries", "all"].index(
+            default_filters.brand_focus
         ),
-        simulate_error,
+        key="trend_scan_brand_focus",
+    )
+
+    min_score = st.slider(
+        "Minimum Score",
+        min_value=0,
+        max_value=100,
+        value=default_filters.min_score,
+        step=5,
+        key="trend_scan_min_score",
+    )
+
+    return TrendScanFilters(
+        timeframe=timeframe,
+        content_type=content_type,
+        brand_focus=brand_focus,
+        min_score=min_score,
     )
 
 
