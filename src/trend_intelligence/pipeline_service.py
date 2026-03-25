@@ -3,11 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.trend_intelligence.adapters.interfaces import TopicAnalysisAdapter, TrendsSourceAdapter, YouTubeSourceAdapter
-from src.trend_intelligence.adapters.mock_adapters import (
-    GoogleTrendsSeedsAdapter,
-    MockTopicAnalysisAdapter,
-    MockYouTubeSourceAdapter,
-)
+from src.trend_intelligence.adapters.mock_adapters import GoogleTrendsSeedsAdapter, MockTopicAnalysisAdapter
+from src.trend_intelligence.adapters.youtube_topic_adapter import YouTubeTopicSourceAdapter
 from src.trend_intelligence.adapters.schemas import TopicAnalysis, TrendingTopicSeed, VideoResult
 
 
@@ -35,7 +32,7 @@ class TrendIntelligencePipelineService:
         analysis_adapter: TopicAnalysisAdapter | None = None,
     ) -> None:
         self.trends_adapter = trends_adapter or GoogleTrendsSeedsAdapter()
-        self.youtube_adapter = youtube_adapter or MockYouTubeSourceAdapter()
+        self.youtube_adapter = youtube_adapter or YouTubeTopicSourceAdapter()
         self.analysis_adapter = analysis_adapter or MockTopicAnalysisAdapter()
 
     def run_full_scan_pipeline(
