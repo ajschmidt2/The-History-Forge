@@ -196,7 +196,7 @@ def main() -> None:
     with tabs[14]:
         tab_auto_videos()
     with tabs[15]:
-        tab_trend_intelligence(active_project_id())
+        tab_trend_intelligence()
 
     save_project_state(active_project_id())
 
