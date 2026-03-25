@@ -13,6 +13,7 @@ from src.trend_intelligence.adapters.interfaces import (
     YouTubeSourceAdapter,
 )
 from src.trend_intelligence.adapters.schemas import TopicAnalysis, TrendingTopicSeed, VideoResult
+from src.trend_intelligence.adapters.topic_analysis_adapter import DeterministicTopicAnalysisAdapter
 from src.trend_intelligence.types import RawTrendTopic
 
 logger = logging.getLogger(__name__)
@@ -185,38 +186,10 @@ class MockYouTubeSourceAdapter(YouTubeSourceAdapter):
         ]
 
 
-class MockTopicAnalysisAdapter(TopicAnalysisAdapter):
+class MockTopicAnalysisAdapter(DeterministicTopicAnalysisAdapter):
+    """Back-compat alias for deterministic analysis in tests and local development."""
+
     source_name = "mock_analysis"
-
-    def __init__(self, api_key: str | None = None) -> None:
-        self.api_key = api_key or get_secret("OPENAI_API_KEY")
-
-    def analyze_topic(self, topic: str, videos: list[VideoResult]) -> TopicAnalysis:
-        video_count = len(videos)
-        top_channel = videos[0].channel_title if videos else "N/A"
-        return TopicAnalysis(
-            topic=topic,
-            explanation=(
-                f"{topic} is showing durable audience interest across {video_count} related videos. "
-                f"Top observed channel pattern: {top_channel}."
-            ),
-            angles=(
-                f"What most people miss about {topic}",
-                f"A timeline-first explainer of {topic}",
-                f"How {topic} still impacts current geopolitics",
-            ),
-            hooks=(
-                f"You were probably taught {topic} backwards.",
-                f"This one decision changed {topic} forever.",
-                f"The hidden catalyst behind {topic} nobody mentions.",
-            ),
-            thumbnail_ideas=(
-                f"Split-era map + bold '{topic}' text",
-                "Leader close-up + red arrow to turning-point date",
-                "Before/after timeline bar with dramatic contrast",
-            ),
-            source=self.source_name,
-        )
 
 
 def _traffic_to_signal(approx_traffic: str) -> tuple[float, float, bool]:
