@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 
 from src.trend_intelligence.adapters.interfaces import TopicAnalysisAdapter, TrendsSourceAdapter, YouTubeSourceAdapter
 from src.trend_intelligence.adapters.mock_adapters import (
+    GoogleTrendsSeedsAdapter,
     MockTopicAnalysisAdapter,
-    MockTrendsSourceAdapter,
     MockYouTubeSourceAdapter,
 )
 from src.trend_intelligence.adapters.schemas import TopicAnalysis, TrendingTopicSeed, VideoResult
@@ -34,12 +34,18 @@ class TrendIntelligencePipelineService:
         youtube_adapter: YouTubeSourceAdapter | None = None,
         analysis_adapter: TopicAnalysisAdapter | None = None,
     ) -> None:
-        self.trends_adapter = trends_adapter or MockTrendsSourceAdapter()
+        self.trends_adapter = trends_adapter or GoogleTrendsSeedsAdapter()
         self.youtube_adapter = youtube_adapter or MockYouTubeSourceAdapter()
         self.analysis_adapter = analysis_adapter or MockTopicAnalysisAdapter()
 
-    def run_full_scan_pipeline(self, *, topic_limit: int = 5, videos_per_topic: int = 5) -> FullScanPipelineResult:
-        seeds = self.trends_adapter.fetch_trending_topics(limit=topic_limit)
+    def run_full_scan_pipeline(
+        self,
+        *,
+        topic_limit: int = 5,
+        videos_per_topic: int = 5,
+        timeframe: str = "7d",
+    ) -> FullScanPipelineResult:
+        seeds = self.trends_adapter.fetch_trending_topics(limit=topic_limit, timeframe=timeframe)
 
         merged_results: list[PipelineTopicResult] = []
         for seed in seeds:

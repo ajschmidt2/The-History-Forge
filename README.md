@@ -632,6 +632,26 @@ Daily automation is configured to produce videos with **NO subtitles by default*
 
 A read-only status block in the **Automation** tab displays latest daily-run metadata and confirms `Daily preset subtitles: OFF`.
 
+## Trend Intelligence source configuration
+
+The trend pipeline now uses a live Google Trends RSS adapter by default (`GoogleTrendsSeedsAdapter`) with automatic fallback to mock seeds if the source fails.
+
+### Environment variables
+
+- `GOOGLE_TRENDS_GEO` (optional): 2-letter region code for RSS feed scope. Default: `US`.
+- `YOUTUBE_API_KEY` (optional but recommended): enables real YouTube lookup adapter elsewhere in trend workflows.
+
+### Behavior details
+
+- Source feed: `https://trends.google.com/trending/rss?geo=<GOOGLE_TRENDS_GEO>`
+- Timeframe input (`24h`, `7d`, `30d`) is applied as best-effort recency filtering against feed item timestamps.
+- If the feed request or parsing fails, the adapter logs the source error and falls back to deterministic mock trend seeds, so UI pages continue to render.
+- Normalized trend seed metadata includes:
+  - `topic` and `source`
+  - `trend_direction` and `breakout`
+  - `related_queries` (derived from RSS news item titles when available)
+  - `raw_topic` payload aligned to the `RawTrendTopic` shape used by scoring components
+
 ## MCP Server
 
 The History Forge exposes its video automation workflow as an MCP server so you can trigger and inspect runs directly from Claude Code.
