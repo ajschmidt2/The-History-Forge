@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import UTC, datetime
 
 import streamlit as st
 
 from src.trend_intelligence.pipeline_service import TrendIntelligencePipelineService
+from src.trend_intelligence.repository import TrendIntelligenceRepository
 from src.trend_intelligence.types import TrendScanFilters as ServiceTrendScanFilters
 from src.ui.trend_intelligence_components import render_filter_panel, render_page_header, render_results_section
 from src.ui.trend_intelligence_types import (
@@ -21,6 +23,10 @@ DEFAULT_FILTERS = TrendScanFilters(
     brand_focus="all",
     min_score=65,
 )
+
+
+def _resolve_user_id() -> str:
+    return str(st.session_state.get("trend_intelligence_user_id") or "local-user")
 
 
 def _to_ui_topic_results(service_results) -> list[TopicResult]:
@@ -66,49 +72,78 @@ def tab_trend_intelligence() -> None:
     filters = render_filter_panel(DEFAULT_FILTERS)
 
     st.session_state.setdefault("trend_scan_service", TrendIntelligencePipelineService())
+    st.session_state.setdefault("trend_scan_repo", TrendIntelligenceRepository())
 
     st.session_state.setdefault("trend_scan_has_run", False)
     st.session_state.setdefault("trend_scan_results", [])
     st.session_state.setdefault("trend_scan_error", None)
     st.session_state.setdefault("trend_scan_warnings", [])
     st.session_state.setdefault("trend_scan_last_summary", None)
+    st.session_state.setdefault("trend_scan_last_run_id", None)
+    st.session_state.setdefault("trend_scan_topic_result_ids", {})
 
     if st.button("Run Scan", type="primary", use_container_width=True):
         st.session_state.trend_scan_has_run = True
         st.session_state.trend_scan_error = None
         st.session_state.trend_scan_warnings = []
+        st.session_state.trend_scan_topic_result_ids = {}
+
+        service_filters = ServiceTrendScanFilters(
+            timeframe=filters.timeframe,
+            content_type=filters.content_type,
+            brand_focus=filters.brand_focus,
+            minimum_score=filters.min_score,
+        )
+
+        run_id = st.session_state.trend_scan_repo.create_scan_run(
+            user_id=_resolve_user_id(),
+            filters_json=asdict(service_filters),
+        )
+        st.session_state.trend_scan_last_run_id = run_id
 
         with st.status("Running trend scan...", expanded=True) as status:
             st.write("Collecting topic signals from configured sources...")
             st.write("Analyzing topic momentum and content fit...")
             try:
-                service_filters = ServiceTrendScanFilters(
-                    timeframe=filters.timeframe,
-                    content_type=filters.content_type,
-                    brand_focus=filters.brand_focus,
-                    minimum_score=filters.min_score,
-                )
                 execution = st.session_state.trend_scan_service.run_trend_intelligence_scan_with_status(service_filters)
+                st.session_state.trend_scan_topic_result_ids = st.session_state.trend_scan_repo.save_topic_results(
+                    scan_run_id=run_id,
+                    topics=list(execution.topics),
+                )
                 results = _to_ui_topic_results(execution.topics)
                 st.session_state.trend_scan_results = results
                 st.session_state.trend_scan_warnings = [warning.message for warning in execution.warnings]
 
                 scanned_at = execution.scanned_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
                 top_topic = results[0].topic_title if results else "None"
-                st.session_state.trend_scan_last_summary = {
+                summary = {
                     "scanned_at": scanned_at,
                     "topic_count": len(results),
                     "top_topic": top_topic,
+                    "warning_count": len(execution.warnings),
                 }
+                st.session_state.trend_scan_last_summary = summary
+                st.session_state.trend_scan_repo.complete_scan_run(
+                    scan_run_id=run_id,
+                    status="completed",
+                    summary_json=summary,
+                )
                 status.update(label="Scan complete", state="complete")
             except Exception as exc:
                 st.session_state.trend_scan_results = []
                 st.session_state.trend_scan_error = str(exc)
-                st.session_state.trend_scan_last_summary = {
+                summary = {
                     "scanned_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
                     "topic_count": 0,
                     "top_topic": "None",
+                    "error": str(exc),
                 }
+                st.session_state.trend_scan_last_summary = summary
+                st.session_state.trend_scan_repo.complete_scan_run(
+                    scan_run_id=run_id,
+                    status="failed",
+                    summary_json=summary,
+                )
                 status.update(label="Scan failed", state="error")
 
     st.divider()
@@ -133,4 +168,19 @@ def tab_trend_intelligence() -> None:
         for warning in st.session_state.trend_scan_warnings:
             st.warning(f"Partial source failure: {warning}")
 
-    render_results_section(st.session_state.trend_scan_results)
+    selected_for_pipeline = render_results_section(st.session_state.trend_scan_results)
+    if selected_for_pipeline is not None:
+        topic_result_id = st.session_state.trend_scan_topic_result_ids.get(selected_for_pipeline.topic_title)
+        candidate_id = st.session_state.trend_scan_repo.save_topic_candidate(
+            user_id=_resolve_user_id(),
+            topic_title=selected_for_pipeline.topic_title,
+            source_topic_result_id=topic_result_id,
+            notes="Saved from Trend Intelligence",
+            status="saved",
+        )
+        st.session_state.topic = selected_for_pipeline.topic_title
+        st.session_state.project_title = selected_for_pipeline.topic_title
+        if candidate_id is None:
+            st.warning(f"Saved '{selected_for_pipeline.topic_title}' locally, but Supabase persistence is unavailable.")
+        else:
+            st.success(f"Saved '{selected_for_pipeline.topic_title}' to pipeline (candidate #{candidate_id}).")
