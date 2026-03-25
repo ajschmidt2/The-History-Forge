@@ -492,7 +492,16 @@ def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: P
             if not isinstance(idx, int) or idx <= 0:
                 continue
 
-            # 1. Check for an assigned effects clip (highest priority)
+            # 0. B-roll (highest priority — mirrors timeline_sync assignment order)
+            if bool(getattr(scene, "use_broll", False)):
+                broll_local = str(getattr(scene, "broll_local_path", "") or "").strip()
+                if broll_local:
+                    broll_path = Path(broll_local)
+                    if broll_path.exists() and broll_path.stat().st_size > 0:
+                        selected.append(broll_path)
+                        continue
+
+            # 1. Check for an assigned effects clip
             effects_clip = _resolve_effects_clip(idx)
             if effects_clip is not None:
                 import logging as _log
@@ -526,6 +535,72 @@ def _media_files_for_compile(project_path: Path, images_dir: Path, videos_dir: P
     images = sorted([p for p in images_dir.glob("*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
     videos = sorted([p for p in videos_dir.glob("*.*") if p.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv"}])
     return sorted(images + videos, key=_media_sort_key)
+
+
+def _render_scene_media_summary(project_path: Path) -> None:
+    """Show a per-scene table of assigned media type and file before rendering."""
+    scenes = st.session_state.get("scenes", [])
+    if not scenes:
+        st.caption("No scenes loaded.")
+        return
+
+    active_pid = active_project_id()
+    clip_assignments = _load_effects_clip_assignments(active_pid) if _sb_store.is_configured() else {}
+    local_clip_assignments: dict = st.session_state.get("local_clip_assignments", {})
+    effects_clips_dir = project_path / "assets" / "effects_clips"
+
+    ordered = sorted(
+        [s for s in scenes if isinstance(getattr(s, "index", None), int) and s.index > 0],
+        key=lambda s: s.index,
+    )
+
+    header = st.columns([1, 2, 5, 1])
+    header[0].markdown("**Scene**")
+    header[1].markdown("**Type**")
+    header[2].markdown("**File**")
+    header[3].markdown("**OK**")
+    st.divider()
+
+    for scene in ordered:
+        idx = scene.index
+        scene_id = f"s{idx:02d}"
+        media_type = "Image"
+        filename = f"{scene_id}.png"
+        ok = False
+
+        if bool(getattr(scene, "use_broll", False)):
+            broll_local = str(getattr(scene, "broll_local_path", "") or "").strip()
+            if broll_local:
+                p = Path(broll_local)
+                media_type = "B-roll"
+                filename = p.name
+                ok = p.exists() and p.stat().st_size > 0
+        elif clip_assignments.get(idx) or local_clip_assignments.get(idx):
+            info = clip_assignments.get(idx) or local_clip_assignments.get(idx)
+            clip_fname = str(info.get("filename") or "")
+            if not clip_fname and info.get("url"):
+                clip_fname = Path(str(info.get("url"))).name
+            local_clip = effects_clips_dir / clip_fname if clip_fname else None
+            media_type = "Effects clip"
+            filename = clip_fname or "(unknown)"
+            ok = bool(local_clip and local_clip.exists() and local_clip.stat().st_size > 0)
+        else:
+            video_path = str(getattr(scene, "video_path", "") or "")
+            if video_path and Path(video_path).exists():
+                media_type = "AI video"
+                filename = Path(video_path).name
+                ok = Path(video_path).stat().st_size > 0
+            else:
+                img = project_path / "assets" / "images" / f"{scene_id}.png"
+                media_type = "Image"
+                filename = img.name
+                ok = img.exists() and img.stat().st_size > 0
+
+        row = st.columns([1, 2, 5, 1])
+        row[0].markdown(scene_id)
+        row[1].markdown(media_type)
+        row[2].caption(filename)
+        row[3].markdown("✅" if ok else "❌")
 
 
 def _normalize_caption_list(captions: list[str], expected_count: int) -> list[str]:
@@ -1376,6 +1451,9 @@ def tab_video_compile() -> None:
             st.code(first_lines or "(empty)")
             st.markdown("**captions.srt last 30 lines**")
             st.code(last_lines or "(empty)")
+
+    with st.expander("Scene media — review before rendering", expanded=False):
+        _render_scene_media_summary(project_path)
 
     if st.button("Render video (FFmpeg)", width="stretch", key="video_render"):
         if not media_files:
