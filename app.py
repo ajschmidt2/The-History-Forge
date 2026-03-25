@@ -29,6 +29,7 @@ from src.ui.tabs.video_studio import tab_video_compile
 from src.ui.tabs.voiceover import tab_voiceover
 from src.ui.tabs.social_upload import tab_social_upload
 from src.ui.tabs.auto_videos import tab_auto_videos
+from src.ui.tabs.trend_intelligence import tab_trend_intelligence
 
 
 def _load_ui_state_module():
@@ -160,6 +161,7 @@ def main() -> None:
             "📦 Export",             # 12
             "📲 Publish",             # 13
             "🤖 Auto Videos",        # 14
+            "📈 Trend Intelligence", # 15
         ]
     )
 
@@ -193,6 +195,8 @@ def main() -> None:
         tab_social_upload()
     with tabs[14]:
         tab_auto_videos()
+    with tabs[15]:
+        tab_trend_intelligence(active_project_id())
 
     save_project_state(active_project_id())
 
