@@ -7,7 +7,16 @@ from uuid import uuid4
 
 import src.supabase_storage as _sb_store
 from src.trend_intelligence.models import RankedTopic
+from src.trend_intelligence.persistence_validation import (
+    REQUIRED_TREND_TABLES,
+    TrendPersistenceValidationResult,
+    looks_like_schema_error,
+)
 from src.trend_intelligence.types import TopicResult
+
+
+class TrendIntelligencePersistenceError(RuntimeError):
+    pass
 
 
 class TrendIntelligenceRepository:
@@ -72,7 +81,10 @@ class TrendIntelligenceRepository:
             "status": "running",
             "summary_json": {},
         }
-        self._client.table("trend_scan_runs").insert(payload).execute()
+        try:
+            self._client.table("trend_scan_runs").insert(payload).execute()
+        except Exception as exc:
+            self._raise_if_schema_error(exc, table_name="trend_scan_runs")
         return run_id
 
     def complete_scan_run(self, *, scan_run_id: str, status: str, summary_json: dict[str, Any]) -> None:
@@ -84,7 +96,10 @@ class TrendIntelligenceRepository:
             "summary_json": summary_json,
             "completed_at": datetime.now(UTC).isoformat(),
         }
-        self._client.table("trend_scan_runs").update(payload).eq("id", scan_run_id).execute()
+        try:
+            self._client.table("trend_scan_runs").update(payload).eq("id", scan_run_id).execute()
+        except Exception as exc:
+            self._raise_if_schema_error(exc, table_name="trend_scan_runs")
 
     def save_topic_results(self, *, scan_run_id: str, topics: list[TopicResult]) -> dict[str, int]:
         if self._client is None or not topics:
@@ -107,7 +122,11 @@ class TrendIntelligenceRepository:
                 }
             )
 
-        resp = self._client.table("trend_topic_results").insert(rows).execute()
+        try:
+            resp = self._client.table("trend_topic_results").insert(rows).execute()
+        except Exception as exc:
+            self._raise_if_schema_error(exc, table_name="trend_topic_results")
+            return {}
         data = resp.data or []
         id_map: dict[str, int] = {}
         for row in data:
@@ -137,24 +156,48 @@ class TrendIntelligenceRepository:
             "status": status,
             "created_at": datetime.now(UTC).isoformat(),
         }
-        resp = self._client.table("saved_topic_candidates").insert(payload).execute()
+        try:
+            resp = self._client.table("saved_topic_candidates").insert(payload).execute()
+        except Exception as exc:
+            self._raise_if_schema_error(exc, table_name="saved_topic_candidates")
+            return None
         row = (resp.data or [{}])[0]
         candidate_id = row.get("id")
         return candidate_id if isinstance(candidate_id, int) else None
 
+    def validate_required_trend_tables(self) -> TrendPersistenceValidationResult:
+        if self._client is None:
+            return TrendPersistenceValidationResult(is_ready=False, schema_errors=("Supabase client is unavailable",))
+
+        missing: list[str] = []
+        schema_errors: list[str] = []
+        for table_name in REQUIRED_TREND_TABLES:
+            try:
+                columns = self._table_columns(table_name)
+            except Exception as exc:
+                if looks_like_schema_error(exc):
+                    schema_errors.append(f"{table_name}: {exc}")
+                    continue
+                raise
+            if not columns:
+                missing.append(table_name)
+
+        return TrendPersistenceValidationResult(
+            is_ready=not missing and not schema_errors,
+            missing_tables=tuple(missing),
+            schema_errors=tuple(schema_errors),
+        )
+
     def _table_columns(self, table_name: str) -> set[str]:
         if self._client is None:
             return set()
-        try:
-            resp = (
-                self._client.table("information_schema.columns")
-                .select("column_name")
-                .eq("table_schema", "public")
-                .eq("table_name", table_name)
-                .execute()
-            )
-        except Exception:
-            return set()
+        resp = (
+            self._client.table("information_schema.columns")
+            .select("column_name")
+            .eq("table_schema", "public")
+            .eq("table_name", table_name)
+            .execute()
+        )
         rows = resp.data or []
         columns: set[str] = set()
         for row in rows:
@@ -164,6 +207,13 @@ class TrendIntelligenceRepository:
             if name:
                 columns.add(name)
         return columns
+
+    def _raise_if_schema_error(self, exc: Exception, *, table_name: str) -> None:
+        if looks_like_schema_error(exc):
+            raise TrendIntelligencePersistenceError(
+                f"Supabase Trend Intelligence table '{table_name}' is missing or has an incompatible schema."
+            ) from exc
+        raise
 
     def save_script_builder_job(
         self,
@@ -218,7 +268,10 @@ class TrendIntelligenceRepository:
         rows = bridge_row.data or []
         bridge_id = rows[0].get("id") if rows and isinstance(rows[0], dict) else None
 
-        script_job_columns = self._table_columns("script_jobs")
+        try:
+            script_job_columns = self._table_columns("script_jobs")
+        except Exception:
+            script_job_columns = set()
         if script_job_columns:
             script_payload_map = {
                 "project_id": project_id,
