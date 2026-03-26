@@ -34,6 +34,18 @@ class TrendPersistenceValidationResult:
         return " ".join(parts)
 
 
+def build_trend_persistence_admin_message(
+    *,
+    missing_tables: tuple[str, ...] = (),
+    schema_errors: tuple[str, ...] = (),
+) -> str:
+    return TrendPersistenceValidationResult(
+        is_ready=not missing_tables and not schema_errors,
+        missing_tables=missing_tables,
+        schema_errors=schema_errors,
+    ).admin_message
+
+
 def looks_like_schema_error(exc: Exception) -> bool:
     text = _error_blob(exc).lower()
     markers = (

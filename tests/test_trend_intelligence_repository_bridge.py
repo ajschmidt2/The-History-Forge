@@ -4,8 +4,9 @@ from src.trend_intelligence.repository import TrendIntelligencePersistenceError,
 
 
 class _Response:
-    def __init__(self, data):
+    def __init__(self, data, error=None):
         self.data = data
+        self.error = error
 
 
 class _Query:
@@ -155,6 +156,34 @@ def test_create_scan_run_raises_persistence_error_for_missing_table():
 
     try:
         repo.create_scan_run(user_id="u-1", filters_json={})
+    except TrendIntelligencePersistenceError:
+        pass
+    else:
+        raise AssertionError("Expected TrendIntelligencePersistenceError")
+
+
+def test_raise_if_schema_response_handles_response_error_field():
+    repo = _repo_with_fake_client(_FakeClient())
+
+    try:
+        repo._raise_if_schema_response(  # noqa: SLF001
+            _Response([], error='42P01: relation "saved_topic_candidates" does not exist'),
+            table_name="saved_topic_candidates",
+        )
+    except TrendIntelligencePersistenceError:
+        pass
+    else:
+        raise AssertionError("Expected TrendIntelligencePersistenceError")
+
+
+def test_raise_if_schema_response_handles_dict_error_payload():
+    repo = _repo_with_fake_client(_FakeClient())
+
+    try:
+        repo._raise_if_schema_response(  # noqa: SLF001
+            _Response({"code": "42703", "message": 'column "foo" does not exist'}),
+            table_name="trend_topic_results",
+        )
     except TrendIntelligencePersistenceError:
         pass
     else:

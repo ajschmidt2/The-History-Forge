@@ -10,6 +10,7 @@ from src.trend_intelligence.models import RankedTopic
 from src.trend_intelligence.persistence_validation import (
     REQUIRED_TREND_TABLES,
     TrendPersistenceValidationResult,
+    build_trend_persistence_admin_message,
     looks_like_schema_error,
 )
 from src.trend_intelligence.types import TopicResult
@@ -82,7 +83,8 @@ class TrendIntelligenceRepository:
             "summary_json": {},
         }
         try:
-            self._client.table("trend_scan_runs").insert(payload).execute()
+            resp = self._client.table("trend_scan_runs").insert(payload).execute()
+            self._raise_if_schema_response(resp, table_name="trend_scan_runs")
         except Exception as exc:
             self._raise_if_schema_error(exc, table_name="trend_scan_runs")
         return run_id
@@ -97,7 +99,8 @@ class TrendIntelligenceRepository:
             "completed_at": datetime.now(UTC).isoformat(),
         }
         try:
-            self._client.table("trend_scan_runs").update(payload).eq("id", scan_run_id).execute()
+            resp = self._client.table("trend_scan_runs").update(payload).eq("id", scan_run_id).execute()
+            self._raise_if_schema_response(resp, table_name="trend_scan_runs")
         except Exception as exc:
             self._raise_if_schema_error(exc, table_name="trend_scan_runs")
 
@@ -124,6 +127,7 @@ class TrendIntelligenceRepository:
 
         try:
             resp = self._client.table("trend_topic_results").insert(rows).execute()
+            self._raise_if_schema_response(resp, table_name="trend_topic_results")
         except Exception as exc:
             self._raise_if_schema_error(exc, table_name="trend_topic_results")
             return {}
@@ -158,6 +162,7 @@ class TrendIntelligenceRepository:
         }
         try:
             resp = self._client.table("saved_topic_candidates").insert(payload).execute()
+            self._raise_if_schema_response(resp, table_name="saved_topic_candidates")
         except Exception as exc:
             self._raise_if_schema_error(exc, table_name="saved_topic_candidates")
             return None
@@ -167,7 +172,10 @@ class TrendIntelligenceRepository:
 
     def validate_required_trend_tables(self) -> TrendPersistenceValidationResult:
         if self._client is None:
-            return TrendPersistenceValidationResult(is_ready=False, schema_errors=("Supabase client is unavailable",))
+            return TrendPersistenceValidationResult(
+                is_ready=False,
+                schema_errors=("Supabase client is unavailable",),
+            )
 
         missing: list[str] = []
         schema_errors: list[str] = []
@@ -211,9 +219,34 @@ class TrendIntelligenceRepository:
     def _raise_if_schema_error(self, exc: Exception, *, table_name: str) -> None:
         if looks_like_schema_error(exc):
             raise TrendIntelligencePersistenceError(
-                f"Supabase Trend Intelligence table '{table_name}' is missing or has an incompatible schema."
+                build_trend_persistence_admin_message(
+                    missing_tables=(table_name,),
+                    schema_errors=(str(exc),),
+                )
             ) from exc
         raise
+
+    def _raise_if_schema_response(self, resp: Any, *, table_name: str) -> None:
+        raw_error = getattr(resp, "error", None)
+        if raw_error and looks_like_schema_error(Exception(str(raw_error))):
+            raise TrendIntelligencePersistenceError(
+                build_trend_persistence_admin_message(
+                    missing_tables=(table_name,),
+                    schema_errors=(str(raw_error),),
+                )
+            )
+
+        data = getattr(resp, "data", None)
+        if isinstance(data, dict):
+            err_fragments = [str(data.get("code", "")), str(data.get("message", "")), str(data.get("hint", ""))]
+            error_blob = " | ".join(fragment for fragment in err_fragments if fragment and fragment != "None")
+            if error_blob and looks_like_schema_error(Exception(error_blob)):
+                raise TrendIntelligencePersistenceError(
+                    build_trend_persistence_admin_message(
+                        missing_tables=(table_name,),
+                        schema_errors=(error_blob,),
+                    )
+                )
 
     def save_script_builder_job(
         self,
