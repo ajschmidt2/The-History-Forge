@@ -86,9 +86,8 @@ def _validate_trend_persistence_at_startup(repo: TrendIntelligenceRepository) ->
 
 def _render_trend_persistence_admin_error(admin_message: str) -> None:
     st.error(
-        "Trend Intelligence database setup is incomplete.\n\n"
-        f"{admin_message}\n\n"
-        "Admin action required: apply the Trend Intelligence Supabase migrations and reload this page."
+        "Trend Intelligence persistence check failed.\n\n"
+        f"{admin_message}"
     )
 
 
@@ -183,7 +182,7 @@ def tab_trend_intelligence() -> None:
                 st.session_state.trend_scan_persistence_ready = False
                 st.session_state.trend_scan_persistence_error = str(exc)
                 st.session_state.trend_scan_error = (
-                    "Scan finished, but persistence failed because required Supabase tables are missing or outdated."
+                    "Scan finished, but persistence failed due to a Trend Intelligence Supabase setup issue."
                 )
                 status.update(label="Scan completed with persistence warning", state="error")
             except Exception as exc:
@@ -240,7 +239,7 @@ def tab_trend_intelligence() -> None:
         except TrendIntelligencePersistenceError:
             candidate_id = None
             _render_trend_persistence_admin_error(
-                "Could not save this topic to Supabase because Trend Intelligence tables are missing or incompatible."
+                "Could not save this topic to Supabase due to a Trend Intelligence setup/access issue."
             )
         st.session_state.topic = selected_for_pipeline.topic_title
         st.session_state.project_title = selected_for_pipeline.topic_title
