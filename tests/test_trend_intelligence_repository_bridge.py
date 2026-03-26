@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.trend_intelligence.repository import TrendIntelligenceRepository
+from src.trend_intelligence.repository import TrendIntelligencePersistenceError, TrendIntelligenceRepository
 
 
 class _Response:
@@ -33,6 +33,9 @@ class _Query:
         return self
 
     def execute(self):
+        if self.table_name in self.client.error_tables:
+            raise RuntimeError(self.client.error_tables[self.table_name])
+
         if self._op == "insert":
             self.client.inserts.append((self.table_name, self._insert_payload))
             if self.table_name == "trend_topic_script_jobs":
@@ -60,8 +63,9 @@ class _Query:
 
 
 class _FakeClient:
-    def __init__(self, table_columns: dict[str, set[str]] | None = None):
+    def __init__(self, table_columns: dict[str, set[str]] | None = None, error_tables: dict[str, str] | None = None):
         self.table_columns = table_columns or {}
+        self.error_tables = error_tables or {}
         self.inserts: list[tuple[str, object]] = []
         self.bridge_rows: list[dict[str, object]] = []
         self.next_bridge_id = 1
@@ -123,3 +127,35 @@ def test_save_script_builder_job_also_inserts_into_script_jobs_when_table_exists
     assert len(script_inserts) == 1
     assert script_inserts[0]["project_id"] == "project-1"
     assert script_inserts[0]["topic"] == "Bronze Age Collapse"
+
+
+def test_validate_required_trend_tables_returns_missing_table_list():
+    repo = _repo_with_fake_client(
+        _FakeClient(
+            table_columns={
+                "trend_scan_runs": {"id"},
+                "trend_topic_results": {"id"},
+                # saved_topic_candidates intentionally missing
+            }
+        )
+    )
+
+    result = repo.validate_required_trend_tables()
+
+    assert result.is_ready is False
+    assert result.missing_tables == ("saved_topic_candidates",)
+
+
+def test_create_scan_run_raises_persistence_error_for_missing_table():
+    repo = _repo_with_fake_client(
+        _FakeClient(
+            error_tables={"trend_scan_runs": "42P01: relation \"trend_scan_runs\" does not exist"},
+        )
+    )
+
+    try:
+        repo.create_scan_run(user_id="u-1", filters_json={})
+    except TrendIntelligencePersistenceError:
+        pass
+    else:
+        raise AssertionError("Expected TrendIntelligencePersistenceError")
