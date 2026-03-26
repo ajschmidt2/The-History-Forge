@@ -244,6 +244,16 @@ def _save_research_artifacts(brief_markdown: str, sources: list[Source]) -> None
 
 def tab_generate_script() -> None:
     st.subheader("Generate script")
+    trend_context = st.session_state.get("trend_script_context")
+    if isinstance(trend_context, dict) and trend_context.get("topic_title"):
+        with st.container(border=True):
+            st.markdown("**Trend Intelligence context**")
+            st.caption("Imported from Trend Intelligence → Send to Script Builder.")
+            st.markdown(f"- **Topic:** {trend_context.get('topic_title', '')}")
+            st.markdown(f"- **Why it may be trending:** {trend_context.get('why_may_be_trending', '')}")
+            st.markdown(f"- **Preferred angle:** {trend_context.get('preferred_content_angle', '')}")
+            st.markdown(f"- **Selected hook:** {trend_context.get('selected_hook', '')}")
+            st.markdown(f"- **Thumbnail direction:** {trend_context.get('thumbnail_direction', '')}")
 
     c1, c2 = st.columns([3, 1])
     with c1:
@@ -604,4 +614,3 @@ def tab_generate_script() -> None:
                 st.write(f"word counts per scene: {debug.get('word_counts', [])}")
                 previews = [f"{idx + 1:02d}: {txt[:80]}" for idx, txt in enumerate(scene_texts)]
                 st.code("\n".join(previews) if previews else "(no scenes)")
-

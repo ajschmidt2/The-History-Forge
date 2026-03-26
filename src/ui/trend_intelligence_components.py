@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from src.ui.trend_intelligence_types import TopicResult, TrendScanFilters
+from src.ui.trend_intelligence_types import ScriptBuilderPayload, TopicResult, TrendScanFilters
 
 
 def render_page_header() -> None:
@@ -54,7 +54,12 @@ def render_filter_panel(default_filters: TrendScanFilters) -> TrendScanFilters:
     )
 
 
-def render_topic_card(topic: TopicResult, idx: int) -> bool:
+def _options_or_fallback(options: list[str], fallback: str) -> list[str]:
+    sanitized = [str(item).strip() for item in options if str(item).strip()]
+    return sanitized if sanitized else [fallback]
+
+
+def render_topic_card(topic: TopicResult, idx: int) -> ScriptBuilderPayload | None:
     with st.container(border=True):
         st.subheader(topic.topic_title)
 
@@ -86,13 +91,39 @@ def render_topic_card(topic: TopicResult, idx: int) -> bool:
             for thumb in topic.insight.thumbnail_ideas:
                 st.markdown(f"- {thumb}")
 
-        return st.button("Save to Pipeline", key=f"trend_save_pipeline_{idx}", use_container_width=True)
+        selected_angle = st.selectbox(
+            "Preferred content angle",
+            options=_options_or_fallback(topic.insight.content_angle_ideas, "Balanced historical breakdown"),
+            key=f"trend_preferred_angle_{idx}",
+        )
+        selected_hook = st.selectbox(
+            "Selected hook",
+            options=_options_or_fallback(topic.insight.hook_ideas, "Why this story is exploding right now"),
+            key=f"trend_selected_hook_{idx}",
+        )
+        selected_thumbnail_direction = st.selectbox(
+            "Thumbnail direction",
+            options=_options_or_fallback(topic.insight.thumbnail_ideas, "High-contrast key figure + conflict text"),
+            key=f"trend_thumbnail_direction_{idx}",
+        )
+
+        if st.button("Send to Script Builder", key=f"trend_save_pipeline_{idx}", use_container_width=True):
+            return ScriptBuilderPayload(
+                topic_title=topic.topic_title,
+                why_may_be_trending=topic.insight.reasoning,
+                preferred_content_angle=selected_angle,
+                selected_hook=selected_hook,
+                thumbnail_direction=selected_thumbnail_direction,
+                score_breakdown=topic.score_breakdown,
+            )
+        return None
 
 
-def render_results_section(results: list[TopicResult]) -> TopicResult | None:
+def render_results_section(results: list[TopicResult]) -> ScriptBuilderPayload | None:
     st.subheader("Results")
-    saved_topic: TopicResult | None = None
+    saved_topic: ScriptBuilderPayload | None = None
     for i, topic in enumerate(results):
-        if render_topic_card(topic, i):
-            saved_topic = topic
+        payload = render_topic_card(topic, i)
+        if payload is not None:
+            saved_topic = payload
     return saved_topic
