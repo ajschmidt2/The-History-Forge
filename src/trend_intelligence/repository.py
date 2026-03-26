@@ -141,3 +141,107 @@ class TrendIntelligenceRepository:
         row = (resp.data or [{}])[0]
         candidate_id = row.get("id")
         return candidate_id if isinstance(candidate_id, int) else None
+
+    def _table_columns(self, table_name: str) -> set[str]:
+        if self._client is None:
+            return set()
+        try:
+            resp = (
+                self._client.table("information_schema.columns")
+                .select("column_name")
+                .eq("table_schema", "public")
+                .eq("table_name", table_name)
+                .execute()
+            )
+        except Exception:
+            return set()
+        rows = resp.data or []
+        columns: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("column_name", "") or "").strip()
+            if name:
+                columns.add(name)
+        return columns
+
+    def save_script_builder_job(
+        self,
+        *,
+        user_id: str,
+        project_id: str,
+        topic_title: str,
+        why_may_be_trending: str,
+        preferred_content_angle: str,
+        selected_hook: str,
+        thumbnail_direction: str,
+        score_breakdown_json: dict[str, Any],
+        source_topic_result_id: int | None,
+        source_scan_run_id: str | None,
+        saved_topic_candidate_id: int | None,
+    ) -> int | None:
+        if self._client is None:
+            return None
+
+        now_iso = datetime.now(UTC).isoformat()
+        bridge_payload = {
+            "user_id": user_id,
+            "project_id": project_id,
+            "topic_title": topic_title,
+            "why_may_be_trending": why_may_be_trending,
+            "preferred_content_angle": preferred_content_angle,
+            "selected_hook": selected_hook,
+            "thumbnail_direction": thumbnail_direction,
+            "score_breakdown_json": score_breakdown_json,
+            "source_topic_result_id": source_topic_result_id,
+            "source_scan_run_id": source_scan_run_id,
+            "saved_topic_candidate_id": saved_topic_candidate_id,
+            "status": "queued",
+            "created_at": now_iso,
+        }
+
+        try:
+            self._client.table("trend_topic_script_jobs").insert(bridge_payload).execute()
+        except Exception:
+            return None
+
+        bridge_row = (
+            self._client.table("trend_topic_script_jobs")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("project_id", project_id)
+            .eq("topic_title", topic_title)
+            .eq("created_at", now_iso)
+            .limit(1)
+            .execute()
+        )
+        rows = bridge_row.data or []
+        bridge_id = rows[0].get("id") if rows and isinstance(rows[0], dict) else None
+
+        script_job_columns = self._table_columns("script_jobs")
+        if script_job_columns:
+            script_payload_map = {
+                "project_id": project_id,
+                "topic_title": topic_title,
+                "topic": topic_title,
+                "title": topic_title,
+                "status": "queued",
+                "source_topic_result_id": source_topic_result_id,
+                "source_scan_run_id": source_scan_run_id,
+                "trend_topic_script_job_id": bridge_id,
+                "topic_context_json": {
+                    "why_may_be_trending": why_may_be_trending,
+                    "preferred_content_angle": preferred_content_angle,
+                    "selected_hook": selected_hook,
+                    "thumbnail_direction": thumbnail_direction,
+                    "score_breakdown": score_breakdown_json,
+                },
+            }
+            script_payload = {key: value for key, value in script_payload_map.items() if key in script_job_columns}
+            if script_payload:
+                try:
+                    self._client.table("script_jobs").insert(script_payload).execute()
+                except Exception:
+                    pass
+
+        return bridge_id if isinstance(bridge_id, int) else None

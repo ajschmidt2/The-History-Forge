@@ -8,6 +8,7 @@ import streamlit as st
 from src.trend_intelligence.pipeline_service import TrendIntelligencePipelineService
 from src.trend_intelligence.repository import TrendIntelligenceRepository
 from src.trend_intelligence.types import TrendScanFilters as ServiceTrendScanFilters
+from src.ui.state import active_project_id, save_project_state
 from src.ui.trend_intelligence_components import render_filter_panel, render_page_header, render_results_section
 from src.ui.trend_intelligence_types import (
     TopicInsight,
@@ -180,7 +181,40 @@ def tab_trend_intelligence() -> None:
         )
         st.session_state.topic = selected_for_pipeline.topic_title
         st.session_state.project_title = selected_for_pipeline.topic_title
+        st.session_state.story_angle = selected_for_pipeline.preferred_content_angle
+        st.session_state.video_description_direction = selected_for_pipeline.selected_hook
+        st.session_state.trend_script_context = {
+            "topic_title": selected_for_pipeline.topic_title,
+            "why_may_be_trending": selected_for_pipeline.why_may_be_trending,
+            "preferred_content_angle": selected_for_pipeline.preferred_content_angle,
+            "selected_hook": selected_for_pipeline.selected_hook,
+            "thumbnail_direction": selected_for_pipeline.thumbnail_direction,
+            "score_breakdown": asdict(selected_for_pipeline.score_breakdown),
+            "source_topic_result_id": topic_result_id,
+            "source_scan_run_id": st.session_state.get("trend_scan_last_run_id"),
+            "saved_topic_candidate_id": candidate_id,
+        }
+
+        script_job_id = st.session_state.trend_scan_repo.save_script_builder_job(
+            user_id=_resolve_user_id(),
+            project_id=active_project_id(),
+            topic_title=selected_for_pipeline.topic_title,
+            why_may_be_trending=selected_for_pipeline.why_may_be_trending,
+            preferred_content_angle=selected_for_pipeline.preferred_content_angle,
+            selected_hook=selected_for_pipeline.selected_hook,
+            thumbnail_direction=selected_for_pipeline.thumbnail_direction,
+            score_breakdown_json=asdict(selected_for_pipeline.score_breakdown),
+            source_topic_result_id=topic_result_id,
+            source_scan_run_id=st.session_state.get("trend_scan_last_run_id"),
+            saved_topic_candidate_id=candidate_id,
+        )
+        save_project_state(active_project_id())
         if candidate_id is None:
             st.warning(f"Saved '{selected_for_pipeline.topic_title}' locally, but Supabase persistence is unavailable.")
+        elif script_job_id is None:
+            st.success(f"Sent '{selected_for_pipeline.topic_title}' to Script Builder. Bridge job will persist when Supabase is available.")
         else:
-            st.success(f"Saved '{selected_for_pipeline.topic_title}' to pipeline (candidate #{candidate_id}).")
+            st.success(
+                f"Sent '{selected_for_pipeline.topic_title}' to Script Builder "
+                f"(candidate #{candidate_id}, script job #{script_job_id})."
+            )

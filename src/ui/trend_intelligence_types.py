@@ -45,3 +45,13 @@ class TopicResult:
     total_score: int
     score_breakdown: TopicScoreBreakdown
     insight: TopicInsight
+
+
+@dataclass(frozen=True)
+class ScriptBuilderPayload:
+    topic_title: str
+    why_may_be_trending: str
+    preferred_content_angle: str
+    selected_hook: str
+    thumbnail_direction: str
+    score_breakdown: TopicScoreBreakdown
