@@ -25,9 +25,12 @@ DEFAULT_FILTERS = TrendScanFilters(
     min_score=65,
 )
 
+LOCAL_DEV_USER_UUID = "00000000-0000-0000-0000-000000000001"
+
 
 def _resolve_user_id() -> str:
-    return str(st.session_state.get("trend_intelligence_user_id") or "local-user")
+    # Local fallback must be a UUID so inserts/filters against UUID user_id columns do not fail.
+    return str(st.session_state.get("trend_intelligence_user_id") or LOCAL_DEV_USER_UUID)
 
 
 def _to_ui_topic_results(service_results) -> list[TopicResult]:
