@@ -1,3 +1,10 @@
+from src.trend_intelligence.brand_profile import (
+    DEFAULT_BRAND_PROFILE,
+    HISTORY_CROSSROADS_BRAND_PROFILE,
+    BrandPreference,
+    BrandProfile,
+    ChannelPerformanceSnapshot,
+)
 from src.trend_intelligence.scoring import (
     build_score_breakdown,
     scoreBrandAlignment,
@@ -33,6 +40,11 @@ __all__ = [
     "TrendScanRun",
     "YouTubeVideoCandidate",
     "build_score_breakdown",
+    "BrandPreference",
+    "BrandProfile",
+    "ChannelPerformanceSnapshot",
+    "DEFAULT_BRAND_PROFILE",
+    "HISTORY_CROSSROADS_BRAND_PROFILE",
     "FullScanPipelineResult",
     "PipelineTopicResult",
     "TrendIntelligencePipelineService",

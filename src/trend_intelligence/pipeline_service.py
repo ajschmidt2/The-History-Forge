@@ -10,6 +10,7 @@ from src.trend_intelligence.adapters.mock_adapters import GoogleTrendsSeedsAdapt
 from src.trend_intelligence.adapters.topic_analysis_adapter import OpenAITopicAnalysisAdapter
 from src.trend_intelligence.adapters.youtube_topic_adapter import YouTubeTopicSourceAdapter
 from src.trend_intelligence.adapters.schemas import TopicAnalysis, TrendingTopicSeed, VideoResult
+from src.trend_intelligence.brand_profile import DEFAULT_BRAND_PROFILE, ChannelPerformanceSnapshot
 from src.trend_intelligence.scoring import (
     build_score_breakdown,
     scoreBrandAlignment,
@@ -67,6 +68,7 @@ class TrendIntelligencePipelineService:
         self.trends_adapter = trends_adapter or GoogleTrendsSeedsAdapter()
         self.youtube_adapter = youtube_adapter or YouTubeTopicSourceAdapter()
         self.analysis_adapter = analysis_adapter or OpenAITopicAnalysisAdapter()
+        self.brand_profile = DEFAULT_BRAND_PROFILE
 
     def run_full_scan_pipeline(
         self,
@@ -161,12 +163,22 @@ class TrendIntelligencePipelineService:
         video_candidates = tuple(self._to_video_candidate(video) for video in videos)
         raw_topic = self._to_raw_topic(seed)
 
+        # Future-ready hook: pull persisted channel performance by topic from repository
+        # and pass ChannelPerformanceSnapshot instead of None.
+        channel_performance: ChannelPerformanceSnapshot | None = None
+
         score = build_score_breakdown(
             trend_momentum=scoreTrendMomentum(raw_topic),
             watch_time_potential=scoreWatchTimePotential(list(video_candidates)),
             clickability=scoreClickability(seed.topic, list(video_candidates)),
             competition_gap=scoreCompetitionGap(list(video_candidates)),
-            brand_alignment=scoreBrandAlignment(seed.topic, filters.brand_focus),
+            brand_alignment=scoreBrandAlignment(
+                seed.topic,
+                filters.brand_focus,
+                profile=self.brand_profile,
+                channel_performance=channel_performance,
+            ),
+            profile=self.brand_profile,
         )
 
         insight = TopicInsight(

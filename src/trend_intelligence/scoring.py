@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from src.trend_intelligence.brand_profile import (
+    DEFAULT_BRAND_PROFILE,
+    BrandProfile,
+    ChannelPerformanceSnapshot,
+)
 from src.trend_intelligence.types import RawTrendTopic, TopicScoreBreakdown, YouTubeVideoCandidate
 
 
@@ -62,18 +67,80 @@ def scoreCompetitionGap(video_candidates: list[YouTubeVideoCandidate]) -> float:
     return clamp_score((1.0 - high_competition_ratio) * 100.0)
 
 
-def scoreBrandAlignment(topic: str, brand_focus: str) -> float:
-    """Return a deterministic placeholder brand-alignment score (0-100)."""
-    if brand_focus.lower() == "all":
-        return 70.0
+def scoreBrandAlignment(
+    topic: str,
+    brand_focus: str,
+    *,
+    profile: BrandProfile = DEFAULT_BRAND_PROFILE,
+    channel_performance: ChannelPerformanceSnapshot | None = None,
+) -> float:
+    """
+    Return brand-alignment score (0-100) using the configured brand profile.
 
-    # Placeholder logic: simple token overlap between topic and selected brand focus.
-    # TODO: Replace with semantic similarity against brand voice and content strategy docs.
-    topic_terms = set(topic.lower().replace(":", " ").split())
-    focus_terms = set(brand_focus.lower().replace(":", " ").split())
-    overlap = len(topic_terms & focus_terms)
-    coverage = overlap / max(len(focus_terms), 1)
-    return clamp_score(40.0 + coverage * 60.0)
+    Future integration: when prior script/video performance is persisted, pass a
+    ChannelPerformanceSnapshot to add topic-conditioned performance lift without
+    forcing runtime coupling to storage in this version.
+    """
+    topic_text = topic.lower()
+    focus_text = brand_focus.lower()
+
+    preference_signal = 0.0
+    for preference in profile.preferences:
+        if any(keyword in topic_text for keyword in preference.keywords):
+            preference_signal += preference.weight
+
+    # Optional user-selected focus still contributes, but profile preferences are primary.
+    focus_bonus = 0.0
+    if focus_text != "all":
+        focus_tokens = tuple(token for token in focus_text.replace(":", " ").split() if token)
+        if focus_tokens:
+            focus_hits = sum(1 for token in focus_tokens if token in topic_text)
+            focus_bonus = (focus_hits / len(focus_tokens)) * profile.focus_boost_scale
+
+    long_form_bonus = 0.0
+    if any(marker in topic_text for marker in ("untold", "story", "archive", "timeline", "investigation")):
+        long_form_bonus = profile.long_form_keyword_bonus
+
+    performance_lift = _score_channel_performance_lift(
+        topic=topic_text,
+        snapshot=channel_performance,
+        profile=profile,
+    )
+
+    return clamp_score(
+        profile.baseline_alignment_score
+        + (preference_signal * profile.preference_match_scale)
+        + focus_bonus
+        + long_form_bonus
+        + performance_lift
+    )
+
+
+def _score_channel_performance_lift(
+    *,
+    topic: str,
+    snapshot: ChannelPerformanceSnapshot | None,
+    profile: BrandProfile,
+) -> float:
+    """
+    Optional bridge for future channel-performance-aware scoring.
+
+    Current behavior is intentionally conservative so no persistence layer is
+    required: if no snapshot metadata is provided, score contribution is zero.
+    """
+    if snapshot is None:
+        return 0.0
+
+    tag_overlap = sum(1 for tag in snapshot.topic_tags if tag and tag.lower() in topic)
+    topic_tag_component = min(1.0, tag_overlap / 3.0)
+
+    # Neutral defaults preserve backwards-compatible ranking when signals are missing.
+    ctr_component = (snapshot.avg_ctr or 0.05) / 0.10
+    retention_component = (snapshot.avg_retention or 0.40) / 0.60
+    watch_time_component = (snapshot.avg_watch_time_minutes or 4.0) / 10.0
+
+    normalized_signal = max(0.0, min(1.0, (topic_tag_component + ctr_component + retention_component + watch_time_component) / 4.0))
+    return normalized_signal * (profile.channel_performance_weight * 100.0)
 
 
 def scoreTopicOverall(
@@ -83,15 +150,17 @@ def scoreTopicOverall(
     clickability: float,
     competition_gap: float,
     brand_alignment: float,
+    profile: BrandProfile = DEFAULT_BRAND_PROFILE,
 ) -> float:
     """Return weighted overall topic score on 0-100 scale."""
-    # Weights are intentionally explicit to keep this function pure and test-friendly.
+    # Weights are centralized in brand_profile.py to keep scoring easy to tune.
+    weights = profile.overall_score_weights
     weighted_score = (
-        clamp_score(trend_momentum) * 0.25
-        + clamp_score(watch_time_potential) * 0.25
-        + clamp_score(clickability) * 0.20
-        + clamp_score(competition_gap) * 0.15
-        + clamp_score(brand_alignment) * 0.15
+        clamp_score(trend_momentum) * weights["trend_momentum"]
+        + clamp_score(watch_time_potential) * weights["watch_time_potential"]
+        + clamp_score(clickability) * weights["clickability"]
+        + clamp_score(competition_gap) * weights["competition_gap"]
+        + clamp_score(brand_alignment) * weights["brand_alignment"]
     )
     return clamp_score(weighted_score)
 
@@ -103,6 +172,7 @@ def build_score_breakdown(
     clickability: float,
     competition_gap: float,
     brand_alignment: float,
+    profile: BrandProfile = DEFAULT_BRAND_PROFILE,
 ) -> TopicScoreBreakdown:
     """Create a normalized topic score breakdown from component scores."""
     return TopicScoreBreakdown(
@@ -117,5 +187,6 @@ def build_score_breakdown(
             clickability=clickability,
             competition_gap=competition_gap,
             brand_alignment=brand_alignment,
+            profile=profile,
         ),
     )
