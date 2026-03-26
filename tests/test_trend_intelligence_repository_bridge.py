@@ -46,14 +46,6 @@ class _Query:
                 self.client.bridge_rows.append(row)
             return _Response([self._insert_payload])
 
-        if self.table_name == "information_schema.columns":
-            table_name = ""
-            for key, value in self._filters:
-                if key == "table_name":
-                    table_name = str(value)
-            cols = self.client.table_columns.get(table_name, set())
-            return _Response([{"column_name": c} for c in cols])
-
         if self.table_name == "trend_topic_script_jobs":
             rows = list(self.client.bridge_rows)
             for key, value in self._filters:
@@ -64,8 +56,7 @@ class _Query:
 
 
 class _FakeClient:
-    def __init__(self, table_columns: dict[str, set[str]] | None = None, error_tables: dict[str, str] | None = None):
-        self.table_columns = table_columns or {}
+    def __init__(self, error_tables: dict[str, str] | None = None):
         self.error_tables = error_tables or {}
         self.inserts: list[tuple[str, object]] = []
         self.bridge_rows: list[dict[str, object]] = []
@@ -102,12 +93,8 @@ def test_save_script_builder_job_creates_bridge_and_returns_id():
     assert any(table == "trend_topic_script_jobs" for table, _ in repo._client.inserts)
 
 
-def test_save_script_builder_job_also_inserts_into_script_jobs_when_table_exists():
-    fake = _FakeClient(
-        table_columns={
-            "script_jobs": {"project_id", "topic", "status", "topic_context_json", "trend_topic_script_job_id"}
-        }
-    )
+def test_save_script_builder_job_attempts_script_jobs_insert_with_topic_title_payload():
+    fake = _FakeClient()
     repo = _repo_with_fake_client(fake)
 
     repo.save_script_builder_job(
@@ -127,16 +114,14 @@ def test_save_script_builder_job_also_inserts_into_script_jobs_when_table_exists
     script_inserts = [payload for table, payload in fake.inserts if table == "script_jobs"]
     assert len(script_inserts) == 1
     assert script_inserts[0]["project_id"] == "project-1"
-    assert script_inserts[0]["topic"] == "Bronze Age Collapse"
+    assert script_inserts[0]["topic_title"] == "Bronze Age Collapse"
 
 
 def test_validate_required_trend_tables_returns_missing_table_list():
     repo = _repo_with_fake_client(
         _FakeClient(
-            table_columns={
-                "trend_scan_runs": {"id"},
-                "trend_topic_results": {"id"},
-                # saved_topic_candidates intentionally missing
+            error_tables={
+                "saved_topic_candidates": '42P01: relation "saved_topic_candidates" does not exist',
             }
         )
     )
@@ -144,13 +129,14 @@ def test_validate_required_trend_tables_returns_missing_table_list():
     result = repo.validate_required_trend_tables()
 
     assert result.is_ready is False
+    assert result.status == "missing_tables"
     assert result.missing_tables == ("saved_topic_candidates",)
 
 
 def test_create_scan_run_raises_persistence_error_for_missing_table():
     repo = _repo_with_fake_client(
         _FakeClient(
-            error_tables={"trend_scan_runs": "42P01: relation \"trend_scan_runs\" does not exist"},
+            error_tables={"trend_scan_runs": '42P01: relation "trend_scan_runs" does not exist'},
         )
     )
 
@@ -176,15 +162,10 @@ def test_raise_if_schema_response_handles_response_error_field():
         raise AssertionError("Expected TrendIntelligencePersistenceError")
 
 
-def test_raise_if_schema_response_handles_dict_error_payload():
+def test_raise_if_schema_response_ignores_non_classified_dict_error_payload():
     repo = _repo_with_fake_client(_FakeClient())
 
-    try:
-        repo._raise_if_schema_response(  # noqa: SLF001
-            _Response({"code": "42703", "message": 'column "foo" does not exist'}),
-            table_name="trend_topic_results",
-        )
-    except TrendIntelligencePersistenceError:
-        pass
-    else:
-        raise AssertionError("Expected TrendIntelligencePersistenceError")
+    repo._raise_if_schema_response(  # noqa: SLF001
+        _Response({"code": "42703", "message": 'column "foo" does not exist'}),
+        table_name="trend_topic_results",
+    )
