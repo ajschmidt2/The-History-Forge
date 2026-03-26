@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import UTC, datetime
+from uuid import UUID
 
 import streamlit as st
 
@@ -30,7 +31,13 @@ LOCAL_DEV_USER_UUID = "00000000-0000-0000-0000-000000000001"
 
 def _resolve_user_id() -> str:
     # Local fallback must be a UUID so inserts/filters against UUID user_id columns do not fail.
-    return str(st.session_state.get("trend_intelligence_user_id") or LOCAL_DEV_USER_UUID)
+    candidate = str(st.session_state.get("trend_intelligence_user_id") or "").strip()
+    if not candidate:
+        return LOCAL_DEV_USER_UUID
+    try:
+        return str(UUID(candidate))
+    except (ValueError, TypeError, AttributeError):
+        return LOCAL_DEV_USER_UUID
 
 
 def _to_ui_topic_results(service_results) -> list[TopicResult]:

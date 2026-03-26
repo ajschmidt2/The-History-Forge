@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import src.supabase_storage as _sb_store
 from src.trend_intelligence.models import RankedTopic
@@ -21,8 +21,19 @@ class TrendIntelligencePersistenceError(RuntimeError):
 
 
 class TrendIntelligenceRepository:
+    LOCAL_DEV_USER_UUID = "00000000-0000-0000-0000-000000000001"
+
     def __init__(self) -> None:
         self._client = _sb_store.get_client()
+
+    def _normalize_user_id(self, user_id: str | None) -> str:
+        candidate = str(user_id or "").strip()
+        if not candidate:
+            return self.LOCAL_DEV_USER_UUID
+        try:
+            return str(UUID(candidate))
+        except (ValueError, TypeError, AttributeError):
+            return self.LOCAL_DEV_USER_UUID
 
     # Legacy tables used by the older TrendIntelligenceService
     def create_scan(self, *, project_id: str, source_names: list[str], status: str) -> str:
@@ -76,7 +87,7 @@ class TrendIntelligenceRepository:
 
         payload = {
             "id": run_id,
-            "user_id": user_id,
+            "user_id": self._normalize_user_id(user_id),
             "filters_json": filters_json,
             "started_at": datetime.now(UTC).isoformat(),
             "status": "running",
@@ -153,7 +164,7 @@ class TrendIntelligenceRepository:
             return None
 
         payload = {
-            "user_id": user_id,
+            "user_id": self._normalize_user_id(user_id),
             "topic_title": topic_title,
             "source_topic_result_id": source_topic_result_id,
             "notes": notes,
@@ -267,8 +278,9 @@ class TrendIntelligenceRepository:
             return None
 
         now_iso = datetime.now(UTC).isoformat()
+        normalized_user_id = self._normalize_user_id(user_id)
         bridge_payload = {
-            "user_id": user_id,
+            "user_id": normalized_user_id,
             "project_id": project_id,
             "topic_title": topic_title,
             "why_may_be_trending": why_may_be_trending,
@@ -291,7 +303,7 @@ class TrendIntelligenceRepository:
         bridge_row = (
             self._client.table("trend_topic_script_jobs")
             .select("id")
-            .eq("user_id", user_id)
+            .eq("user_id", normalized_user_id)
             .eq("project_id", project_id)
             .eq("topic_title", topic_title)
             .eq("created_at", now_iso)
