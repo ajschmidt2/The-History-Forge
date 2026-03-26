@@ -27,6 +27,8 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "META_APP_SECRET": ["META_APP_SECRET", "meta_app_secret"],
     "INSTAGRAM_USER_ID": ["INSTAGRAM_USER_ID", "instagram_user_id"],
     "INSTAGRAM_ACCESS_TOKEN": ["INSTAGRAM_ACCESS_TOKEN", "instagram_access_token"],
+    "TIKTOK_ACCESS_TOKEN": ["TIKTOK_ACCESS_TOKEN", "tiktok_access_token"],
+    "TIKTOK_OPEN_ID": ["TIKTOK_OPEN_ID", "tiktok_open_id"],
 }
 
 _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {

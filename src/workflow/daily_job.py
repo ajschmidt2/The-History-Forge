@@ -17,6 +17,8 @@ from src.services.instagram_upload import instagram_configured as _ig_configured
 from src.services.instagram_upload import refresh_access_token as _ig_refresh_token
 from src.services.instagram_upload import save_cached_token as _ig_save_token
 from src.services.instagram_upload import upload_reel as _ig_upload_reel
+from src.services.tiktok_upload import tiktok_configured as _tt_configured
+from src.services.tiktok_upload import upload_video as _tt_upload_video
 from src.services.youtube_upload import upload_video as _yt_upload_video
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
@@ -53,6 +55,9 @@ class ChannelProfile:
     preset_overrides: dict = field(default_factory=dict)
     instagram_enabled: bool = False
     instagram_hashtags: list[str] = field(default_factory=list)
+    tiktok_enabled: bool = False
+    tiktok_hashtags: list[str] = field(default_factory=list)
+    tiktok_privacy_level: str = "PUBLIC_TO_EVERYONE"
 
 
 HISTORY_CHANNEL = ChannelProfile(
@@ -71,6 +76,9 @@ HISTORY_CHANNEL = ChannelProfile(
     preset_overrides={},
     instagram_enabled=True,
     instagram_hashtags=["#shorts", "#history", "#historyfacts", "#historycrossroads"],
+    tiktok_enabled=True,
+    tiktok_hashtags=["#shorts", "#history", "#historyfacts", "#historycrossroads"],
+    tiktok_privacy_level="PUBLIC_TO_EVERYONE",
 )
 
 CONSPIRACY_CHANNEL = ChannelProfile(
@@ -96,6 +104,9 @@ CONSPIRACY_CHANNEL = ChannelProfile(
         "visual_style": "Cinematic dark",
         "openai_tts_voice": "onyx",
     },
+    tiktok_enabled=True,
+    tiktok_hashtags=["#shorts", "#conspiracy", "#conspiracytheory", "#paranormal"],
+    tiktok_privacy_level="PUBLIC_TO_EVERYONE",
 )
 
 _CHANNEL_REGISTRY: dict[str, ChannelProfile] = {
@@ -480,16 +491,39 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     else:
         print(f"[Checkpoint 7] Instagram upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
 
-    # Checkpoint 8: clean up intermediate Supabase assets (non-fatal)
+    # Checkpoint 8: TikTok upload (non-fatal; only for enabled channels with credentials)
+    tiktok_publish_id = ""
+    tiktok_share_url = ""
+    if profile.tiktok_enabled:
+        if _tt_configured():
+            try:
+                _tt_hashtags = " ".join(profile.tiktok_hashtags)
+                _tt_title = f"{topic}\n\n{_tt_hashtags}\n\n{profile.youtube_subscribe_cta}"[:2200]
+                _tt_result = _tt_upload_video(
+                    video_path=final_path,
+                    title=_tt_title,
+                    privacy_level=profile.tiktok_privacy_level,
+                )
+                tiktok_publish_id = _tt_result.publish_id
+                tiktok_share_url = _tt_result.share_url or ""
+                print(f"[Checkpoint 8] TikTok upload complete. publish_id={tiktok_publish_id} share_url={tiktok_share_url}", file=sys.stderr)
+            except Exception as exc:
+                print(f"[Checkpoint 8] TikTok upload failed (non-fatal): {exc}", file=sys.stderr)
+        else:
+            print("[Checkpoint 8] TikTok credentials not configured — skipping.", file=sys.stderr)
+    else:
+        print(f"[Checkpoint 8] TikTok upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
+
+    # Checkpoint 9: clean up intermediate Supabase assets (non-fatal)
     try:
         deleted = _sb_store.cleanup_project_intermediate_assets(project_id)
         if deleted:
             summary_str = ", ".join(f"{b}={n}" for b, n in deleted.items())
-            print(f"[Checkpoint 8] Supabase cleanup complete: {summary_str}", file=sys.stderr)
+            print(f"[Checkpoint 9] Supabase cleanup complete: {summary_str}", file=sys.stderr)
         else:
-            print("[Checkpoint 8] Supabase cleanup: nothing to delete (or Supabase not configured).", file=sys.stderr)
+            print("[Checkpoint 9] Supabase cleanup: nothing to delete (or Supabase not configured).", file=sys.stderr)
     except Exception as exc:
-        print(f"[Checkpoint 8] Supabase cleanup failed (non-fatal): {exc}", file=sys.stderr)
+        print(f"[Checkpoint 9] Supabase cleanup failed (non-fatal): {exc}", file=sys.stderr)
 
     summary = {
         "timestamp": timestamp,
@@ -514,6 +548,8 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
         "youtube_url": youtube_url,
         "instagram_media_id": instagram_media_id,
         "instagram_permalink": instagram_permalink,
+        "tiktok_publish_id": tiktok_publish_id,
+        "tiktok_share_url": tiktok_share_url,
     }
     _append_run_history(summary, path=profile.run_history_path)
 
