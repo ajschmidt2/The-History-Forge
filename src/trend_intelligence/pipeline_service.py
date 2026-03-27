@@ -157,8 +157,16 @@ class TrendIntelligencePipelineService:
         )
 
     def _build_topic_result(self, seed: TrendingTopicSeed, filters: TrendScanFilters, videos_per_topic: int) -> TopicResult:
-        videos = self.youtube_adapter.search_topic_videos(seed.topic, limit=videos_per_topic)
-        analysis = self.analysis_adapter.analyze_topic(seed.topic, videos)
+        # Augment the YouTube search query with history context so results stay
+        # domain-relevant even when the trending topic title is ambiguous.
+        focus = (filters.brand_focus or "all").strip().lower()
+        if focus and focus != "all":
+            youtube_query = f"{seed.topic} {focus} history"
+        else:
+            youtube_query = f"{seed.topic} history"
+
+        videos = self.youtube_adapter.search_topic_videos(youtube_query, limit=videos_per_topic)
+        analysis = self.analysis_adapter.analyze_topic(seed.topic, videos, brand_focus=filters.brand_focus)
 
         video_candidates = tuple(self._to_video_candidate(video) for video in videos)
         raw_topic = self._to_raw_topic(seed)

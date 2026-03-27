@@ -24,7 +24,7 @@ class DeterministicTopicAnalysisAdapter(TopicAnalysisAdapter):
 
     source_name = "deterministic_topic_analysis"
 
-    def analyze_topic(self, topic: str, videos: list[VideoResult]) -> TopicAnalysis:
+    def analyze_topic(self, topic: str, videos: list[VideoResult], *, brand_focus: str = "all") -> TopicAnalysis:
         video_count = len(videos)
         top_channel = videos[0].channel_title if videos else "N/A"
         avg_views = int(sum(video.view_count for video in videos) / video_count) if video_count else 0
@@ -71,15 +71,15 @@ class OpenAITopicAnalysisAdapter(TopicAnalysisAdapter):
         self.model = (model or configured_model or DEFAULT_OPENAI_MODEL).strip()
         self._api_key = str(get_openai_config().get("api_key") or "").strip()
 
-    def analyze_topic(self, topic: str, videos: list[VideoResult]) -> TopicAnalysis:
+    def analyze_topic(self, topic: str, videos: list[VideoResult], *, brand_focus: str = "all") -> TopicAnalysis:
         if not self._api_key:
-            return self.fallback.analyze_topic(topic, videos)
+            return self.fallback.analyze_topic(topic, videos, brand_focus=brand_focus)
 
         try:
             from openai import OpenAI
 
             client = OpenAI(api_key=self._api_key)
-            prompt = _build_prompt(topic, videos)
+            prompt = _build_prompt(topic, videos, brand_focus=brand_focus)
             response = openai_chat_completion(
                 client,
                 model=self.model,
@@ -102,10 +102,10 @@ class OpenAITopicAnalysisAdapter(TopicAnalysisAdapter):
             )
         except Exception:
             logger.exception("Topic analysis provider failed. Falling back to deterministic analysis.")
-            return self.fallback.analyze_topic(topic, videos)
+            return self.fallback.analyze_topic(topic, videos, brand_focus=brand_focus)
 
 
-def _build_prompt(topic: str, videos: list[VideoResult]) -> TopicAnalysisPrompt:
+def _build_prompt(topic: str, videos: list[VideoResult], *, brand_focus: str = "all") -> TopicAnalysisPrompt:
     condensed_videos = [
         {
             "title": video.title,
@@ -119,6 +119,13 @@ def _build_prompt(topic: str, videos: list[VideoResult]) -> TopicAnalysisPrompt:
         for video in videos[:8]
     ]
 
+    focus_instruction = (
+        f"The creator's current content focus is: {brand_focus}. "
+        "Tailor all angles, hooks, and thumbnail ideas specifically to that focus area."
+        if brand_focus.lower() != "all"
+        else "The creator covers all areas of history."
+    )
+
     system = (
         "You are a trend intelligence strategist for history-focused video channels. "
         "Return strict JSON only and never include markdown."
@@ -126,6 +133,7 @@ def _build_prompt(topic: str, videos: list[VideoResult]) -> TopicAnalysisPrompt:
     user = (
         "Analyze why this history topic may be trending and produce creator-ready ideation.\n"
         f"Topic: {topic}\n"
+        f"Creator focus: {focus_instruction}\n"
         f"Sampled videos (JSON): {json.dumps(condensed_videos, ensure_ascii=False)}\n\n"
         "Return JSON with exactly this shape:\n"
         "{\n"
@@ -135,7 +143,7 @@ def _build_prompt(topic: str, videos: list[VideoResult]) -> TopicAnalysisPrompt:
         '  "thumbnail_ideas": ["string", "string", "string"]\n'
         "}\n"
         "Rules:\n"
-        "- Keep each item concise and specific to this topic.\n"
+        "- Keep each item concise and specific to this topic and the creator focus.\n"
         "- No numbering in strings.\n"
         "- Avoid generic advice and avoid policy/safety disclaimers.\n"
     )
