@@ -194,15 +194,15 @@ class TrendIntelligenceRepository:
         )
 
     def _raise_if_schema_error(self, exc: Exception, *, table_name: str) -> None:
-        if looks_like_schema_error(exc):
-            status = classify_trend_setup_error(str(exc))
-            raise TrendIntelligencePersistenceError(
-                build_trend_persistence_admin_message(
-                    status=status,
-                    details={"table": table_name, "error": str(exc)},
-                )
-            ) from exc
-        raise
+        # Always wrap in TrendIntelligencePersistenceError so the UI's
+        # except clause can catch it regardless of the underlying exception type.
+        status = classify_trend_setup_error(str(exc)) if looks_like_schema_error(exc) else "connection_error"
+        raise TrendIntelligencePersistenceError(
+            build_trend_persistence_admin_message(
+                status=status,
+                details={"table": table_name, "error": str(exc)},
+            )
+        ) from exc
 
     def _raise_if_schema_response(self, resp: Any, *, table_name: str) -> None:
         raw_error = getattr(resp, "error", None)
