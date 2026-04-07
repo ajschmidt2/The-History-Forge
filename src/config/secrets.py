@@ -198,7 +198,7 @@ def resolve_openai_key() -> str:
         pass
     return ""
 
-def get_secret(key: str):
+def get_secret(key: str, default=None):
     # 1. Streamlit secrets (Streamlit Cloud and local with secrets.toml)
     try:
         import streamlit as st
@@ -219,9 +219,14 @@ def get_secret(key: str):
         toml_path = Path(__file__).parent.parent.parent / ".streamlit" / "secrets.toml"
         with open(toml_path, "rb") as f:
             toml_data = tomllib.load(f)
-        return toml_data.get(key)
+        val = toml_data.get(key)
+        if val:
+            return val
     except Exception:
-        return None
+        pass
+
+    # 4. Return default if nothing found
+    return default
 
 
 def require_secrets(names: list[str]) -> dict[str, str]:
