@@ -37,7 +37,7 @@ from typing import Any
 
 import requests
 
-from src.config.secrets import get_secret
+from src.config.secrets import get_secret, safe_secret, safe_str
 
 log = logging.getLogger(__name__)
 
@@ -68,17 +68,20 @@ class InstagramUploadResult:
 # ---------------------------------------------------------------------------
 
 def _get_user_id() -> str:
-    return (
-        get_secret("INSTAGRAM_USER_ID")
-        or get_secret("instagram_user_id")
-    ).strip()
+    user_id = safe_secret("INSTAGRAM_USER_ID", "instagram_user_id", default="")
+    log.debug(
+        "instagram: resolved user id (exists=%s, length=%d)",
+        bool(user_id),
+        len(user_id),
+    )
+    return user_id
 
 
 def _load_cached_token() -> str:
     """Return a previously refreshed token if it hasn't expired yet."""
     try:
         data = json.loads(_TOKEN_CACHE_PATH.read_text())
-        token = str(data.get("access_token", "")).strip()
+        token = safe_str(data.get("access_token", ""))
         expires_at = datetime.fromisoformat(data.get("expires_at", ""))
         if token and expires_at > datetime.now(timezone.utc):
             return token
@@ -98,16 +101,38 @@ def save_cached_token(token: str, expires_in: int) -> None:
 def _get_access_token() -> str:
     cached = _load_cached_token()
     if cached:
+        log.debug(
+            "instagram: using cached access token (exists=%s, length=%d)",
+            True,
+            len(cached),
+        )
         return cached
-    return (
-        get_secret("INSTAGRAM_ACCESS_TOKEN")
-        or get_secret("instagram_access_token")
-    ).strip()
+    token = safe_secret("INSTAGRAM_ACCESS_TOKEN", "instagram_access_token", default="")
+    log.debug(
+        "instagram: resolved access token (exists=%s, length=%d)",
+        bool(token),
+        len(token),
+    )
+    return token
 
 
 def instagram_configured() -> bool:
     """Return True if Instagram credentials are present in secrets."""
-    return bool(_get_user_id() and _get_access_token())
+    try:
+        user_id = _get_user_id()
+        token = _get_access_token()
+        log.debug(
+            "instagram: configured check INSTAGRAM_USER_ID exists=%s len=%d; "
+            "INSTAGRAM_ACCESS_TOKEN exists=%s len=%d",
+            bool(user_id),
+            len(user_id),
+            bool(token),
+            len(token),
+        )
+        return bool(user_id and token)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("instagram: configuration check failed: %s", exc)
+        return False
 
 
 def validate_instagram_credentials() -> tuple[bool, str]:

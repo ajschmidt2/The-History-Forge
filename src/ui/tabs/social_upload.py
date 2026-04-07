@@ -10,6 +10,7 @@ that the automation workflow populates after generating a script.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import streamlit as st
@@ -38,6 +39,8 @@ from src.services.youtube_upload import (
 )
 from src.ui.state import active_project_id, ensure_project_exists
 from src.workflow.project_io import load_project_payload, save_project_payload
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -543,7 +546,11 @@ def tab_social_upload() -> None:
 
     # Auth status overview
     _yt_ok, _ = validate_youtube_credentials()
-    _ig_ok = instagram_configured()
+    try:
+        _ig_ok = instagram_configured()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("social_upload: instagram_configured() failed; continuing: %s", exc)
+        _ig_ok = False
     _tt_ok = tiktok_configured()
 
     col_yt, col_ig, col_tt = st.columns(3)

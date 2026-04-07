@@ -88,6 +88,13 @@ def _normalize(value: Any) -> str:
     return cleaned
 
 
+def safe_str(value: Any) -> str:
+    """Normalize unknown input to a trimmed string, never returning None."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def _safe_streamlit_secrets() -> Any | None:
     try:
         import streamlit as st  # type: ignore
@@ -358,6 +365,18 @@ def get_secret(key: str, default=None):
 
     # 4) Default if not found
     return default
+
+
+def safe_secret(*names: str, default: str = "") -> str:
+    """Resolve the first available secret from candidate names, never raising."""
+    for name in names:
+        try:
+            value = safe_str(get_secret(name, ""))
+        except Exception:
+            value = ""
+        if value:
+            return value
+    return safe_str(default)
 
 
 def require_secrets(names: list[str]) -> dict[str, str]:
