@@ -14,8 +14,10 @@ import json
 import logging
 import re
 import subprocess
+import time
 import requests
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from typing import Optional
 
 from src.config import get_fal_key, get_openai_config, get_secret
@@ -34,6 +36,13 @@ logger = logging.getLogger(__name__)
 
 POLL_TIMEOUT_SEC = 300
 SUPPORTED_PROVIDERS = ("falai", "veo", "sora")
+SUPPORTED_ASPECT_RATIOS = {"16:9", "9:16", "1:1"}
+MIN_VIDEO_BYTES = 1024
+FAL_VIDEO_MODELS = {
+    "text": "fal-ai/wan-2.2/t2v-480p",
+    "image": "fal-ai/wan-2.2/i2v-480p",
+}
+FAL_RESPONSE_CANDIDATE_KEYS = {"video", "url", "mp4", "output", "outputs", "data", "result"}
 
 
 # ---------------------------------------------------------------------------
@@ -209,128 +218,211 @@ def _ensure_fal_key() -> None:
     get_fal_key()
 
 
-def _call_falai_text_to_video(
+def _simplify_motion_prompt(prompt: str, aspect_ratio: str, duration_seconds: int) -> str:
+    clean = " ".join((prompt or "").split())
+    if not clean:
+        return f"Historical cinematic shot, aspect ratio {aspect_ratio}, duration {duration_seconds}s."
+    first_sentence = re.split(r"[.!?]", clean, maxsplit=1)[0].strip()
+    return f"{first_sentence}. Cinematic camera movement. aspect ratio {aspect_ratio}. duration {duration_seconds}s."
+
+
+def _sanitize_url(url: str) -> str:
+    parsed = urlsplit(url)
+    filtered = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() not in {"token", "signature", "sig", "expires", "x-amz-signature"}]
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(filtered), ""))
+
+
+def _sanitize_for_debug(value: object) -> object:
+    if isinstance(value, str):
+        if value.startswith("http://") or value.startswith("https://"):
+            return _sanitize_url(value)
+        if "key" in value.lower() or "token" in value.lower():
+            return "<redacted>"
+        return value
+    if isinstance(value, dict):
+        out: dict[str, object] = {}
+        for k, v in value.items():
+            lk = str(k).lower()
+            if any(secret in lk for secret in ("key", "token", "secret", "authorization", "signature")):
+                out[str(k)] = "<redacted>"
+            else:
+                out[str(k)] = _sanitize_for_debug(v)
+        return out
+    if isinstance(value, list):
+        return [_sanitize_for_debug(v) for v in value[:20]]
+    return value
+
+
+def _looks_like_video_url(url: str) -> bool:
+    lower = url.lower()
+    return any(ext in lower for ext in (".mp4", ".webm", ".mov", ".m4v", ".m3u8", "video"))
+
+
+def _save_fal_debug_metadata(project_id: str, clip_label: str, payload: object) -> None:
+    debug_dir = Path("data/projects") / project_id / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    target = debug_dir / f"fal_video_{clip_label}.json"
+    target.write_text(json.dumps(_sanitize_for_debug(payload), indent=2), encoding="utf-8")
+
+
+def extract_video_url(response: object) -> str | None:
+    if response is None:
+        return None
+    if isinstance(response, str):
+        if response.startswith(("http://", "https://")) and _looks_like_video_url(response):
+            return response
+        return None
+    if isinstance(response, dict):
+        for key in ("url", "video_url", "mp4", "href", "download_url"):
+            value = response.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")) and _looks_like_video_url(value):
+                return value
+        for key in FAL_RESPONSE_CANDIDATE_KEYS:
+            if key in response:
+                url = extract_video_url(response.get(key))
+                if url:
+                    return url
+        for value in response.values():
+            url = extract_video_url(value)
+            if url:
+                return url
+        return None
+    if isinstance(response, list):
+        for item in response:
+            url = extract_video_url(item)
+            if url:
+                return url
+    return None
+
+
+def maybe_download_file(url: str, output_path: Path) -> bool:
+    try:
+        with requests.get(url, timeout=180, stream=True) as resp:
+            resp.raise_for_status()
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            if content_type and "video" not in content_type and "octet-stream" not in content_type:
+                logger.error("ai_video_clips [falai]: provider returned non-video artifact")
+                return False
+            with output_path.open("wb") as handle:
+                for chunk in resp.iter_content(chunk_size=1024 * 128):
+                    if chunk:
+                        handle.write(chunk)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def is_valid_video_file(path: Path) -> bool:
+    return path.exists() and path.is_file() and path.stat().st_size >= MIN_VIDEO_BYTES
+
+
+def write_video_artifact(response: object, output_path: Path) -> tuple[bool, str]:
+    if response is None:
+        return False, "provider returned empty response"
+    if isinstance(response, (bytes, bytearray)):
+        output_path.write_bytes(bytes(response))
+        return (True, "") if is_valid_video_file(output_path) else (False, "provider returned empty response")
+    url = extract_video_url(response)
+    if url:
+        if maybe_download_file(url, output_path) and is_valid_video_file(output_path):
+            return True, ""
+        return False, "provider returned URL but download failed"
+    if isinstance(response, dict):
+        return False, "provider returned dict without video artifact"
+    return False, "provider returned non-video artifact"
+
+
+def _poll_fal_job_if_needed(fal_client, model_name: str, response: object) -> object:
+    if not isinstance(response, dict):
+        return response
+    request_id = str(response.get("request_id") or response.get("id") or "").strip()
+    status = str(response.get("status") or "").lower().strip()
+    if not request_id or status in {"completed", "succeeded"}:
+        return response
+    if not hasattr(fal_client, "status") or not hasattr(fal_client, "result"):
+        return response
+    deadline = time.time() + POLL_TIMEOUT_SEC
+    while time.time() < deadline:
+        status_payload = fal_client.status(model_name, request_id)
+        status = str((status_payload or {}).get("status") or "").lower().strip()
+        if status in {"completed", "succeeded"}:
+            return fal_client.result(model_name, request_id)
+        if status in {"failed", "error", "canceled", "cancelled"}:
+            raise RuntimeError(f"provider job failed with status={status}")
+        time.sleep(3)
+    raise TimeoutError("provider job timed out")
+
+
+def _validate_fal_inputs(prompt: str, image_path: Optional[Path], aspect_ratio: str, duration_seconds: int) -> None:
+    if not str(prompt or "").strip():
+        raise ValueError("Prompt cannot be empty.")
+    if aspect_ratio not in SUPPORTED_ASPECT_RATIOS:
+        raise ValueError(f"Unsupported aspect ratio '{aspect_ratio}'.")
+    if duration_seconds < 1 or duration_seconds > 12:
+        raise ValueError("Duration must be between 1 and 12 seconds.")
+    if image_path is not None and not image_path.exists():
+        raise ValueError(f"Image path does not exist: {image_path}")
+
+
+def _generate_falai_video_clip(
+    *,
     prompt: str,
+    output_path: Path,
+    clip_label: str,
+    project_id: str,
     aspect_ratio: str = "9:16",
     duration_seconds: int = 5,
-) -> bytes | None:
-    """
-    Generate a video clip from text using fal.ai Wan 2.2 (480p).
-    Returns raw MP4 bytes on success, None on failure.
-    """
+    image_path: Optional[Path] = None,
+    workflow_logger: logging.Logger | None = None,
+) -> tuple[bool, str]:
     try:
         import fal_client  # type: ignore
     except ImportError:
         raise RuntimeError(
             "ai_video_clips [falai]: fal-client is not installed. Run: pip install fal-client"
         )
-
+    _validate_fal_inputs(prompt, image_path, aspect_ratio, duration_seconds)
     _ensure_fal_key()
-    motion_prompt = _build_motion_prompt(prompt)
+    wlog = workflow_logger or logger
+    model_name = FAL_VIDEO_MODELS["image"] if image_path else FAL_VIDEO_MODELS["text"]
 
-    try:
-        result = fal_client.subscribe(
-            "fal-ai/wan-2.2/t2v-480p",
-            arguments={
-                "prompt": motion_prompt,
-                "aspect_ratio": aspect_ratio,
-                "num_frames": 81,
-                "sample_steps": 30,
-                "sample_guide_scale": 6.0,
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.error("ai_video_clips [falai]: text-to-video failed: %s", exc)
-        return None
-
-    if not result or not result.get("video"):
-        logger.error("ai_video_clips [falai]: no video in result keys=%s", list(result or {}))
-        return None
-
-    video_url = result["video"].get("url") if isinstance(result["video"], dict) else None
-    if not video_url:
-        logger.error("ai_video_clips [falai]: missing video url in result")
-        return None
-
-    try:
-        resp = requests.get(video_url, timeout=120)
-        resp.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("ai_video_clips [falai]: failed to download video: %s", exc)
-        return None
-
-    logger.info("ai_video_clips [falai]: received %d bytes from t2v", len(resp.content))
-    return resp.content
-
-
-def _call_falai_image_to_video(
-    image_path: Path,
-    prompt: str,
-    aspect_ratio: str = "9:16",
-    duration_seconds: int = 5,
-) -> bytes | None:
-    """
-    Generate a video clip from an image using fal.ai Wan 2.2 image-to-video (480p).
-    Falls back to text-to-video on upload or generation failure.
-    """
-    try:
-        import fal_client  # type: ignore
-    except ImportError:
-        raise RuntimeError(
-            "ai_video_clips [falai]: fal-client is not installed. Run: pip install fal-client"
-        )
-
-    _ensure_fal_key()
-    motion_prompt = _build_motion_prompt(prompt)
-
-    try:
+    image_url = None
+    if image_path is not None:
         image_url = fal_client.upload_file(str(image_path))
-        logger.info("ai_video_clips [falai]: uploaded image → %s", image_url)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "ai_video_clips [falai]: image upload failed (%s), falling back to text-to-video",
-            exc,
-        )
-        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
 
-    try:
-        result = fal_client.subscribe(
-            "fal-ai/wan-2.2/i2v-480p",
-            arguments={
-                "prompt": motion_prompt,
-                "image_url": image_url,
-                "aspect_ratio": aspect_ratio,
-                "num_frames": 81,
-                "sample_steps": 30,
-                "sample_guide_scale": 6.0,
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "ai_video_clips [falai]: image-to-video failed (%s), falling back to text-to-video",
-            exc,
-        )
-        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
-
-    if not result or not result.get("video"):
-        logger.warning(
-            "ai_video_clips [falai]: i2v returned no video, falling back to text-to-video"
-        )
-        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
-
-    video_url = result["video"].get("url") if isinstance(result["video"], dict) else None
-    if not video_url:
-        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
-
-    try:
-        resp = requests.get(video_url, timeout=120)
-        resp.raise_for_status()
-    except Exception as exc:  # noqa: BLE001
-        logger.error("ai_video_clips [falai]: failed to download i2v video: %s", exc)
-        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
-
-    logger.info("ai_video_clips [falai]: received %d bytes from i2v", len(resp.content))
-    return resp.content
+    last_error = "provider returned empty response"
+    for attempt in range(2):
+        prompt_value = _build_motion_prompt(prompt) if attempt == 0 else _simplify_motion_prompt(prompt, aspect_ratio, duration_seconds)
+        args = {
+            "prompt": prompt_value,
+            "aspect_ratio": aspect_ratio,
+            "num_frames": max(24, min(120, int(duration_seconds * 16))),
+            "sample_steps": 30,
+            "sample_guide_scale": 6.0,
+        }
+        if image_url:
+            args["image_url"] = image_url
+        started = time.monotonic()
+        try:
+            response = fal_client.subscribe(model_name, arguments=args)
+            response = _poll_fal_job_if_needed(fal_client, model_name, response)
+            response_type = type(response).__name__
+            keys = list(response.keys()) if isinstance(response, dict) else []
+            wlog.info(
+                "ai_video_clips [falai]: clip=%s model=%s attempt=%d elapsed=%.2fs response_type=%s keys=%s",
+                clip_label, model_name, attempt + 1, time.monotonic() - started, response_type, keys[:15],
+            )
+            _save_fal_debug_metadata(project_id, clip_label, {"attempt": attempt + 1, "response": response, "model": model_name, "clip": clip_label})
+            ok, reason = write_video_artifact(response, output_path)
+            if ok:
+                return True, ""
+            last_error = reason
+        except TimeoutError:
+            last_error = "provider job timed out"
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"{type(exc).__name__}: {str(exc)[:180]}"
+        wlog.warning("ai_video_clips [falai]: clip=%s attempt=%d failed reason=%s", clip_label, attempt + 1, last_error)
+    return False, last_error
 
 
 # ---------------------------------------------------------------------------
@@ -569,7 +661,7 @@ def _call_sora_image_to_video(
 
     # Fallback: text-to-video
     logger.info("ai_video_clips [sora]: running text-to-video fallback")
-    return _call_sora_text_to_video(prompt, aspect_ratio, duration_seconds)
+    return _call_sora(prompt, aspect_ratio, duration_seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +701,10 @@ def _normalize_clip_orientation(src: Path, width: int, height: int) -> None:
         )
         if tmp.exists():
             tmp.unlink()
+
+
+def _clip_manifest_path(project_id: str) -> Path:
+    return Path("data/projects") / project_id / "clip_manifest.json"
 
 
 # ---------------------------------------------------------------------------
@@ -692,6 +788,13 @@ def generate_ai_video_clips(
 
     results = []
     failures = []
+    manifest: dict[str, object] = {
+        "project_id": project_id,
+        "provider": provider,
+        "aspect_ratio": aspect_ratio,
+        "duration_seconds": duration_seconds,
+        "clips": [],
+    }
 
     for label, img_idx, prompt_idx, out_name in clip_targets:
         image = _get_image(img_idx)
@@ -703,21 +806,27 @@ def generate_ai_video_clips(
             provider, label, image.name if image else "none", prompt_idx, len(prompt),
         )
 
+        reason = ""
+        start = time.monotonic()
         try:
             if provider == "falai":
-                if image is not None:
-                    video_bytes = _call_falai_image_to_video(
-                        image, prompt, aspect_ratio, duration_seconds
-                    )
-                else:
-                    video_bytes = _call_falai_text_to_video(
-                        prompt, aspect_ratio, duration_seconds
-                    )
+                ok, reason = _generate_falai_video_clip(
+                    prompt=prompt,
+                    image_path=image,
+                    aspect_ratio=aspect_ratio,
+                    duration_seconds=duration_seconds,
+                    output_path=out_path,
+                    clip_label=label,
+                    project_id=project_id,
+                    workflow_logger=_wlog,
+                )
+                video_bytes = out_path.read_bytes() if ok and out_path.exists() else None
             elif provider == "veo":
                 if image is None:
                     _wlog.warning("ai_video_clips [veo]: no image for %s clip, skipping", label)
                     results.append(None)
                     failures.append(label)
+                    manifest["clips"].append({"label": label, "status": "failed", "reason": "missing source image"})
                     continue
                 video_bytes = _call_veo_image_to_video(
                     image, prompt, aspect_ratio, duration_seconds
@@ -729,23 +838,29 @@ def generate_ai_video_clips(
             # Config / deployment error — re-raise so the pipeline surfaces it
             raise
 
+        elapsed = time.monotonic() - start
         if video_bytes:
-            out_path.write_bytes(video_bytes)
+            if provider != "falai":
+                out_path.write_bytes(video_bytes)
             _normalize_clip_orientation(out_path, _clip_w, _clip_h)
             _wlog.info(
-                "ai_video_clips [%s]: %s clip saved path=%s bytes=%d",
-                provider, label, out_path, len(video_bytes),
+                "ai_video_clips [%s]: %s clip saved path=%s bytes=%d elapsed=%.2fs",
+                provider, label, out_path, len(video_bytes), elapsed,
             )
             results.append(out_path)
+            manifest["clips"].append({"label": label, "status": "success", "path": str(out_path), "bytes": len(video_bytes), "elapsed_seconds": round(elapsed, 2)})
             if callable(clip_done_callback):
                 try:
                     clip_done_callback(label, True, len(results), len(clip_targets))
                 except Exception:  # noqa: BLE001
                     pass
         else:
-            _wlog.warning("ai_video_clips [%s]: %s clip returned no bytes", provider, label)
+            if not reason:
+                reason = "provider returned empty response"
+            _wlog.warning("ai_video_clips [%s]: %s clip failed reason=%s elapsed=%.2fs", provider, label, reason, elapsed)
             results.append(None)
             failures.append(label)
+            manifest["clips"].append({"label": label, "status": "failed", "reason": reason, "elapsed_seconds": round(elapsed, 2)})
             if callable(clip_done_callback):
                 try:
                     clip_done_callback(label, False, len(results), len(clip_targets))
@@ -762,5 +877,6 @@ def generate_ai_video_clips(
             "ai_video_clips [%s]: ALL clips failed for project %s — check credentials",
             provider, project_id,
         )
+    _clip_manifest_path(project_id).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     return results[0], results[1], results[2], results[3]
