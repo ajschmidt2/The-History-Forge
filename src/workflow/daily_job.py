@@ -213,6 +213,7 @@ def _resolve_daily_short_preset(settings: dict[str, Any], extra_overrides: dict 
         target_duration_seconds=_coerce_int(preset_payload.get("target_duration_seconds", base.target_duration_seconds), base.target_duration_seconds, min_value=30, max_value=180),
         last_scene_cta_text=str(preset_payload.get("last_scene_cta_text", base.last_scene_cta_text) or base.last_scene_cta_text),
         ai_video_provider=str(preset_payload.get("ai_video_provider", base.ai_video_provider) or base.ai_video_provider),
+        image_provider=str(preset_payload.get("image_provider", base.image_provider) or base.image_provider),
     )
 
 

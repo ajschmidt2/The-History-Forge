@@ -13,7 +13,7 @@ from uuid import uuid4
 import requests
 from PIL import Image
 
-from image_gen import generate_imagen_images
+from image_gen import generate_imagen_images, generate_scene_image_bytes
 from src.config import get_secret as config_get_secret
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, resolve_openai_config
 
@@ -1679,6 +1679,7 @@ def generate_image_for_scene(
     aspect_ratio: str = "16:9",
     visual_style: str = "Photorealistic cinematic",
     visual_anchor: str = "",
+    provider: str = "falai",
 ) -> Scene:
     base = (scene.image_prompt or "").strip()
     if not base:
@@ -1707,15 +1708,16 @@ def generate_image_for_scene(
 
     for attempt in range(4):
         try:
-            raw_images = generate_imagen_images(
+            raw_images = generate_scene_image_bytes(
                 prompt,
                 number_of_images=1,
                 aspect_ratio=aspect_ratio,
+                provider=provider,
             )
             raw = raw_images[0] if raw_images else None
             if not raw:
                 raise RuntimeError(
-                    "Imagen returned no image bytes for this prompt (likely safety-filtered)."
+                    "Image provider returned no image bytes for this prompt (likely safety-filtered)."
                 )
 
             img = Image.open(BytesIO(raw)).convert("RGB")
@@ -1756,10 +1758,11 @@ def generate_image_for_scene(
         if sanitized != prompt:
             print(f"[Imagen] Safety-filter detected — retrying with sanitized prompt (scene {scene.index})")
             try:
-                raw_images = generate_imagen_images(
+                raw_images = generate_scene_image_bytes(
                     sanitized,
                     number_of_images=1,
                     aspect_ratio=aspect_ratio,
+                    provider=provider,
                 )
                 raw = raw_images[0] if raw_images else None
                 if raw:

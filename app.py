@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from image_gen import validate_gemini_api_key
 from src.ai_video_generation import veo_configured, sora_configured
+from src.config.secrets import fal_configured
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.config.validate import validate_runtime_config
@@ -84,44 +85,44 @@ def main() -> None:
         st.divider()
         st.markdown("**AI Video Provider**")
 
+        _fal_ok = fal_configured()
         _veo_ok = veo_configured()
         _sora_ok = sora_configured()
 
-        _provider_options = []
+        # fal.ai is the default and always shown first.
+        _provider_options = ["falai"]
         if _veo_ok:
             _provider_options.append("veo")
         if _sora_ok:
             _provider_options.append("sora")
-        if not _provider_options:
-            _provider_options = ["veo"]  # show veo even if unconfigured so UI isn't empty
 
-        if len(_provider_options) == 1:
-            # Only one provider available — show it as static text with status
-            _only = _provider_options[0]
-            _configured = _veo_ok if _only == "veo" else _sora_ok
-            st.caption(
-                f"{'✅' if _configured else '⚠️'} {_only.upper()} "
-                f"({'configured' if _configured else 'not configured'})"
-            )
-            st.session_state["ai_video_provider"] = _only
-        else:
-            _current_provider = st.session_state.get("ai_video_provider", _provider_options[0])
-            if _current_provider not in _provider_options:
-                _current_provider = _provider_options[0]
+        _current_provider = st.session_state.get("ai_video_provider", _provider_options[0])
+        if _current_provider not in _provider_options:
+            _current_provider = _provider_options[0]
 
-            st.session_state["ai_video_provider"] = st.selectbox(
-                "Provider",
-                _provider_options,
-                index=_provider_options.index(_current_provider),
-                format_func=lambda p: f"{'🎬' if p == 'veo' else '🤖'} {p.upper()}",
-                help=(
-                    "Veo: Google image-to-video via Supabase Edge Function.\n"
-                    "Sora: OpenAI text-to-video with image reference fallback."
-                ),
-                key="ai_video_provider_select",
-            )
+        _provider_labels = {
+            "falai": "✨ fal.ai (Wan 2.2) — Default",
+            "veo": "🎬 Google Veo",
+            "sora": "🤖 OpenAI Sora",
+        }
+        st.session_state["ai_video_provider"] = st.selectbox(
+            "Provider",
+            _provider_options,
+            index=_provider_options.index(_current_provider),
+            format_func=lambda p: _provider_labels.get(p, p.upper()),
+            help=(
+                "fal.ai: Wan 2.2 text/image-to-video (default, cheapest).\n"
+                "Veo: Google image-to-video via Supabase Edge Function.\n"
+                "Sora: OpenAI text-to-video with image reference fallback."
+            ),
+            key="ai_video_provider_select",
+        )
 
         # Status indicators
+        if _fal_ok:
+            st.caption("✅ fal.ai configured")
+        else:
+            st.caption("⚠️ fal.ai not configured (set fal_api_key in secrets)")
         if _veo_ok:
             st.caption("✅ Veo configured")
         else:
@@ -130,6 +131,25 @@ def main() -> None:
             st.caption("✅ Sora configured")
         else:
             st.caption("⚠️ Sora not configured (check openai_api_key)")
+
+        st.divider()
+        st.markdown("**Image Provider**")
+        _image_provider_options = ["falai", "gemini"]
+        _current_image_provider = st.session_state.get("image_provider", "falai")
+        if _current_image_provider not in _image_provider_options:
+            _current_image_provider = "falai"
+        _image_labels = {
+            "falai": "✨ fal.ai (FLUX Dev) — Default",
+            "gemini": "🔷 Google Gemini / Imagen",
+        }
+        st.session_state["image_provider"] = st.selectbox(
+            "Image generator",
+            _image_provider_options,
+            index=_image_provider_options.index(_current_image_provider),
+            format_func=lambda p: _image_labels.get(p, p),
+            help="fal.ai FLUX Dev is the default. Gemini/Imagen remains available if configured.",
+            key="image_provider_select",
+        )
 
         st.divider()
         render_project_selector()
