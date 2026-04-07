@@ -198,45 +198,30 @@ def resolve_openai_key() -> str:
         pass
     return ""
 
-def get_secret(name: str, default: str = "", required: bool = False) -> str:
-    """
-    Safe secret getter.
-    Always returns a string (never None) so calling code can safely do .strip().
-    Looks in:
-      1) environment variables – exact key, then all aliases
-      2) .streamlit/secrets.toml parsed directly (headless / CI / MCP-compatible)
-      3) st.secrets – only when running inside a live Streamlit runtime
-    Placeholder values (e.g. "paste_key_here") are treated as absent.
-    """
-    all_aliases = _aliases(name)
-
-    # 1. Environment variables – try every alias (works headless and in CI)
-    for alias in all_aliases:
-        value = _normalize(os.environ.get(alias, ""))
-        if value:
-            return value
-
-    # 2. .streamlit/secrets.toml parsed directly (headless / MCP-compatible fallback)
-    toml_secrets = _load_toml_secrets()
-    for alias in all_aliases:
-        val = toml_secrets.get(alias)
+def get_secret(key: str):
+    # 1. Streamlit secrets (Streamlit Cloud and local with secrets.toml)
+    try:
+        import streamlit as st
+        val = st.secrets.get(key)
         if val:
-            normalized = _normalize(val)
-            if normalized:
-                return normalized
+            return val
+    except Exception:
+        pass
 
-    # 3. Streamlit secrets – only available when running inside a Streamlit runtime
-    for alias in all_aliases:
-        st_value = _read_streamlit_secret(alias)
-        if st_value:
-            return st_value
+    # 2. Environment variable (local dev, cron, Claude Code)
+    val = os.environ.get(key)
+    if val:
+        return val
 
-    if required:
-        raise RuntimeError(
-            f"Missing required secret '{name}'. Set it in Streamlit secrets or environment variables."
-        )
-
-    return str(default or "")
+    # 3. Direct toml read (fallback for headless/cron mode)
+    try:
+        import tomllib
+        toml_path = Path(__file__).parent.parent.parent / ".streamlit" / "secrets.toml"
+        with open(toml_path, "rb") as f:
+            toml_data = tomllib.load(f)
+        return toml_data.get(key)
+    except Exception:
+        return None
 
 
 def require_secrets(names: list[str]) -> dict[str, str]:
