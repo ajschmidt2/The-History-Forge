@@ -18,7 +18,7 @@ import requests
 from pathlib import Path
 from typing import Optional
 
-from src.config import get_secret, get_openai_config
+from src.config import get_fal_key, get_openai_config, get_secret
 from src.ai_video_generation import (
     sora_configured,
     veo_configured,
@@ -205,15 +205,8 @@ def _call_veo_image_to_video(
 # ---------------------------------------------------------------------------
 
 def _ensure_fal_key() -> None:
-    """Populate FAL_KEY env var from secrets so fal_client can authenticate."""
-    import os as _os
-    api_key = get_secret("fal_api_key")
-    if not api_key:
-        raise RuntimeError(
-            "ai_video_clips [falai]: fal_api_key not found in secrets. "
-            "Add it to .streamlit/secrets.toml."
-        )
-    _os.environ["FAL_KEY"] = api_key
+    """Populate canonical FAL_KEY env var so fal_client can authenticate."""
+    get_fal_key()
 
 
 def _call_falai_text_to_video(

@@ -8,9 +8,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.config.secrets import bootstrap_api_keys
+
+# Ensure canonical runtime API key env vars are populated before modules that may use fal.
+bootstrap_api_keys()
+
 from image_gen import validate_gemini_api_key
 from src.ai_video_generation import veo_configured, sora_configured
-from src.config.secrets import fal_configured
+from src.config.secrets import fal_configured, fal_key_debug_snapshot
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.config.validate import validate_runtime_config
@@ -123,6 +128,13 @@ def main() -> None:
             st.caption("✅ fal.ai configured")
         else:
             st.caption("⚠️ fal.ai not configured (set fal_api_key in secrets)")
+        with st.expander("🔎 fal.ai key debug (temporary)", expanded=False):
+            _fal_diag = fal_key_debug_snapshot()
+            st.caption("Secret values are never shown.")
+            st.write("In Streamlit secrets:", _fal_diag["secrets_presence"])
+            st.write("In environment:", _fal_diag["env_presence"])
+            st.write("Resolved key has colon:", _fal_diag["resolved_has_colon"])
+            st.write("Resolved key length:", _fal_diag["resolved_length"])
         if _veo_ok:
             st.caption("✅ Veo configured")
         else:

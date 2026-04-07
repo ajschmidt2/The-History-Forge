@@ -63,6 +63,7 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
 }
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
+_FAL_KEY_CANDIDATES: tuple[str, ...] = ("FAL_KEY", "fal_key", "FAL_API_KEY", "fal_api_key")
 
 
 @lru_cache(maxsize=None)
@@ -106,8 +107,11 @@ def streamlit_secrets_detected() -> bool:
 def _read_key(container: Any, key: str) -> tuple[bool, Any]:
     """Return (found, value) for dict-like and attrdict-like containers."""
     if isinstance(container, Mapping):
-        if key in container:
-            return True, container[key]
+        try:
+            if key in container:
+                return True, container[key]
+        except Exception:
+            return False, None
         return False, None
 
     # Streamlit's secrets object supports key access but may not implement Mapping.
@@ -155,6 +159,126 @@ def _read_env(key: str) -> str | None:
     return value or None
 
 
+def _flatten_secret_nodes(container: Any) -> list[Any]:
+    nodes: list[Any] = []
+    stack: list[Any] = [container]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        ident = id(current)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        nodes.append(current)
+
+        keys: list[str] = []
+        if isinstance(current, Mapping):
+            keys = [str(k) for k in current.keys()]
+        else:
+            try:
+                keys = [str(k) for k in current.keys()]  # type: ignore[attr-defined]
+            except Exception:
+                keys = []
+
+        for key in keys:
+            found, value = _read_key(current, key)
+            if not found:
+                continue
+            if isinstance(value, Mapping):
+                stack.append(value)
+                continue
+            try:
+                value_keys = value.keys()  # type: ignore[attr-defined]
+            except Exception:
+                value_keys = None
+            if value_keys is not None:
+                stack.append(value)
+    return nodes
+
+
+def validate_fal_key(value: Any) -> bool:
+    cleaned = _normalize(value)
+    if not cleaned:
+        return False
+    if ":" not in cleaned:
+        return False
+    return 12 <= len(cleaned) <= 512
+
+
+def get_fal_key() -> str:
+    secrets = _safe_streamlit_secrets()
+    if secrets is not None:
+        # 1) Root-level keys first.
+        for name in _FAL_KEY_CANDIDATES:
+            found, raw = _read_key(secrets, name)
+            candidate = _normalize(raw) if found else ""
+            if validate_fal_key(candidate):
+                os.environ["FAL_KEY"] = candidate
+                return candidate
+
+        # 2) Nested sections next (any depth).
+        for node in _flatten_secret_nodes(secrets):
+            if node is secrets:
+                continue
+            for name in _FAL_KEY_CANDIDATES:
+                found, raw = _read_key(node, name)
+                candidate = _normalize(raw) if found else ""
+                if validate_fal_key(candidate):
+                    os.environ["FAL_KEY"] = candidate
+                    return candidate
+
+    # 3) Environment variables in required priority order.
+    for name in _FAL_KEY_CANDIDATES:
+        candidate = _read_env(name) or ""
+        if validate_fal_key(candidate):
+            os.environ["FAL_KEY"] = candidate
+            return candidate
+
+    raise RuntimeError(
+        "fal.ai API key not found. Checked Streamlit secrets and environment variables for: "
+        "FAL_KEY, fal_key, FAL_API_KEY, fal_api_key."
+    )
+
+
+def bootstrap_api_keys() -> None:
+    try:
+        get_fal_key()
+    except RuntimeError:
+        # fal.ai is optional in some flows; fail only when the provider is used.
+        pass
+
+
+def fal_key_debug_snapshot() -> dict[str, Any]:
+    secrets = _safe_streamlit_secrets()
+    secrets_presence: dict[str, bool] = {}
+    env_presence: dict[str, bool] = {}
+    nodes = _flatten_secret_nodes(secrets) if secrets is not None else []
+
+    for name in _FAL_KEY_CANDIDATES:
+        in_secrets = False
+        if secrets is not None:
+            for node in nodes:
+                found, raw = _read_key(node, name)
+                if found and _normalize(raw):
+                    in_secrets = True
+                    break
+        secrets_presence[name] = in_secrets
+        env_presence[name] = bool(_read_env(name))
+
+    resolved = ""
+    try:
+        resolved = get_fal_key()
+    except RuntimeError:
+        resolved = ""
+
+    return {
+        "secrets_presence": secrets_presence,
+        "env_presence": env_presence,
+        "resolved_has_colon": ":" in resolved if resolved else False,
+        "resolved_length": len(resolved),
+    }
+
+
 def _aliases(name: str) -> list[str]:
     canonical = name.upper()
     aliases = _ALIAS_MAP.get(canonical, [name, name.lower(), canonical])
@@ -199,33 +323,40 @@ def resolve_openai_key() -> str:
     return ""
 
 def get_secret(key: str, default=None):
-    # 1. Streamlit secrets (Streamlit Cloud and local with secrets.toml)
-    try:
-        import streamlit as st
-        val = st.secrets.get(key)
-        if val:
-            return val
-    except Exception:
-        pass
+    canonical = key.upper()
+    aliases = _aliases(key)
 
-    # 2. Environment variable (local dev, cron, Claude Code)
-    val = os.environ.get(key)
-    if val:
-        return val
+    # 1) Streamlit secrets (root aliases first)
+    secrets = _safe_streamlit_secrets()
+    if secrets is not None:
+        for alias in aliases:
+            found, raw = _read_key(secrets, alias)
+            value = _normalize(raw) if found else ""
+            if value:
+                return value
+        for path in _NESTED_STREAMLIT_PATHS.get(canonical, ()):
+            nested = _mapping_path_get(secrets, path)
+            if nested:
+                return nested
 
-    # 3. Direct toml read (fallback for headless/cron mode)
-    try:
-        import tomllib
-        toml_path = Path(__file__).parent.parent.parent / ".streamlit" / "secrets.toml"
-        with open(toml_path, "rb") as f:
-            toml_data = tomllib.load(f)
-        val = toml_data.get(key)
-        if val:
-            return val
-    except Exception:
-        pass
+    # 2) Environment variables by aliases
+    for alias in aliases:
+        value = _read_env(alias)
+        if value:
+            return value
 
-    # 4. Return default if nothing found
+    # 3) Direct TOML fallback (headless/cron mode)
+    toml_data = _load_toml_secrets()
+    for alias in aliases:
+        value = _normalize(toml_data.get(alias, ""))
+        if value:
+            return value
+    for path in _NESTED_STREAMLIT_PATHS.get(canonical, ()):
+        nested = _mapping_path_get(toml_data, path)
+        if nested:
+            return nested
+
+    # 4) Default if not found
     return default
 
 
@@ -265,7 +396,10 @@ def get_supabase_config() -> dict[str, str | None]:
 
 def fal_configured() -> bool:
     """Return True if a fal.ai API key is present."""
-    return bool(get_secret("fal_api_key"))
+    try:
+        return bool(get_fal_key())
+    except RuntimeError:
+        return False
 
 
 def get_openai_config() -> dict[str, str | None]:
