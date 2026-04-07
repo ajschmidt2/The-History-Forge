@@ -85,11 +85,7 @@ def _validate_trend_persistence_at_startup(repo: TrendIntelligenceRepository) ->
 
 
 def _render_trend_persistence_admin_error(admin_message: str) -> None:
-    st.error(
-        "Trend Intelligence database setup is incomplete.\n\n"
-        f"{admin_message}\n\n"
-        "Admin action required: apply the Trend Intelligence Supabase migrations and reload this page."
-    )
+    st.error(admin_message)
 
 
 def tab_trend_intelligence() -> None:
@@ -133,10 +129,10 @@ def tab_trend_intelligence() -> None:
             minimum_score=filters.min_score,
         )
 
-        run_id: str | None = None
+        scan_run_id: str | None = None
         if persistence_ready:
             try:
-                run_id = st.session_state.trend_scan_repo.create_scan_run(
+                scan_run_id = st.session_state.trend_scan_repo.create_scan_run(
                     user_id=_resolve_user_id(),
                     filters_json=asdict(service_filters),
                 )
@@ -145,16 +141,16 @@ def tab_trend_intelligence() -> None:
                 st.session_state.trend_scan_persistence_error = str(exc)
                 persistence_ready = False
                 _render_trend_persistence_admin_error(str(exc))
-        st.session_state.trend_scan_last_run_id = run_id
+        st.session_state.trend_scan_last_run_id = scan_run_id
 
         with st.status("Running trend scan...", expanded=True) as status:
             st.write("Collecting topic signals from configured sources...")
             st.write("Analyzing topic momentum and content fit...")
             try:
                 execution = st.session_state.trend_scan_service.run_trend_intelligence_scan_with_status(service_filters)
-                if persistence_ready and run_id:
+                if persistence_ready and scan_run_id:
                     st.session_state.trend_scan_topic_result_ids = st.session_state.trend_scan_repo.save_topic_results(
-                        scan_run_id=run_id,
+                        scan_run_id=scan_run_id,
                         topics=list(execution.topics),
                     )
                 else:
@@ -172,9 +168,9 @@ def tab_trend_intelligence() -> None:
                     "warning_count": len(execution.warnings),
                 }
                 st.session_state.trend_scan_last_summary = summary
-                if persistence_ready and run_id:
+                if persistence_ready and scan_run_id:
                     st.session_state.trend_scan_repo.complete_scan_run(
-                        scan_run_id=run_id,
+                        scan_run_id=scan_run_id,
                         status="completed",
                         summary_json=summary,
                     )
@@ -183,7 +179,7 @@ def tab_trend_intelligence() -> None:
                 st.session_state.trend_scan_persistence_ready = False
                 st.session_state.trend_scan_persistence_error = str(exc)
                 st.session_state.trend_scan_error = (
-                    "Scan finished, but persistence failed because required Supabase tables are missing or outdated."
+                    "Scan finished, but persistence failed due to a Trend Intelligence Supabase setup issue."
                 )
                 status.update(label="Scan completed with persistence warning", state="error")
             except Exception as exc:
@@ -196,9 +192,9 @@ def tab_trend_intelligence() -> None:
                     "error": str(exc),
                 }
                 st.session_state.trend_scan_last_summary = summary
-                if persistence_ready and run_id:
+                if persistence_ready and scan_run_id:
                     st.session_state.trend_scan_repo.complete_scan_run(
-                        scan_run_id=run_id,
+                        scan_run_id=scan_run_id,
                         status="failed",
                         summary_json=summary,
                     )
@@ -240,7 +236,7 @@ def tab_trend_intelligence() -> None:
         except TrendIntelligencePersistenceError:
             candidate_id = None
             _render_trend_persistence_admin_error(
-                "Could not save this topic to Supabase because Trend Intelligence tables are missing or incompatible."
+                "Could not save this topic to Supabase due to a Trend Intelligence setup/access issue."
             )
         st.session_state.topic = selected_for_pipeline.topic_title
         st.session_state.project_title = selected_for_pipeline.topic_title

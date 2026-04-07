@@ -8,9 +8,10 @@ from uuid import UUID, uuid4
 import src.supabase_storage as _sb_store
 from src.trend_intelligence.models import RankedTopic
 from src.trend_intelligence.persistence_validation import (
-    REQUIRED_TREND_TABLES,
     TrendPersistenceValidationResult,
     build_trend_persistence_admin_message,
+    check_trend_intelligence_setup,
+    classify_trend_setup_error,
     looks_like_schema_error,
 )
 from src.trend_intelligence.types import TopicResult
@@ -145,10 +146,10 @@ class TrendIntelligenceRepository:
         data = resp.data or []
         id_map: dict[str, int] = {}
         for row in data:
-            title = str(row.get("topic_title", "") or "")
+            topic_title = str(row.get("topic_title", "") or "")
             row_id = row.get("id")
-            if title and isinstance(row_id, int):
-                id_map[title] = row_id
+            if topic_title and isinstance(row_id, int):
+                id_map[topic_title] = row_id
         return id_map
 
     def save_topic_candidate(
@@ -182,57 +183,23 @@ class TrendIntelligenceRepository:
         return candidate_id if isinstance(candidate_id, int) else None
 
     def validate_required_trend_tables(self) -> TrendPersistenceValidationResult:
-        if self._client is None:
-            return TrendPersistenceValidationResult(
-                is_ready=False,
-                schema_errors=("Supabase client is unavailable",),
-            )
-
-        missing: list[str] = []
-        schema_errors: list[str] = []
-        for table_name in REQUIRED_TREND_TABLES:
-            try:
-                columns = self._table_columns(table_name)
-            except Exception as exc:
-                if looks_like_schema_error(exc):
-                    schema_errors.append(f"{table_name}: {exc}")
-                    continue
-                raise
-            if not columns:
-                missing.append(table_name)
-
+        check = check_trend_intelligence_setup(self._client)
+        details = check.get("details") if isinstance(check, dict) else {}
+        missing_tables = tuple(details.get("missing_tables", ())) if isinstance(details, dict) else ()
         return TrendPersistenceValidationResult(
-            is_ready=not missing and not schema_errors,
-            missing_tables=tuple(missing),
-            schema_errors=tuple(schema_errors),
+            is_ready=bool(check.get("ok")),
+            status=str(check.get("status", "connection_error")),
+            missing_tables=missing_tables,
+            details=details if isinstance(details, dict) else {},
         )
-
-    def _table_columns(self, table_name: str) -> set[str]:
-        if self._client is None:
-            return set()
-        resp = (
-            self._client.table("information_schema.columns")
-            .select("column_name")
-            .eq("table_schema", "public")
-            .eq("table_name", table_name)
-            .execute()
-        )
-        rows = resp.data or []
-        columns: set[str] = set()
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            name = str(row.get("column_name", "") or "").strip()
-            if name:
-                columns.add(name)
-        return columns
 
     def _raise_if_schema_error(self, exc: Exception, *, table_name: str) -> None:
         if looks_like_schema_error(exc):
+            status = classify_trend_setup_error(str(exc))
             raise TrendIntelligencePersistenceError(
                 build_trend_persistence_admin_message(
-                    missing_tables=(table_name,),
-                    schema_errors=(str(exc),),
+                    status=status,
+                    details={"table": table_name, "error": str(exc)},
                 )
             ) from exc
         raise
@@ -242,8 +209,8 @@ class TrendIntelligenceRepository:
         if raw_error and looks_like_schema_error(Exception(str(raw_error))):
             raise TrendIntelligencePersistenceError(
                 build_trend_persistence_admin_message(
-                    missing_tables=(table_name,),
-                    schema_errors=(str(raw_error),),
+                    status=classify_trend_setup_error(str(raw_error)),
+                    details={"table": table_name, "error": str(raw_error)},
                 )
             )
 
@@ -254,8 +221,8 @@ class TrendIntelligenceRepository:
             if error_blob and looks_like_schema_error(Exception(error_blob)):
                 raise TrendIntelligencePersistenceError(
                     build_trend_persistence_admin_message(
-                        missing_tables=(table_name,),
-                        schema_errors=(error_blob,),
+                        status=classify_trend_setup_error(error_blob),
+                        details={"table": table_name, "error": error_blob},
                     )
                 )
 
@@ -313,33 +280,24 @@ class TrendIntelligenceRepository:
         rows = bridge_row.data or []
         bridge_id = rows[0].get("id") if rows and isinstance(rows[0], dict) else None
 
+        script_payload = {
+            "project_id": project_id,
+            "topic_title": topic_title,
+            "status": "queued",
+            "source_topic_result_id": source_topic_result_id,
+            "source_scan_run_id": source_scan_run_id,
+            "trend_topic_script_job_id": bridge_id,
+            "topic_context_json": {
+                "why_may_be_trending": why_may_be_trending,
+                "preferred_content_angle": preferred_content_angle,
+                "selected_hook": selected_hook,
+                "thumbnail_direction": thumbnail_direction,
+                "score_breakdown_json": score_breakdown_json,
+            },
+        }
         try:
-            script_job_columns = self._table_columns("script_jobs")
+            self._client.table("script_jobs").insert(script_payload).execute()
         except Exception:
-            script_job_columns = set()
-        if script_job_columns:
-            script_payload_map = {
-                "project_id": project_id,
-                "topic_title": topic_title,
-                "topic": topic_title,
-                "title": topic_title,
-                "status": "queued",
-                "source_topic_result_id": source_topic_result_id,
-                "source_scan_run_id": source_scan_run_id,
-                "trend_topic_script_job_id": bridge_id,
-                "topic_context_json": {
-                    "why_may_be_trending": why_may_be_trending,
-                    "preferred_content_angle": preferred_content_angle,
-                    "selected_hook": selected_hook,
-                    "thumbnail_direction": thumbnail_direction,
-                    "score_breakdown": score_breakdown_json,
-                },
-            }
-            script_payload = {key: value for key, value in script_payload_map.items() if key in script_job_columns}
-            if script_payload:
-                try:
-                    self._client.table("script_jobs").insert(script_payload).execute()
-                except Exception:
-                    pass
+            pass
 
         return bridge_id if isinstance(bridge_id, int) else None
