@@ -34,7 +34,6 @@ from src.ai_video_generation import (
 
 logger = logging.getLogger(__name__)
 
-POLL_TIMEOUT_SEC = 300
 SUPPORTED_PROVIDERS = ("falai", "veo", "sora")
 SUPPORTED_ASPECT_RATIOS = {"16:9", "9:16", "1:1"}
 MIN_VIDEO_BYTES = 1024
@@ -258,61 +257,58 @@ def _looks_like_video_url(url: str) -> bool:
     return any(ext in lower for ext in (".mp4", ".webm", ".mov", ".m4v", ".m3u8", "video"))
 
 
-def _save_fal_debug_metadata(project_id: str, clip_label: str, payload: object) -> None:
-    debug_dir = Path("data/projects") / project_id / "debug"
-    debug_dir.mkdir(parents=True, exist_ok=True)
-    target = debug_dir / f"fal_video_{clip_label}.json"
-    target.write_text(json.dumps(_sanitize_for_debug(payload), indent=2), encoding="utf-8")
+def save_debug_response(debug_path: Path, response: object) -> None:
+    debug_path.parent.mkdir(parents=True, exist_ok=True)
+    debug_path.write_text(json.dumps(_sanitize_for_debug(response), indent=2), encoding="utf-8")
 
 
-def extract_video_url(response: object) -> str | None:
-    if response is None:
+def _extract_first_video_url(obj: object) -> str | None:
+    if obj is None:
         return None
-    if isinstance(response, str):
-        if response.startswith(("http://", "https://")) and _looks_like_video_url(response):
-            return response
+    if isinstance(obj, str):
+        if obj.startswith(("http://", "https://")) and _looks_like_video_url(obj):
+            return obj
         return None
-    if isinstance(response, dict):
-        for key in ("url", "video_url", "mp4", "href", "download_url"):
-            value = response.get(key)
+    if isinstance(obj, dict):
+        for key in ("video_url", "url", "mp4", "href", "download_url"):
+            value = obj.get(key)
             if isinstance(value, str) and value.startswith(("http://", "https://")) and _looks_like_video_url(value):
                 return value
         for key in FAL_RESPONSE_CANDIDATE_KEYS:
-            if key in response:
-                url = extract_video_url(response.get(key))
-                if url:
-                    return url
-        for value in response.values():
-            url = extract_video_url(value)
-            if url:
-                return url
+            if key in obj:
+                found = _extract_first_video_url(obj.get(key))
+                if found:
+                    return found
+        for value in obj.values():
+            found = _extract_first_video_url(value)
+            if found:
+                return found
         return None
-    if isinstance(response, list):
-        for item in response:
-            url = extract_video_url(item)
-            if url:
-                return url
+    if isinstance(obj, list):
+        for item in obj:
+            found = _extract_first_video_url(item)
+            if found:
+                return found
     return None
 
 
-def maybe_download_file(url: str, output_path: Path) -> bool:
+def _download_file(url: str, output_path: Path) -> tuple[bool, str]:
     try:
         with requests.get(url, timeout=180, stream=True) as resp:
             resp.raise_for_status()
             content_type = str(resp.headers.get("Content-Type", "")).lower()
             if content_type and "video" not in content_type and "octet-stream" not in content_type:
-                logger.error("ai_video_clips [falai]: provider returned non-video artifact")
-                return False
+                return False, f"download returned non-video content-type={content_type}"
             with output_path.open("wb") as handle:
                 for chunk in resp.iter_content(chunk_size=1024 * 128):
                     if chunk:
                         handle.write(chunk)
-    except Exception:  # noqa: BLE001
-        return False
-    return True
+    except Exception as exc:  # noqa: BLE001
+        return False, f"download failed ({type(exc).__name__}: {str(exc)[:160]})"
+    return True, ""
 
 
-def is_valid_video_file(path: Path) -> bool:
+def _is_valid_video_file(path: Path) -> bool:
     return path.exists() and path.is_file() and path.stat().st_size >= MIN_VIDEO_BYTES
 
 
@@ -321,36 +317,66 @@ def write_video_artifact(response: object, output_path: Path) -> tuple[bool, str
         return False, "provider returned empty response"
     if isinstance(response, (bytes, bytearray)):
         output_path.write_bytes(bytes(response))
-        return (True, "") if is_valid_video_file(output_path) else (False, "provider returned empty response")
-    url = extract_video_url(response)
-    if url:
-        if maybe_download_file(url, output_path) and is_valid_video_file(output_path):
+        return (True, "") if _is_valid_video_file(output_path) else (False, "provider returned byte payload but output file is too small")
+    if isinstance(response, str) and response.startswith(("http://", "https://")):
+        ok, reason = _download_file(response, output_path)
+        if ok and _is_valid_video_file(output_path):
             return True, ""
-        return False, "provider returned URL but download failed"
+        return False, reason or "provider returned URL but output file is too small"
+    url = _extract_first_video_url(response)
+    if url:
+        ok, reason = _download_file(url, output_path)
+        if ok and _is_valid_video_file(output_path):
+            return True, ""
+        return False, reason or "provider returned nested URL but output file is too small"
     if isinstance(response, dict):
         return False, "provider returned dict without video artifact"
-    return False, "provider returned non-video artifact"
+    if isinstance(response, list):
+        return False, "provider returned list without a video URL"
+    return False, f"provider returned unsupported response type={type(response).__name__}"
 
 
-def _poll_fal_job_if_needed(fal_client, model_name: str, response: object) -> object:
+def _poll_fal_job_if_needed(fal_client, model_name: str, response: object, *, workflow_logger: logging.Logger) -> object:
     if not isinstance(response, dict):
         return response
-    request_id = str(response.get("request_id") or response.get("id") or "").strip()
-    status = str(response.get("status") or "").lower().strip()
-    if not request_id or status in {"completed", "succeeded"}:
+    request_id = str(response.get("request_id") or response.get("job_id") or response.get("id") or "").strip()
+    if not request_id:
         return response
-    if not hasattr(fal_client, "status") or not hasattr(fal_client, "result"):
+    status_fn = getattr(fal_client, "status", None)
+    result_fn = getattr(fal_client, "result", None)
+    if not callable(status_fn):
         return response
-    deadline = time.time() + POLL_TIMEOUT_SEC
-    while time.time() < deadline:
-        status_payload = fal_client.status(model_name, request_id)
-        status = str((status_payload or {}).get("status") or "").lower().strip()
-        if status in {"completed", "succeeded"}:
-            return fal_client.result(model_name, request_id)
+    current: object = response
+    for attempt in range(30):
+        current_url = _extract_first_video_url(current)
+        if current_url:
+            return current
+        status_payload = status_fn(model_name, request_id)
+        current = status_payload if status_payload is not None else current
+        status = str((status_payload or {}).get("status") or "").lower().strip() if isinstance(status_payload, dict) else ""
         if status in {"failed", "error", "canceled", "cancelled"}:
             raise RuntimeError(f"provider job failed with status={status}")
-        time.sleep(3)
-    raise TimeoutError("provider job timed out")
+        if status in {"completed", "succeeded"} and callable(result_fn):
+            result_payload = result_fn(model_name, request_id)
+            if result_payload is not None:
+                return result_payload
+        if isinstance(status_payload, dict) and any(k in status_payload for k in ("output", "result", "data", "video", "outputs")):
+            nested_url = _extract_first_video_url(status_payload)
+            if nested_url:
+                return status_payload
+        workflow_logger.info("ai_video_clips [falai]: polling request_id=%s attempt=%d/30 status=%s", request_id, attempt + 1, status or "unknown")
+        time.sleep(4)
+    raise TimeoutError("provider job timed out after 30 polling attempts")
+
+
+# Backwards-compatible aliases for tests/importers
+extract_video_url = _extract_first_video_url
+is_valid_video_file = _is_valid_video_file
+
+
+def maybe_download_file(url: str, output_path: Path) -> bool:
+    ok, _ = _download_file(url, output_path)
+    return ok
 
 
 def _validate_fal_inputs(prompt: str, image_path: Optional[Path], aspect_ratio: str, duration_seconds: int) -> None:
@@ -391,6 +417,7 @@ def _generate_falai_video_clip(
         image_url = fal_client.upload_file(str(image_path))
 
     last_error = "provider returned empty response"
+    debug_path = Path("data/projects") / project_id / "debug" / f"fal_video_{clip_label}.json"
     for attempt in range(2):
         prompt_value = _build_motion_prompt(prompt) if attempt == 0 else _simplify_motion_prompt(prompt, aspect_ratio, duration_seconds)
         args = {
@@ -405,16 +432,38 @@ def _generate_falai_video_clip(
         started = time.monotonic()
         try:
             response = fal_client.subscribe(model_name, arguments=args)
-            response = _poll_fal_job_if_needed(fal_client, model_name, response)
+            response = _poll_fal_job_if_needed(fal_client, model_name, response, workflow_logger=wlog)
             response_type = type(response).__name__
             keys = list(response.keys()) if isinstance(response, dict) else []
+            payload_keys = list(_sanitize_for_debug(args).keys())
             wlog.info(
-                "ai_video_clips [falai]: clip=%s model=%s attempt=%d elapsed=%.2fs response_type=%s keys=%s",
-                clip_label, model_name, attempt + 1, time.monotonic() - started, response_type, keys[:15],
+                "ai_video_clips [falai]: clip=%s model=%s attempt=%d elapsed=%.2fs response_type=%s keys=%s payload_keys=%s",
+                clip_label, model_name, attempt + 1, time.monotonic() - started, response_type, keys[:15], payload_keys,
             )
-            _save_fal_debug_metadata(project_id, clip_label, {"attempt": attempt + 1, "response": response, "model": model_name, "clip": clip_label})
+            if isinstance(response, dict):
+                wlog.info("ai_video_clips [falai]: clip=%s dict_top_level_keys=%s", clip_label, keys[:20])
+            save_debug_response(
+                debug_path,
+                {
+                    "attempt": attempt + 1,
+                    "model": model_name,
+                    "clip": clip_label,
+                    "arguments": args,
+                    "response_type": response_type,
+                    "response": response,
+                },
+            )
             ok, reason = write_video_artifact(response, output_path)
             if ok:
+                if not _is_valid_video_file(output_path):
+                    last_error = "video artifact written but file failed validation"
+                    wlog.warning(
+                        "ai_video_clips [falai]: clip=%s attempt=%d failed reason=%s",
+                        clip_label,
+                        attempt + 1,
+                        last_error,
+                    )
+                    continue
                 return True, ""
             last_error = reason
         except TimeoutError:
@@ -874,7 +923,7 @@ def generate_ai_video_clips(
         )
     if all(r is None for r in results):
         _wlog.error(
-            "ai_video_clips [%s]: ALL clips failed for project %s — check credentials",
+            "ai_video_clips [%s]: ALL clips failed for project %s — check fal video response parsing, payload shape, async polling, or model compatibility",
             provider, project_id,
         )
     _clip_manifest_path(project_id).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
