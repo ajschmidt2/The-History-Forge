@@ -76,7 +76,8 @@ class PipelineOptions:
     topic: str = ""
     topic_direction: str = ""
     script_profile: str = "youtube_short_60s"
-    ai_video_provider: str = "sora"
+    ai_video_provider: str = "falai"
+    image_provider: str = "falai"
 
 
 @dataclass(slots=True)
@@ -93,7 +94,7 @@ class FullWorkflowOptions:
     enable_ai_video: bool = False
     ai_video_scene_indexes: list[int] = field(default_factory=list)
     hero_scene_indexes: list[int] = field(default_factory=list)
-    ai_video_provider: str = "sora"
+    ai_video_provider: str = "falai"
     ai_video_seconds: int = 8
     pipeline: PipelineOptions = field(default_factory=PipelineOptions)
     progress_callback: Any | None = field(default=None, repr=False, compare=False)
@@ -296,7 +297,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
 
     _logger = _workflow_logger(project_id)
     aspect_ratio = (options.aspect_ratio if options else None) or "9:16"
-    provider = (options.ai_video_provider if options else None) or "sora"
+    provider = (options.ai_video_provider if options else None) or "falai"
 
     # Allow session_state overrides from the Automation tab per-run settings.
     # In headless mode st.session_state exists but is inert; detect via ScriptRunContext.
@@ -326,6 +327,8 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             _preset_provider = str(_settings.get("preset", {}).get("ai_video_provider", "") or "")
             if _preset_provider:
                 provider = _preset_provider
+            else:
+                provider = "falai"
         except Exception:  # noqa: BLE001
             pass
 
@@ -1001,7 +1004,13 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
         visual_anchor = f"{_topic}. {_era + '. ' if _era else ''}Consistent historical era, unified palette, same cinematic treatment across all scenes."
     try:
         for scene in scenes_to_generate:
-            updated = generate_image_for_scene(scene, aspect_ratio=cfg.aspect_ratio, visual_style=cfg.visual_style, visual_anchor=visual_anchor)
+            updated = generate_image_for_scene(
+                scene,
+                aspect_ratio=cfg.aspect_ratio,
+                visual_style=cfg.visual_style,
+                visual_anchor=visual_anchor,
+                provider=getattr(cfg, "image_provider", "falai") or "falai",
+            )
             if updated.image_bytes:
                 out = images_dir / f"s{updated.index:02d}.png"
                 out.write_bytes(updated.image_bytes)

@@ -33,7 +33,7 @@ from src.ai_video_generation import (
 logger = logging.getLogger(__name__)
 
 POLL_TIMEOUT_SEC = 300
-SUPPORTED_PROVIDERS = ("veo", "sora")
+SUPPORTED_PROVIDERS = ("falai", "veo", "sora")
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +198,146 @@ def _call_veo_image_to_video(
 
     logger.info(f"ai_video_clips [veo]: received {len(video_bytes):,} bytes")
     return video_bytes
+
+
+# ---------------------------------------------------------------------------
+# fal.ai: text-to-video and image-to-video via Wan 2.2
+# ---------------------------------------------------------------------------
+
+def _ensure_fal_key() -> None:
+    """Populate FAL_KEY env var from secrets so fal_client can authenticate."""
+    import os as _os
+    api_key = get_secret("fal_api_key")
+    if not api_key:
+        raise RuntimeError(
+            "ai_video_clips [falai]: fal_api_key not found in secrets. "
+            "Add it to .streamlit/secrets.toml."
+        )
+    _os.environ["FAL_KEY"] = api_key
+
+
+def _call_falai_text_to_video(
+    prompt: str,
+    aspect_ratio: str = "9:16",
+    duration_seconds: int = 5,
+) -> bytes | None:
+    """
+    Generate a video clip from text using fal.ai Wan 2.2 (480p).
+    Returns raw MP4 bytes on success, None on failure.
+    """
+    try:
+        import fal_client  # type: ignore
+    except ImportError:
+        raise RuntimeError(
+            "ai_video_clips [falai]: fal-client is not installed. Run: pip install fal-client"
+        )
+
+    _ensure_fal_key()
+    motion_prompt = _build_motion_prompt(prompt)
+
+    try:
+        result = fal_client.subscribe(
+            "fal-ai/wan-2.2/t2v-480p",
+            arguments={
+                "prompt": motion_prompt,
+                "aspect_ratio": aspect_ratio,
+                "num_frames": 81,
+                "sample_steps": 30,
+                "sample_guide_scale": 6.0,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("ai_video_clips [falai]: text-to-video failed: %s", exc)
+        return None
+
+    if not result or not result.get("video"):
+        logger.error("ai_video_clips [falai]: no video in result keys=%s", list(result or {}))
+        return None
+
+    video_url = result["video"].get("url") if isinstance(result["video"], dict) else None
+    if not video_url:
+        logger.error("ai_video_clips [falai]: missing video url in result")
+        return None
+
+    try:
+        resp = requests.get(video_url, timeout=120)
+        resp.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("ai_video_clips [falai]: failed to download video: %s", exc)
+        return None
+
+    logger.info("ai_video_clips [falai]: received %d bytes from t2v", len(resp.content))
+    return resp.content
+
+
+def _call_falai_image_to_video(
+    image_path: Path,
+    prompt: str,
+    aspect_ratio: str = "9:16",
+    duration_seconds: int = 5,
+) -> bytes | None:
+    """
+    Generate a video clip from an image using fal.ai Wan 2.2 image-to-video (480p).
+    Falls back to text-to-video on upload or generation failure.
+    """
+    try:
+        import fal_client  # type: ignore
+    except ImportError:
+        raise RuntimeError(
+            "ai_video_clips [falai]: fal-client is not installed. Run: pip install fal-client"
+        )
+
+    _ensure_fal_key()
+    motion_prompt = _build_motion_prompt(prompt)
+
+    try:
+        image_url = fal_client.upload_file(str(image_path))
+        logger.info("ai_video_clips [falai]: uploaded image → %s", image_url)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ai_video_clips [falai]: image upload failed (%s), falling back to text-to-video",
+            exc,
+        )
+        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
+
+    try:
+        result = fal_client.subscribe(
+            "fal-ai/wan-2.2/i2v-480p",
+            arguments={
+                "prompt": motion_prompt,
+                "image_url": image_url,
+                "aspect_ratio": aspect_ratio,
+                "num_frames": 81,
+                "sample_steps": 30,
+                "sample_guide_scale": 6.0,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ai_video_clips [falai]: image-to-video failed (%s), falling back to text-to-video",
+            exc,
+        )
+        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
+
+    if not result or not result.get("video"):
+        logger.warning(
+            "ai_video_clips [falai]: i2v returned no video, falling back to text-to-video"
+        )
+        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
+
+    video_url = result["video"].get("url") if isinstance(result["video"], dict) else None
+    if not video_url:
+        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
+
+    try:
+        resp = requests.get(video_url, timeout=120)
+        resp.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("ai_video_clips [falai]: failed to download i2v video: %s", exc)
+        return _call_falai_text_to_video(prompt, aspect_ratio, duration_seconds)
+
+    logger.info("ai_video_clips [falai]: received %d bytes from i2v", len(resp.content))
+    return resp.content
 
 
 # ---------------------------------------------------------------------------
@@ -487,7 +627,7 @@ def generate_ai_video_clips(
     tmp_dir: Path,
     aspect_ratio: str = "9:16",
     duration_seconds: int = 5,
-    provider: str = "veo",
+    provider: str = "falai",
     workflow_logger=None,
     clip_done_callback=None,
 ) -> tuple:
@@ -509,7 +649,7 @@ def generate_ai_video_clips(
                       not deployed. Surfaces to the automation UI.
         ValueError:   If an unknown provider is specified.
     """
-    provider = (provider or "veo").strip().lower()
+    provider = (provider or "falai").strip().lower()
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(
             f"ai_video_clips: unknown provider '{provider}'. "
@@ -523,11 +663,14 @@ def generate_ai_video_clips(
 
     if not images and provider == "veo":
         _wlog.warning("ai_video_clips [veo]: no scene images found for project %s, skipping", project_id)
-        return None, None
+        return None, None, None, None
 
-    if not prompts and provider == "sora":
-        _wlog.warning("ai_video_clips [sora]: no scene prompts found for project %s, skipping", project_id)
-        return None, None
+    if not prompts and provider in ("sora", "falai"):
+        _wlog.warning(
+            "ai_video_clips [%s]: no scene prompts found for project %s, skipping",
+            provider, project_id,
+        )
+        return None, None, None, None
 
     tmp_dir.mkdir(parents=True, exist_ok=True)
     _wlog.info("ai_video_clips project=%s provider=%s images=%d prompts=%d", project_id, provider, len(images), len(prompts))
@@ -568,7 +711,16 @@ def generate_ai_video_clips(
         )
 
         try:
-            if provider == "veo":
+            if provider == "falai":
+                if image is not None:
+                    video_bytes = _call_falai_image_to_video(
+                        image, prompt, aspect_ratio, duration_seconds
+                    )
+                else:
+                    video_bytes = _call_falai_text_to_video(
+                        prompt, aspect_ratio, duration_seconds
+                    )
+            elif provider == "veo":
                 if image is None:
                     _wlog.warning("ai_video_clips [veo]: no image for %s clip, skipping", label)
                     results.append(None)

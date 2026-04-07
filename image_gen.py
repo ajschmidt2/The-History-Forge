@@ -344,6 +344,101 @@ def _generate_images_with_model(client: Any, model: str, prompt: str, config: di
         )
 
 
+def generate_falai_images(
+    prompt: str,
+    number_of_images: int = 1,
+    aspect_ratio: str = "16:9",
+) -> List[bytes]:
+    """
+    Generate images using fal.ai FLUX Dev.
+
+    Model: fal-ai/flux/dev
+      - Swap to "fal-ai/flux/schnell" for faster/cheaper generation.
+      - Swap to "fal-ai/flux-pro/v1.1" for highest quality.
+
+    Aspect-ratio → pixel mapping mirrors the documentary-style defaults
+    used throughout the History Forge pipeline.
+    """
+    import os as _os
+
+    try:
+        import fal_client  # type: ignore
+    except ImportError as exc:  # pragma: no cover - surfaced as runtime error
+        raise RuntimeError(
+            "fal-client is not installed. Run: pip install fal-client"
+        ) from exc
+
+    api_key = _get_secret("fal_api_key", "")
+    if not api_key:
+        raise RuntimeError(
+            "fal_api_key not found in secrets. Add it to .streamlit/secrets.toml"
+        )
+
+    # fal_client reads FAL_KEY from the environment.
+    _os.environ["FAL_KEY"] = api_key
+
+    ar = (aspect_ratio or "16:9").strip()
+    if ar == "9:16":
+        width, height = 1024, 1792
+    elif ar == "1:1":
+        width, height = 1024, 1024
+    else:  # default 16:9
+        width, height = 1792, 1024
+
+    try:
+        result = fal_client.subscribe(
+            "fal-ai/flux/dev",
+            arguments={
+                "prompt": prompt,
+                "image_size": {"width": width, "height": height},
+                "num_inference_steps": 28,
+                "guidance_scale": 3.5,
+                "num_images": max(1, int(number_of_images)),
+                "enable_safety_checker": True,
+                "output_format": "jpeg",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"fal.ai image generation failed: {exc}") from exc
+
+    images: List[bytes] = []
+    if result and result.get("images"):
+        import requests as _requests
+        for item in result["images"]:
+            url = item.get("url") if isinstance(item, dict) else None
+            if not url:
+                continue
+            try:
+                resp = _requests.get(url, timeout=60)
+                resp.raise_for_status()
+                images.append(resp.content)
+            except Exception:  # noqa: BLE001
+                continue
+    return images
+
+
+def generate_scene_image_bytes(
+    prompt: str,
+    number_of_images: int = 1,
+    aspect_ratio: str = "16:9",
+    provider: str = "falai",
+) -> List[bytes]:
+    """
+    Provider-routed scene image generation.
+
+    provider:
+      - "falai"  — fal.ai FLUX Dev (default, cheapest)
+      - "gemini" — Google Imagen / Gemini image model (legacy path)
+    """
+    provider = (provider or "falai").strip().lower()
+    if provider == "gemini":
+        return generate_imagen_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
+    if provider == "falai":
+        return generate_falai_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
+    # Unknown → default to falai
+    return generate_falai_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
+
+
 def generate_imagen_images(
     prompt: str,
     number_of_images: int = 1,

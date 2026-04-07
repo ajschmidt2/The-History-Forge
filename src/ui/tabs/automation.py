@@ -320,11 +320,16 @@ def _render_daily_automation_status(project_id: str) -> None:
     daily_transition_label = st.selectbox("Daily scene transition", options=list(_daily_transition_options.keys()), index=list(_daily_transition_options.keys()).index(_daily_transition_label))
     daily_transition_type = _daily_transition_options[daily_transition_label]
 
-    _daily_ai_options = ["None", "sora", "veo"]
-    _daily_ai_default = str(preset.get("ai_video_provider", "sora") or "sora")
+    _daily_ai_options = ["None", "falai", "sora", "veo"]
+    _daily_ai_default = str(preset.get("ai_video_provider", "falai") or "falai")
     if _daily_ai_default not in _daily_ai_options:
-        _daily_ai_default = "sora"
-    daily_ai_provider = st.selectbox("Daily AI video provider", options=_daily_ai_options, index=_daily_ai_options.index(_daily_ai_default), format_func=lambda p: {"None": "None", "sora": "OpenAI Sora", "veo": "Google Veo"}.get(p, p))
+        _daily_ai_default = "falai"
+    daily_ai_provider = st.selectbox(
+        "Daily AI video provider",
+        options=_daily_ai_options,
+        index=_daily_ai_options.index(_daily_ai_default),
+        format_func=lambda p: {"None": "None", "falai": "fal.ai (Wan 2.2)", "sora": "OpenAI Sora", "veo": "Google Veo"}.get(p, p),
+    )
 
     project_music_tracks = _list_music_tracks(project_dir(project_id) / "assets/music")
     shared_music_tracks = _list_music_tracks(MUSIC_LIBRARY_ROOT)
@@ -449,12 +454,16 @@ def tab_automation(project_id: str) -> None:
 
     # ── AI Video Clips ─────────────────────────────────────────────
     st.subheader("🎬 AI Video Clips")
-    _ai_video_provider_options = ["None", "Google Veo (Supabase)", "OpenAI Sora"]
-    _ai_provider_internal_to_label = {"sora": "OpenAI Sora", "veo": "Google Veo (Supabase)"}
-    _daily_ai_label = _ai_provider_internal_to_label.get(str(_daily_preset.get("ai_video_provider", "") or ""), "None")
-    _default_ai_video_provider = str(payload.get("ai_video_provider") or _daily_ai_label or "None")
+    _ai_video_provider_options = ["None", "fal.ai (Wan 2.2)", "Google Veo (Supabase)", "OpenAI Sora"]
+    _ai_provider_internal_to_label = {
+        "falai": "fal.ai (Wan 2.2)",
+        "sora": "OpenAI Sora",
+        "veo": "Google Veo (Supabase)",
+    }
+    _daily_ai_label = _ai_provider_internal_to_label.get(str(_daily_preset.get("ai_video_provider", "") or ""), "fal.ai (Wan 2.2)")
+    _default_ai_video_provider = str(payload.get("ai_video_provider") or _daily_ai_label or "fal.ai (Wan 2.2)")
     if _default_ai_video_provider not in _ai_video_provider_options:
-        _default_ai_video_provider = "None"
+        _default_ai_video_provider = "fal.ai (Wan 2.2)"
     ai_video_provider = st.selectbox(
         "AI Video Clip Generator",
         options=_ai_video_provider_options,
@@ -464,17 +473,23 @@ def tab_automation(project_id: str) -> None:
     )
 
     with st.expander("⚙️ AI Video Settings", expanded=False):
+        from src.config.secrets import fal_configured as _fal_cfg
+        _fal_ok = _fal_cfg()
         _veo_ok = veo_configured()
         _sora_ok = sora_configured()
-        _available = [p for p in SUPPORTED_PROVIDERS
-                      if (p == "veo" and _veo_ok) or (p == "sora" and _sora_ok)]
+        # fal.ai is always available in the selector (default), even if not configured.
+        _available = ["falai"]
+        if _veo_ok:
+            _available.append("veo")
+        if _sora_ok:
+            _available.append("sora")
 
         if not _available:
             st.warning(
                 "No AI video providers are configured. "
-                "Set SUPABASE credentials for Veo or openai_api_key for Sora."
+                "Set fal_api_key, SUPABASE credentials for Veo, or openai_api_key for Sora."
             )
-            _run_provider = "veo"
+            _run_provider = "falai"
         else:
             _daily_run_provider = str(_daily_preset.get("ai_video_provider", "") or "")
             _global_default = (
@@ -485,11 +500,16 @@ def tab_automation(project_id: str) -> None:
             if _global_default not in _available:
                 _global_default = _available[0]
 
+            _provider_display = {
+                "falai": "✨ fal.ai",
+                "veo": "🎬 Veo",
+                "sora": "🤖 Sora",
+            }
             _run_provider = st.selectbox(
                 "Provider for this run",
                 _available,
                 index=_available.index(_global_default),
-                format_func=lambda p: f"{'🎬 Veo' if p == 'veo' else '🤖 Sora'}",
+                format_func=lambda p: _provider_display.get(p, p),
                 help="Overrides the sidebar default for this automation run only.",
                 key="automation_provider_override",
             )
@@ -511,7 +531,12 @@ def tab_automation(project_id: str) -> None:
             key="automation_clip_duration",
         )
 
-        if _run_provider == "sora":
+        if _run_provider == "falai":
+            st.info(
+                "fal.ai (Wan 2.2) uses image-to-video when a scene image is available, "
+                "and falls back to text-to-video otherwise. ~$0.50 per 5s clip."
+            )
+        elif _run_provider == "sora":
             st.info(
                 "Sora will attempt image-to-video using generated scene images. "
                 "If no image is available or the request fails, it falls back to text-to-video."
@@ -524,7 +549,11 @@ def tab_automation(project_id: str) -> None:
 
     # Store resolved provider for use in the step runner.
     # If the main selectbox is "None", mark provider as empty so the step is skipped.
-    _label_to_internal = {"Google Veo (Supabase)": "veo", "OpenAI Sora": "sora"}
+    _label_to_internal = {
+        "fal.ai (Wan 2.2)": "falai",
+        "Google Veo (Supabase)": "veo",
+        "OpenAI Sora": "sora",
+    }
     _main_selection_internal = _label_to_internal.get(ai_video_provider, "")
     if _main_selection_internal:
         st.session_state["automation_run_provider"] = _run_provider
@@ -707,7 +736,8 @@ def tab_automation(project_id: str) -> None:
         topic=topic_input.strip(),
         topic_direction=topic_direction.strip(),
         script_profile="youtube_short_60s" if selected_mode == "topic_to_short_video" else str(payload.get("script_profile", "") or ""),
-        ai_video_provider=st.session_state.get("automation_run_provider", "veo"),
+        ai_video_provider=st.session_state.get("automation_run_provider", "falai"),
+        image_provider=str(st.session_state.get("image_provider", "falai") or "falai"),
     )
 
     st.markdown("#### Controls")

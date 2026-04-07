@@ -266,6 +266,11 @@ def get_supabase_config() -> dict[str, str | None]:
     }
 
 
+def fal_configured() -> bool:
+    """Return True if a fal.ai API key is present."""
+    return bool(get_secret("fal_api_key"))
+
+
 def get_openai_config() -> dict[str, str | None]:
     return {
         "api_key": get_secret("OPENAI_API_KEY"),
