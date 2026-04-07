@@ -29,6 +29,7 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "INSTAGRAM_ACCESS_TOKEN": ["INSTAGRAM_ACCESS_TOKEN", "instagram_access_token"],
     "TIKTOK_ACCESS_TOKEN": ["TIKTOK_ACCESS_TOKEN", "tiktok_access_token"],
     "TIKTOK_OPEN_ID": ["TIKTOK_OPEN_ID", "tiktok_open_id"],
+    "FAL_API_KEY": ["FAL_API_KEY", "fal_api_key", "FAL_KEY", "fal_key"],
 }
 
 _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
@@ -53,6 +54,12 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
     "YOUTUBE_CLIENT_SECRETS_FILE": (("youtube", "client_secrets_file"),),
     "YOUTUBE_TOKEN_FILE": (("youtube", "token_file"),),
+    "FAL_API_KEY": (
+        ("fal", "api_key"),
+        ("fal", "key"),
+        ("api_keys", "fal"),
+        ("api_keys", "fal_api_key"),
+    ),
 }
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
