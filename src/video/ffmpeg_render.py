@@ -19,7 +19,7 @@ from src.storage.supabase_assets import stage_timeline_assets
 from .audio_mix import build_audio_mix_cmd
 from .captions import write_ass_file, write_srt_file
 from .timeline_schema import Timeline
-from .utils import ensure_ffmpeg_exists, ensure_parent_dir, get_media_duration, resolve_ffmpeg_exe, run_cmd
+from .utils import ensure_ffmpeg_exists, ensure_parent_dir, get_media_duration as _probe_media_duration, resolve_ffmpeg_exe, run_cmd
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv"}
@@ -89,6 +89,171 @@ def _safe_crossfade_duration(durations: list[float], requested: float, fps: int)
     shortest_scene = min(durations)
     max_crossfade = max(0.0, shortest_scene - min_frame)
     return min(requested, max_crossfade)
+
+
+def get_media_duration(path: str | Path) -> float:
+    try:
+        duration = float(_probe_media_duration(path))
+    except Exception:
+        return 0.0
+    return duration if math.isfinite(duration) and duration >= 0 else 0.0
+
+
+def get_scene_target_duration(scene_id: str, scene_duration_lookup: dict[str, float]) -> float:
+    return float(scene_duration_lookup.get(scene_id, 0.0))
+
+
+def get_ai_clip_for_scene(scene_id: str, ai_clip_map: dict[str, str]) -> str | None:
+    clip = ai_clip_map.get(scene_id)
+    return clip if clip else None
+
+
+def trim_or_pad_clip(
+    path: Path,
+    target_duration: float,
+    output_path: Path,
+    ffmpeg_commands: list[list[str]],
+    log_path: Path | None,
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(path),
+        "-vf",
+        f"tpad=stop_mode=clone:stop_duration={max(0.0, target_duration):.6f}",
+        "-t",
+        f"{max(0.0, target_duration):.6f}",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
+    ffmpeg_commands.append(cmd)
+    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    return output_path
+
+
+def concat_ai_and_still(
+    ai_path: Path,
+    still_path: Path,
+    target_duration: float,
+    output_path: Path,
+    ffmpeg_commands: list[list[str]],
+    log_path: Path | None,
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    ai_duration = get_media_duration(ai_path) or 0.0
+    tail_duration = max(0.0, target_duration - ai_duration)
+    still_tail_path = output_path.with_name(f"{output_path.stem}_still_tail.mp4")
+    trim_or_pad_clip(
+        still_path,
+        tail_duration,
+        still_tail_path,
+        ffmpeg_commands,
+        log_path,
+        command_timeout_sec,
+        workdir=workdir,
+        cwd=cwd,
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(ai_path),
+        "-i",
+        str(still_tail_path),
+        "-filter_complex",
+        "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+        "-map",
+        "[v]",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        str(output_path),
+    ]
+    ffmpeg_commands.append(cmd)
+    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    return trim_or_pad_clip(
+        output_path,
+        target_duration,
+        output_path,
+        ffmpeg_commands,
+        log_path,
+        command_timeout_sec,
+        workdir=workdir,
+        cwd=cwd,
+    )
+
+
+def build_final_scene_clip(
+    scene_id: str,
+    still_scene_path: Path,
+    ai_clip_path: Path | None,
+    target_duration: float,
+    output_path: Path,
+    ffmpeg_commands: list[list[str]],
+    log_path: Path | None,
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> tuple[Path, str, float | None]:
+    ai_duration = get_media_duration(ai_clip_path) if ai_clip_path else None
+    if ai_clip_path is None or not ai_clip_path.exists() or ai_duration is None or ai_duration <= 0:
+        final_path = trim_or_pad_clip(
+            still_scene_path,
+            target_duration,
+            output_path,
+            ffmpeg_commands,
+            log_path,
+            command_timeout_sec,
+            workdir=workdir,
+            cwd=cwd,
+        )
+        return final_path, "still_only", ai_duration
+
+    if ai_duration >= target_duration - 0.01:
+        final_path = trim_or_pad_clip(
+            ai_clip_path,
+            target_duration,
+            output_path,
+            ffmpeg_commands,
+            log_path,
+            command_timeout_sec,
+            workdir=workdir,
+            cwd=cwd,
+        )
+        return final_path, "ai_only", ai_duration
+
+    final_path = concat_ai_and_still(
+        ai_clip_path,
+        still_scene_path,
+        target_duration,
+        output_path,
+        ffmpeg_commands,
+        log_path,
+        command_timeout_sec,
+        workdir=workdir,
+        cwd=cwd,
+    )
+    return final_path, "ai_plus_still_tail", ai_duration
 
 def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     motion = scene.motion
@@ -635,6 +800,7 @@ def render_video_from_timeline(
 
             scene_paths: list[Path] = []
             durations: list[float] = []
+            scene_duration_lookup: dict[str, float] = {}
             for scene in timeline.scenes:
                 scene_path = Path(scene.image_path).resolve()
                 if not scene_path.exists():
@@ -648,8 +814,12 @@ def render_video_from_timeline(
                     cache_hits += 1
                 scene_paths.append(scene_out)
                 durations.append(normalized_duration)
+                scene_duration_lookup[scene.id] = normalized_duration
 
-            # ── Splice AI video clips if available ──────────────────────────
+            # ── Build one final clip per scene slot (AI replace/fill) ───────
+            final_scene_dir = tmp_path / "final_scene_clips"
+            final_scene_dir.mkdir(parents=True, exist_ok=True)
+            manifest_items: list[dict[str, object]] = []
             try:
                 from src.workflow.project_io import load_project_payload
                 _proj_payload = load_project_payload(project_slug)
@@ -701,40 +871,90 @@ def render_video_from_timeline(
                         )
                         return src
 
-                # Insert clips: 1 at the very beginning, then 3 evenly spaced
-                # through the original scene set (at 1/4, 1/2, 3/4 positions).
-                # Insertions are tracked so each subsequent index is offset
-                # correctly for the clips already inserted.
-                _num_orig = len(scene_paths)
-                _clips_in = 0
-                if _opening and Path(_opening).exists():
-                    _opening_va = tmp_path / "ai_opening_noaudio.mp4"
-                    scene_paths.insert(0, _strip_audio(Path(_opening), _opening_va))
-                    durations.insert(0, 5.0)
-                    _clips_in += 1
-                if _q2 and Path(_q2).exists():
-                    _q2_va = tmp_path / "ai_q2_noaudio.mp4"
-                    _idx = _num_orig // 4 + _clips_in
-                    scene_paths.insert(_idx, _strip_audio(Path(_q2), _q2_va))
-                    durations.insert(_idx, 5.0)
-                    _clips_in += 1
-                if _q3 and Path(_q3).exists():
-                    _q3_va = tmp_path / "ai_q3_noaudio.mp4"
-                    _idx = _num_orig // 2 + _clips_in
-                    scene_paths.insert(_idx, _strip_audio(Path(_q3), _q3_va))
-                    durations.insert(_idx, 5.0)
-                    _clips_in += 1
-                if _q4 and Path(_q4).exists():
-                    _q4_va = tmp_path / "ai_q4_noaudio.mp4"
-                    _idx = 3 * _num_orig // 4 + _clips_in
-                    scene_paths.insert(_idx, _strip_audio(Path(_q4), _q4_va))
-                    durations.insert(_idx, 5.0)
-                    _clips_in += 1
+                ai_clip_map_raw = {
+                    "s01": _opening,
+                    "s03": _q2,
+                    "s05": _q3,
+                    "s07": _q4,
+                }
+                ai_clip_map: dict[str, str] = {}
+                for scene_id, raw_path in ai_clip_map_raw.items():
+                    if not raw_path:
+                        continue
+                    src_path = Path(raw_path)
+                    if not src_path.exists():
+                        continue
+                    ai_scene_path = final_scene_dir / f"{scene_id}_ai_noaudio.mp4"
+                    ai_clip_map[scene_id] = str(_strip_audio(src_path, ai_scene_path))
+
+                final_scene_paths: list[Path] = []
+                final_durations: list[float] = []
+                for index, scene in enumerate(timeline.scenes):
+                    scene_id = scene.id
+                    still_scene_path = scene_paths[index]
+                    target_duration = get_scene_target_duration(scene_id, scene_duration_lookup)
+                    ai_clip_str = get_ai_clip_for_scene(scene_id, ai_clip_map)
+                    ai_clip_path = Path(ai_clip_str) if ai_clip_str else None
+                    final_scene_path = final_scene_dir / f"{scene_id}_final.mp4"
+                    built_path, strategy_used, ai_duration = build_final_scene_clip(
+                        scene_id=scene_id,
+                        still_scene_path=still_scene_path,
+                        ai_clip_path=ai_clip_path,
+                        target_duration=target_duration,
+                        output_path=final_scene_path,
+                        ffmpeg_commands=ffmpeg_commands,
+                        log_path=log_file,
+                        command_timeout_sec=command_timeout_sec,
+                        workdir=render_dir,
+                        cwd=project_root,
+                    )
+                    final_duration = get_media_duration(built_path)
+                    final_scene_paths.append(built_path)
+                    final_durations.append(target_duration)
+                    manifest_items.append(
+                        {
+                            "scene_id": scene_id,
+                            "target_duration": target_duration,
+                            "still_scene_path": str(still_scene_path),
+                            "ai_clip_path": str(ai_clip_path) if ai_clip_path else "",
+                            "ai_clip_exists": bool(ai_clip_path and ai_clip_path.exists()),
+                            "ai_clip_duration": ai_duration,
+                            "strategy_used": strategy_used,
+                            "final_scene_clip_path": str(built_path),
+                            "final_scene_clip_duration": final_duration,
+                        }
+                    )
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write(
+                                "final_scene scene_id=%s still_scene_path=%s ai_clip_path=%s target_duration=%.3f strategy=%s final_scene_clip=%s final_scene_duration=%s\n"
+                                % (
+                                    scene_id,
+                                    still_scene_path,
+                                    str(ai_clip_path) if ai_clip_path else "",
+                                    target_duration,
+                                    strategy_used,
+                                    built_path,
+                                    f"{final_duration:.3f}" if final_duration is not None else "unknown",
+                                )
+                            )
+                scene_paths = final_scene_paths
+                durations = final_durations
             except Exception as _clips_err:
                 import logging as _log_cl
                 _log_cl.getLogger(__name__).warning(
-                    "ai_video_clips insert failed project=%s err=%s", project_slug, _clips_err
+                    "ai_video_scene_slot_build failed project=%s err=%s", project_slug, _clips_err
                 )
+
+            manifest_dir = project_root / "data" / "projects" / project_slug / "renders" / "final_render_logs"
+            manifest_dir.mkdir(parents=True, exist_ok=True)
+            manifest_path = manifest_dir / "scene_manifest.json"
+            manifest_payload = {
+                "project_id": project_slug,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "scenes": manifest_items,
+            }
+            manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
             stitched_path = tmp_path / "stitched.mp4"
             if (not safe_mode) and timeline.meta.crossfade and len(scene_paths) > 1:
