@@ -949,91 +949,115 @@ def render_video_from_timeline(
             final_scene_dir = tmp_path / "final_scene_clips"
             final_scene_dir.mkdir(parents=True, exist_ok=True)
             manifest_items: list[dict[str, object]] = []
+            final_scene_records: list[dict[str, object]] = []
+
+            def _strip_audio(src: Path, dest: Path) -> Path:
+                """Re-encode AI clip to match scene format so xfade works correctly.
+
+                Uses the same target dimensions, fps, codec, and pixel format as the
+                rendered scene clips so the xfade filter never sees mismatched inputs.
+                Falls back to the source file if re-encoding fails.
+                """
+                import logging as _log_sa
+                try:
+                    import subprocess as _sp
+                    _ffmpeg_bin = resolve_ffmpeg_exe()
+                    _sp.run(
+                        [
+                            _ffmpeg_bin, "-y", "-i", str(src),
+                            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps},format=yuv420p",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                            "-an",
+                            str(dest),
+                        ],
+                        check=True, capture_output=True,
+                    )
+                    if dest.exists() and dest.stat().st_size > 0:
+                        return dest
+                    _log_sa.getLogger(__name__).warning("ai_clip_reencode produced empty file src=%s; using original", src)
+                    return src
+                except Exception as _enc_err:
+                    _stderr = getattr(_enc_err, "stderr", b"")
+                    _stderr_str = (_stderr.decode("utf-8", errors="replace") if isinstance(_stderr, bytes) else str(_stderr))[-400:]
+                    _log_sa.getLogger(__name__).warning(
+                        "ai_clip_reencode_failed src=%s err=%s stderr=%s; using original (xfade may fail)",
+                        src, _enc_err, _stderr_str,
+                    )
+                    return src
+
             try:
                 from src.workflow.project_io import load_project_payload
                 _proj_payload = load_project_payload(project_slug)
-                _opening = str(_proj_payload.get("ai_opening_clip_path", "") or "")
-                _q2      = str(_proj_payload.get("ai_q2_clip_path", "") or "")
-                _q3      = str(_proj_payload.get("ai_q3_clip_path", "") or "")
-                _q4      = str(_proj_payload.get("ai_q4_clip_path", "") or "")
-                # Fall back to Streamlit session state (UI path)
-                try:
-                    import streamlit as _st_render
-                    _opening = _opening or str(_st_render.session_state.get("auto_ai_opening_clip") or "")
-                    _q2      = _q2      or str(_st_render.session_state.get("auto_ai_q2_clip") or "")
-                    _q3      = _q3      or str(_st_render.session_state.get("auto_ai_q3_clip") or "")
-                    _q4      = _q4      or str(_st_render.session_state.get("auto_ai_q4_clip") or "")
-                except Exception:
-                    pass
+            except Exception:
+                _proj_payload = {}
 
-                def _strip_audio(src: Path, dest: Path) -> Path:
-                    """Re-encode AI clip to match scene format so xfade works correctly.
+            _opening = str(_proj_payload.get("ai_opening_clip_path", "") or "")
+            _q2 = str(_proj_payload.get("ai_q2_clip_path", "") or "")
+            _q3 = str(_proj_payload.get("ai_q3_clip_path", "") or "")
+            _q4 = str(_proj_payload.get("ai_q4_clip_path", "") or "")
+            # Fall back to Streamlit session state (UI path)
+            try:
+                import streamlit as _st_render
+                _opening = _opening or str(_st_render.session_state.get("auto_ai_opening_clip") or "")
+                _q2 = _q2 or str(_st_render.session_state.get("auto_ai_q2_clip") or "")
+                _q3 = _q3 or str(_st_render.session_state.get("auto_ai_q3_clip") or "")
+                _q4 = _q4 or str(_st_render.session_state.get("auto_ai_q4_clip") or "")
+            except Exception:
+                pass
 
-                    Uses the same target dimensions, fps, codec, and pixel format as the
-                    rendered scene clips so the xfade filter never sees mismatched inputs.
-                    Falls back to the source file if re-encoding fails.
-                    """
-                    import logging as _log_sa
-                    try:
-                        import subprocess as _sp
-                        _ffmpeg_bin = resolve_ffmpeg_exe()
-                        _result = _sp.run(
-                            [
-                                _ffmpeg_bin, "-y", "-i", str(src),
-                                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps},format=yuv420p",
-                                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                                "-an",
-                                str(dest),
-                            ],
-                            check=True, capture_output=True,
-                        )
-                        if dest.exists() and dest.stat().st_size > 0:
-                            return dest
-                        _log_sa.getLogger(__name__).warning("ai_clip_reencode produced empty file src=%s; using original", src)
-                        return src
-                    except Exception as _enc_err:
-                        _stderr = getattr(_enc_err, "stderr", b"")
-                        _stderr_str = (_stderr.decode("utf-8", errors="replace") if isinstance(_stderr, bytes) else str(_stderr))[-400:]
-                        _log_sa.getLogger(__name__).warning(
-                            "ai_clip_reencode_failed src=%s err=%s stderr=%s; using original (xfade may fail)",
-                            src, _enc_err, _stderr_str,
-                        )
-                        return src
-
+            ai_clip_map_raw = {
+                "s01": _opening,
+                "s03": _q2,
+                "s05": _q3,
+                "s07": _q4,
+            }
+            if _proj_payload:
                 ai_clip_map_raw = {
-                    "s01": _opening,
-                    "s03": _q2,
-                    "s05": _q3,
-                    "s07": _q4,
+                    scene_id: str(_proj_payload.get(payload_key, "") or ai_clip_map_raw.get(scene_id, "") or "")
+                    for scene_id, payload_key in AI_SCENE_CLIP_MAPPING.items()
                 }
-                if _proj_payload:
-                    ai_clip_map_raw = {
-                        scene_id: str(_proj_payload.get(payload_key, "") or ai_clip_map_raw.get(scene_id, "") or "")
-                        for scene_id, payload_key in AI_SCENE_CLIP_MAPPING.items()
-                    }
-                ai_clip_map: dict[str, str] = {}
-                for scene_id, raw_path in ai_clip_map_raw.items():
-                    if not raw_path:
-                        continue
-                    src_path = Path(raw_path)
-                    if not src_path.exists():
-                        continue
-                    ai_scene_path = final_scene_dir / f"{scene_id}_ai_noaudio.mp4"
-                    ai_clip_map[scene_id] = str(_strip_audio(src_path, ai_scene_path))
+            ai_clip_map: dict[str, str] = {}
+            for scene_id, raw_path in ai_clip_map_raw.items():
+                if not raw_path:
+                    continue
+                src_path = Path(raw_path)
+                if not src_path.exists():
+                    continue
+                ai_scene_path = final_scene_dir / f"{scene_id}_ai_noaudio.mp4"
+                ai_clip_map[scene_id] = str(_strip_audio(src_path, ai_scene_path))
 
-                final_scene_paths: list[Path] = []
-                final_durations: list[float] = []
-                for index, scene in enumerate(timeline.scenes):
-                    scene_id = scene.id
-                    still_scene_path = scene_paths[index]
-                    target_duration = get_scene_target_duration(scene_id, scene_duration_lookup)
-                    ai_clip_str = get_ai_clip_for_scene(scene_id, ai_clip_map)
-                    ai_clip_path = Path(ai_clip_str) if ai_clip_str else None
-                    final_scene_path = final_scene_dir / f"{scene_id}_final.mp4"
+            final_scene_paths: list[Path] = []
+            final_durations: list[float] = []
+            for index, scene in enumerate(timeline.scenes):
+                scene_id = scene.id
+                still_scene_path = scene_paths[index]
+                target_duration = get_scene_target_duration(scene_id, scene_duration_lookup)
+                ai_clip_str = get_ai_clip_for_scene(scene_id, ai_clip_map)
+                ai_clip_path = Path(ai_clip_str) if ai_clip_str else None
+                final_scene_path = final_scene_dir / f"{scene_id}_final.mp4"
+                built_path, strategy_used, ai_duration = build_scene_final_clip(
+                    scene_id=scene_id,
+                    still_scene_path=still_scene_path,
+                    ai_clip_path=ai_clip_path,
+                    target_duration=target_duration,
+                    output_path=final_scene_path,
+                    ffmpeg_commands=ffmpeg_commands,
+                    log_path=log_file,
+                    command_timeout_sec=command_timeout_sec,
+                    workdir=render_dir,
+                    cwd=project_root,
+                )
+                if not built_path.exists() or built_path.stat().st_size == 0:
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write(
+                                "final_scene_missing scene_id=%s expected=%s; rebuilding from still scene clip\n"
+                                % (scene_id, final_scene_path)
+                            )
                     built_path, strategy_used, ai_duration = build_scene_final_clip(
                         scene_id=scene_id,
                         still_scene_path=still_scene_path,
-                        ai_clip_path=ai_clip_path,
+                        ai_clip_path=None,
                         target_duration=target_duration,
                         output_path=final_scene_path,
                         ffmpeg_commands=ffmpeg_commands,
@@ -1042,43 +1066,74 @@ def render_video_from_timeline(
                         workdir=render_dir,
                         cwd=project_root,
                     )
-                    final_duration = get_media_duration(built_path)
-                    final_scene_paths.append(built_path)
-                    final_durations.append(target_duration)
-                    manifest_items.append(
-                        {
-                            "scene_id": scene_id,
-                            "target_duration": target_duration,
-                            "still_scene_path": str(still_scene_path),
-                            "ai_clip_path": str(ai_clip_path) if ai_clip_path else "",
-                            "ai_clip_exists": bool(ai_clip_path and ai_clip_path.exists()),
-                            "ai_clip_duration": ai_duration,
-                            "strategy_used": strategy_used,
-                            "final_scene_clip_path": str(built_path),
-                            "final_scene_clip_duration": final_duration,
-                        }
-                    )
-                    if log_file:
-                        with log_file.open("a", encoding="utf-8") as handle:
-                            handle.write(
-                                "final_scene scene_id=%s still_scene_path=%s ai_clip_path=%s target_duration=%.3f strategy=%s final_scene_clip=%s final_scene_duration=%s\n"
-                                % (
-                                    scene_id,
-                                    still_scene_path,
-                                    str(ai_clip_path) if ai_clip_path else "",
-                                    target_duration,
-                                    strategy_used,
-                                    built_path,
-                                    f"{final_duration:.3f}" if final_duration is not None else "unknown",
-                                )
+
+                final_duration = get_media_duration(built_path)
+                final_scene_paths.append(built_path)
+                final_durations.append(final_duration if final_duration > 0 else target_duration)
+                scene_record = {
+                    "scene_id": scene_id,
+                    "target_duration": target_duration,
+                    "still_scene_path": str(still_scene_path),
+                    "ai_clip_path": str(ai_clip_path) if ai_clip_path else "",
+                    "ai_clip_used": bool(ai_clip_path and ai_clip_path.exists()),
+                    "ai_clip_duration": ai_duration,
+                    "strategy_used": strategy_used,
+                    "final_clip_path": str(built_path),
+                    "duration": final_duration,
+                }
+                final_scene_records.append(scene_record)
+                manifest_items.append(scene_record)
+                if log_file:
+                    with log_file.open("a", encoding="utf-8") as handle:
+                        handle.write(
+                            "final_scene scene_id=%s still_scene_path=%s ai_clip_path=%s target_duration=%.3f strategy=%s final_scene_clip=%s final_scene_duration=%s\n"
+                            % (
+                                scene_id,
+                                still_scene_path,
+                                str(ai_clip_path) if ai_clip_path else "",
+                                target_duration,
+                                strategy_used,
+                                built_path,
+                                f"{final_duration:.3f}" if final_duration is not None else "unknown",
                             )
-                scene_paths = final_scene_paths
-                durations = final_durations
-            except Exception as _clips_err:
-                import logging as _log_cl
-                _log_cl.getLogger(__name__).warning(
-                    "ai_video_scene_slot_build failed project=%s err=%s", project_slug, _clips_err
+                        )
+
+            # Validate final scene clips before stitch; rebuild missing entries from still clips.
+            for idx, scene in enumerate(timeline.scenes):
+                final_scene_path = final_scene_paths[idx]
+                if final_scene_path.exists() and final_scene_path.stat().st_size > 0:
+                    continue
+                scene_id = scene.id
+                still_scene_path = scene_paths[idx]
+                target_duration = get_scene_target_duration(scene_id, scene_duration_lookup)
+                if log_file:
+                    with log_file.open("a", encoding="utf-8") as handle:
+                        handle.write(
+                            "final_scene_validation_error scene_id=%s missing_path=%s; rebuilding with still_only fallback\n"
+                            % (scene_id, final_scene_path)
+                        )
+                rebuilt_path, _, _ = build_scene_final_clip(
+                    scene_id=scene_id,
+                    still_scene_path=still_scene_path,
+                    ai_clip_path=None,
+                    target_duration=target_duration,
+                    output_path=final_scene_path,
+                    ffmpeg_commands=ffmpeg_commands,
+                    log_path=log_file,
+                    command_timeout_sec=command_timeout_sec,
+                    workdir=render_dir,
+                    cwd=project_root,
                 )
+                final_scene_paths[idx] = rebuilt_path
+                final_duration = get_media_duration(rebuilt_path)
+                final_durations[idx] = final_duration if final_duration > 0 else target_duration
+                final_scene_records[idx]["strategy_used"] = "still_only"
+                final_scene_records[idx]["final_clip_path"] = str(rebuilt_path)
+                final_scene_records[idx]["duration"] = final_duration
+                final_scene_records[idx]["ai_clip_used"] = False
+
+            scene_paths = final_scene_paths
+            durations = final_durations
 
             manifest_dir = project_root / "data" / "projects" / project_slug / "renders" / "final_render_logs"
             manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -1104,8 +1159,13 @@ def render_video_from_timeline(
                 with log_file.open("a", encoding="utf-8") as handle:
                     ordered_final_inputs = [str(path) for path in scene_paths]
                     scene_strategy_map = {item.get("scene_id", ""): item.get("strategy_used", "") for item in manifest_items}
+                    scene_duration_map = {
+                        item.get("scene_id", ""): float(item.get("duration", 0.0) or 0.0)
+                        for item in manifest_items
+                    }
                     handle.write(f"final_stitch ordered_final_inputs={ordered_final_inputs}\n")
                     handle.write(f"final_stitch scene_strategy_map={scene_strategy_map}\n")
+                    handle.write(f"final_stitch scene_duration_map={scene_duration_map}\n")
                     handle.write(f"final_stitch force_render_rebuild={bool(force_render_rebuild)}\n")
                     handle.write(f"final_stitch deleted_or_ignored_outputs={clean_deleted_outputs}\n")
             if (not safe_mode) and timeline.meta.crossfade and len(scene_paths) > 1:
@@ -1178,6 +1238,32 @@ def render_video_from_timeline(
             voiceover_duration: float | None = None
             if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
                 voiceover_duration = get_media_duration(timeline.meta.voiceover.path)
+                min_voiceover_tolerance = 0.1
+                if stitched_duration + min_voiceover_tolerance < voiceover_duration:
+                    scene_duration_debug = [
+                        {
+                            "scene_id": item.get("scene_id", ""),
+                            "strategy_used": item.get("strategy_used", ""),
+                            "duration": float(item.get("duration", 0.0) or 0.0),
+                            "final_clip_path": item.get("final_clip_path", ""),
+                        }
+                        for item in manifest_items
+                    ]
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write(
+                                "stitched_duration_check_failed stitched=%.3f voiceover=%.3f tolerance=%.3f scene_durations=%s\n"
+                                % (
+                                    stitched_duration,
+                                    voiceover_duration,
+                                    min_voiceover_tolerance,
+                                    scene_duration_debug,
+                                )
+                            )
+                    raise RuntimeError(
+                        "Stitched visual duration is shorter than voiceover before final mux "
+                        f"({stitched_duration:.3f}s < {voiceover_duration:.3f}s, tolerance={min_voiceover_tolerance:.3f}s)."
+                    )
             audio_target_duration = voiceover_duration if voiceover_duration is not None else timeline.total_duration
 
             include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
