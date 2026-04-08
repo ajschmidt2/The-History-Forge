@@ -280,6 +280,55 @@ def run_fal_video_test(
         result["error"] = INVALID_MODEL_HELP
         return result
 
+    return generate_fal_image_to_video(
+        model=model_clean,
+        prompt=prompt,
+        image_source=image_source,
+        output_path=output_path,
+        duration=duration,
+        aspect_ratio=aspect_ratio,
+        debug_request_path=debug_request_path,
+        debug_response_path=debug_response_path,
+        result_seed=result,
+    )
+
+
+def generate_fal_image_to_video(
+    *,
+    model: str,
+    prompt: str,
+    image_source: Any,
+    output_path: str | Path,
+    duration: int | None = None,
+    aspect_ratio: str | None = None,
+    debug_request_path: str | Path | None = None,
+    debug_response_path: str | Path | None = None,
+    result_seed: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Canonical fal image-to-video helper used by standalone tests and automation."""
+    output = Path(output_path)
+    result: dict[str, Any] = {
+        "ok": False,
+        "response_type": "none",
+        "response_keys": [],
+        "video_url": "",
+        "output_path": str(output),
+        "error": "",
+        "debug_request_path": str(debug_request_path or ""),
+        "debug_response_path": str(debug_response_path or ""),
+    }
+    if result_seed:
+        result.update(result_seed)
+        result["output_path"] = str(output)
+        result["debug_request_path"] = str(debug_request_path or result.get("debug_request_path") or "")
+        result["debug_response_path"] = str(debug_response_path or result.get("debug_response_path") or "")
+
+    model_ok, model_validation_detail = validate_fal_model_slug(model)
+    if not model_ok:
+        result["error"] = model_validation_detail
+        return result
+    model_clean = model_validation_detail
+
     try:
         import fal_client  # type: ignore
     except ImportError:
@@ -307,14 +356,15 @@ def run_fal_video_test(
     if aspect_ratio:
         args["aspect_ratio"] = str(aspect_ratio).strip()
 
-    _write_debug_json(
-        debug_request_path,
-        {
-            "model": model_clean,
-            "arguments": args,
-            "image_input_type": "data_uri" if normalized_image.startswith("data:") else "url_or_path",
-        },
-    )
+    if debug_request_path:
+        _write_debug_json(
+            Path(debug_request_path),
+            {
+                "model": model_clean,
+                "arguments": args,
+                "image_input_type": "data_uri" if normalized_image.startswith("data:") else "url_or_path",
+            },
+        )
 
     try:
         response = fal_client.subscribe(model_clean, arguments=args)
@@ -322,7 +372,8 @@ def run_fal_video_test(
         result["error"] = f"subscribe failed: {type(exc).__name__}: {str(exc)[:300]}"
         return result
 
-    _write_debug_json(debug_response_path, response)
+    if debug_response_path:
+        _write_debug_json(Path(debug_response_path), response)
 
     result["response_type"] = type(response).__name__
     if isinstance(response, dict):
@@ -335,7 +386,7 @@ def run_fal_video_test(
         result["error"] = extract_error_message(response) or "no video URL found in structured response"
         return result
 
-    if not download_video(video_url, output_path):
+    if not download_video(video_url, output):
         result["error"] = "video URL found but download/validation failed"
         return result
 
