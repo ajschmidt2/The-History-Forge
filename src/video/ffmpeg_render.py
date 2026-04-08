@@ -105,6 +105,10 @@ def get_media_duration(path: str | Path) -> float:
     return duration if math.isfinite(duration) and duration >= 0 else 0.0
 
 
+def ffprobe_duration(path: str | Path) -> float:
+    return get_media_duration(path)
+
+
 def get_scene_target_duration(scene_id: str, scene_duration_lookup: dict[str, float]) -> float:
     return float(scene_duration_lookup.get(scene_id, 0.0))
 
@@ -309,6 +313,58 @@ def build_final_scene_clip(
         workdir=workdir,
         cwd=cwd,
     )
+
+
+def concat_scene_finals(
+    scene_paths: list[Path],
+    stitched_path: Path,
+    log_path: Path | None,
+    ffmpeg_commands: list[list[str]],
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> None:
+    _concat_scenes(scene_paths, stitched_path, log_path, ffmpeg_commands, command_timeout_sec, workdir=workdir, cwd=cwd)
+
+
+def add_transition_between_scene_finals(
+    scene_paths: list[Path],
+    stitched_path: Path,
+    durations: list[float],
+    fps: int,
+    crossfade_duration: float,
+    log_path: Path | None,
+    ffmpeg_commands: list[list[str]],
+    transition_types: list[str] | None = None,
+    command_timeout_sec: float | None = None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> None:
+    _crossfade_scenes(
+        scene_paths=scene_paths,
+        stitched_path=stitched_path,
+        durations=durations,
+        fps=fps,
+        crossfade_duration=crossfade_duration,
+        log_path=log_path,
+        ffmpeg_commands=ffmpeg_commands,
+        transition_types=transition_types,
+        command_timeout_sec=command_timeout_sec,
+        workdir=workdir,
+        cwd=cwd,
+    )
+
+
+def validate_visual_timeline_duration(
+    stitched_duration: float,
+    expected_visual_duration: float,
+    min_ratio: float = 0.8,
+) -> tuple[bool, float]:
+    if expected_visual_duration <= 0:
+        return True, 1.0
+    ratio = stitched_duration / expected_visual_duration if stitched_duration > 0 else 0.0
+    return ratio >= min_ratio, ratio
+
 
 def _zoompan_filter(scene, fps: int, width: int, height: int) -> str:
     motion = scene.motion
@@ -1035,6 +1091,15 @@ def render_video_from_timeline(
             manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
             stitched_path = tmp_path / "stitched.mp4"
+            stitched_manifest: dict[str, object] = {
+                "project_id": project_slug,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "ordered_scene_final_inputs": [str(path) for path in scene_paths],
+                "expected_total_duration": float(sum(durations)),
+                "actual_stitched_duration": 0.0,
+                "transitions_applied": False,
+                "tpad_applied": False,
+            }
             if log_file:
                 with log_file.open("a", encoding="utf-8") as handle:
                     ordered_final_inputs = [str(path) for path in scene_paths]
@@ -1047,7 +1112,7 @@ def render_video_from_timeline(
                 effective_crossfade = _safe_crossfade_duration(durations, float(timeline.meta.crossfade_duration), fps)
                 try:
                     if effective_crossfade > 0:
-                        _crossfade_scenes(
+                        add_transition_between_scene_finals(
                             scene_paths,
                             stitched_path,
                             durations,
@@ -1060,13 +1125,14 @@ def render_video_from_timeline(
                             workdir=render_dir,
                             cwd=project_root,
                         )
+                        stitched_manifest["transitions_applied"] = True
                     else:
                         if log_file:
                             with log_file.open("a", encoding="utf-8") as handle:
                                 handle.write(
                                     "Crossfade disabled because crossfade_duration is too large for one or more scene durations.\n"
                                 )
-                        _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                        concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
                 except (RuntimeError, subprocess.CalledProcessError) as _xfade_err:
                     _xfade_msg = f"Crossfade graph failed ({_xfade_err}); falling back to concat."
                     if log_file:
@@ -1076,12 +1142,17 @@ def render_video_from_timeline(
                     _log_mod.getLogger(__name__).warning("xfade_fallback project=%s reason=%s", project_slug, _xfade_err)
                     if render_warnings is not None:
                         render_warnings.append(_xfade_msg)
-                    _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                    concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
             else:
                 if safe_mode and timeline.meta.crossfade and len(scene_paths) > 1 and log_file:
                     with log_file.open("a", encoding="utf-8") as handle:
                         handle.write("Safe mode enabled: skipping crossfade and using concat.\n")
-                _concat_scenes(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+
+            stitched_duration = ffprobe_duration(stitched_path)
+            expected_visual_duration = float(sum(durations))
+            timeline_ok, timeline_ratio = validate_visual_timeline_duration(stitched_duration, expected_visual_duration)
+            stitched_manifest["actual_stitched_duration"] = stitched_duration
 
             srt_path = output_path.with_name("captions.srt")
             ass_path = output_path.with_name("captions.ass")
@@ -1138,12 +1209,42 @@ def render_video_from_timeline(
                     ffmpeg_commands.append(retry_mix_cmd)
                     run_cmd(retry_mix_cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir, cwd=project_root)
 
+                mixed_audio_duration = ffprobe_duration(mixed_audio_path)
+                final_visual_clip_count = len(scene_paths)
+                if log_file:
+                    with log_file.open("a", encoding="utf-8") as handle:
+                        handle.write(
+                            "timeline_probe stitched_duration=%.3f mixed_audio_duration=%.3f expected_total_visual_duration=%.3f final_visual_clip_count=%d ratio=%.3f\n"
+                            % (
+                                stitched_duration,
+                                mixed_audio_duration,
+                                expected_visual_duration,
+                                final_visual_clip_count,
+                                timeline_ratio,
+                            )
+                        )
+
+                debug_mode = bool(safe_mode or os.getenv("HF_RENDER_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"})
+                allow_tpad_fallback = bool(os.getenv("HF_ALLOW_TPAD_FALLBACK", "").strip().lower() in {"1", "true", "yes", "on"})
+                tpad_applied = False
+                if not timeline_ok:
+                    timeline_msg = (
+                        "Visual timeline too short before final mux: "
+                        f"stitched={stitched_duration:.3f}s expected={expected_visual_duration:.3f}s ratio={timeline_ratio:.3f} "
+                        "(minimum allowed ratio=0.800)."
+                    )
+                    if debug_mode or not allow_tpad_fallback:
+                        raise RuntimeError(timeline_msg)
+                    if render_warnings is not None:
+                        render_warnings.append(timeline_msg + " Using guarded tpad fallback.")
+                    tpad_applied = True
+
                 mux_cmd = ["ffmpeg", "-y", "-i", str(stitched_path), "-i", str(mixed_audio_path)]
-                stitched_duration = get_media_duration(stitched_path)
                 vf_filters: list[str] = []
-                if voiceover_duration is not None and stitched_duration > 0 and voiceover_duration > stitched_duration:
+                if tpad_applied and voiceover_duration is not None and stitched_duration > 0 and voiceover_duration > stitched_duration:
                     pad_seconds = max(0.0, voiceover_duration - stitched_duration)
                     vf_filters.append(f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}")
+                    stitched_manifest["tpad_applied"] = True
                 if timeline.meta.burn_captions and ass_path.exists():
                     vf_filters.append(_subtitle_filter(ass_path))
                     subtitle_filter_applied = True
@@ -1167,10 +1268,7 @@ def render_video_from_timeline(
                         "+faststart",
                     ]
                 )
-                if voiceover_duration is not None:
-                    mux_cmd.extend(["-t", f"{voiceover_duration:.3f}"])
-                else:
-                    mux_cmd.extend(["-shortest"])
+                mux_cmd.extend(["-shortest"])
                 mux_cmd.append(str(tmp_output_path))
                 ffmpeg_commands.append(mux_cmd)
                 run_cmd(mux_cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir, cwd=project_root)
@@ -1182,6 +1280,9 @@ def render_video_from_timeline(
                 cmd.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-movflags", "+faststart", str(tmp_output_path)])
                 ffmpeg_commands.append(cmd)
                 run_cmd(cmd, log_path=log_file, timeout_sec=command_timeout_sec, workdir=render_dir, cwd=project_root)
+
+            stitched_manifest_path = manifest_dir / "stitched_manifest.json"
+            stitched_manifest_path.write_text(json.dumps(stitched_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
         if tmp_output_path.exists():
             tmp_output_path.replace(output_path)
