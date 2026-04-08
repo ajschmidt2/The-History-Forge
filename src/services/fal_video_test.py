@@ -15,6 +15,8 @@ from src.config import get_fal_key
 
 MIN_VIDEO_BYTES = 100_000
 DEFAULT_OUTPUT_DIR = Path("data/fal_video_tests")
+DEFAULT_FAL_VIDEO_MODEL = "fal-ai/wan/v2.2-5b/image-to-video"
+INVALID_MODEL_HELP = "Use a full fal model slug, e.g. fal-ai/wan/v2.2-5b/image-to-video"
 
 
 def get_fal_key_status() -> dict[str, Any]:
@@ -64,6 +66,19 @@ def _sanitize_obj(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_sanitize_obj(item) for item in obj[:50]]
     return obj
+
+
+def validate_fal_model_slug(model: Any) -> tuple[bool, str]:
+    """Validate a fal model slug and return (ok, normalized_model_or_error)."""
+    model_clean = str(model or "").strip()
+    if not model_clean:
+        return False, INVALID_MODEL_HELP
+    if not model_clean.startswith("fal-ai/"):
+        return False, INVALID_MODEL_HELP
+    remainder = model_clean[len("fal-ai/"):]
+    if "/" not in remainder:
+        return False, INVALID_MODEL_HELP
+    return True, model_clean
 
 
 def normalize_image_input(image_source: Any) -> str:
@@ -238,7 +253,11 @@ def run_fal_video_test(
 ) -> dict[str, Any]:
     """Run a standalone fal.ai image-to-video test using queue-backed subscribe."""
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    model_clean = (model or "fal-ai/wan-2.2/i2v-480p").strip()
+    model_clean = str(model or DEFAULT_FAL_VIDEO_MODEL).strip()
+    model_ok, model_validation_detail = validate_fal_model_slug(model_clean)
+    if model_ok:
+        model_clean = model_validation_detail
+
     out_dir = DEFAULT_OUTPUT_DIR / f"{timestamp}_{_slugify(model_clean)}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -256,6 +275,10 @@ def run_fal_video_test(
         "debug_request_path": str(debug_request_path),
         "debug_response_path": str(debug_response_path),
     }
+
+    if not model_ok:
+        result["error"] = INVALID_MODEL_HELP
+        return result
 
     try:
         import fal_client  # type: ignore

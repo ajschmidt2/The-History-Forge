@@ -38,8 +38,8 @@ SUPPORTED_PROVIDERS = ("falai", "veo", "sora")
 SUPPORTED_ASPECT_RATIOS = {"16:9", "9:16", "1:1"}
 MIN_VIDEO_BYTES = 1024
 FAL_VIDEO_MODELS = {
-    "text": "fal-ai/wan-2.2/t2v-480p",
-    "image": "fal-ai/wan-2.2/i2v-480p",
+    "text": "fal-ai/wan/v2.2-5b/text-to-video",
+    "image": "fal-ai/wan/v2.2-5b/image-to-video",
 }
 FAL_RESPONSE_CANDIDATE_KEYS = {
     "video",
