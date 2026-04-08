@@ -32,8 +32,8 @@ from src.ai_video_generation import (
 )
 from src.services.fal_video_test import (
     DEFAULT_FAL_VIDEO_MODEL,
-    generate_fal_image_to_video,
-    normalize_image_input,
+    WORKING_TEST_MODEL_SLUG,
+    generate_fal_video_from_image,
     validate_fal_model_slug,
 )
 
@@ -223,7 +223,7 @@ def _validate_fal_inputs(prompt: str, image_path: Optional[Path], aspect_ratio: 
     if image_path is not None and not image_path.exists():
         raise ValueError(f"Image path does not exist: {image_path}")
 
-def _resolve_fal_model(workflow_logger: logging.Logger) -> str:
+def _resolve_fal_model(workflow_logger: logging.Logger) -> tuple[str, bool]:
     override_model = str(get_secret("fal_video_model", "") or "").strip()
     candidate = override_model or DEFAULT_FAL_VIDEO_MODEL
     ok, detail = validate_fal_model_slug(candidate)
@@ -234,8 +234,8 @@ def _resolve_fal_model(workflow_logger: logging.Logger) -> str:
             DEFAULT_FAL_VIDEO_MODEL,
             detail,
         )
-        return DEFAULT_FAL_VIDEO_MODEL
-    return detail
+        return DEFAULT_FAL_VIDEO_MODEL, bool(override_model)
+    return detail, bool(override_model)
 
 
 def _generate_falai_video_clip(
@@ -252,17 +252,13 @@ def _generate_falai_video_clip(
     _validate_fal_inputs(prompt, image_path, aspect_ratio, duration_seconds)
     wlog = workflow_logger or logger
     debug_path = Path("data/projects") / project_id / "debug" / f"fal_video_{clip_label}.json"
-    model_slug = _resolve_fal_model(wlog)
+    model_slug, override_applied = _resolve_fal_model(wlog)
+    if not override_applied:
+        assert model_slug == WORKING_TEST_MODEL_SLUG
 
     if image_path is None:
         reason = "image input is required (upload, URL, data URI, or local file path)"
         _write_automation_debug(debug_path, {"ok": False, "clip": clip_label, "error": reason})
-        return False, reason
-
-    normalized_image = normalize_image_input(str(image_path))
-    if not normalized_image:
-        reason = "image input normalization failed"
-        _write_automation_debug(debug_path, {"ok": False, "clip": clip_label, "error": reason, "image_path": str(image_path)})
         return False, reason
 
     prompt_clean = str(prompt or "").strip()
@@ -271,29 +267,30 @@ def _generate_falai_video_clip(
         _write_automation_debug(debug_path, {"ok": False, "clip": clip_label, "error": reason, "image_path": str(image_path)})
         return False, reason
 
-    payload = {
-        "prompt": prompt_clean,
-        "image_url": normalized_image,
-        "duration": int(duration_seconds),
-        "aspect_ratio": str(aspect_ratio).strip(),
-    }
-    image_preview = f"{normalized_image[:96]}..." if len(normalized_image) > 96 else normalized_image
-    wlog.info(
-        "FAL_AUTOMATION_USING_SHARED_HELPER model=%s clip=%s payload_keys=%s image_input_preview=%s",
-        model_slug,
-        clip_label,
-        list(payload.keys()),
-        image_preview,
-    )
-
-    result = generate_fal_image_to_video(
-        model=model_slug,
-        prompt=prompt_clean,
-        image_source=normalized_image,
-        output_path=output_path,
-        duration=duration_seconds,
-        aspect_ratio=aspect_ratio,
-    )
+    wlog.info("FAL_AUTOMATION_SHARED_HELPER_ACTIVE")
+    try:
+        result = generate_fal_video_from_image(
+            model=model_slug,
+            prompt=prompt_clean,
+            image_source=str(image_path),
+            output_path=output_path,
+            duration=duration_seconds,
+            aspect_ratio=aspect_ratio,
+            fail_loud_missing_video_artifact=True,
+        )
+    except RuntimeError as exc:
+        _write_automation_debug(
+            debug_path,
+            {
+                "ok": False,
+                "model": model_slug,
+                "clip": clip_label,
+                "image_path": str(image_path),
+                "output_path": str(output_path),
+                "error": str(exc),
+            },
+        )
+        raise
 
     response_type = str(result.get("response_type") or "none")
     response_keys = result.get("response_keys") if isinstance(result.get("response_keys"), list) else []
@@ -310,8 +307,6 @@ def _generate_falai_video_clip(
         "model": model_slug,
         "clip": clip_label,
         "image_path": str(image_path),
-        "image_input_preview": image_preview,
-        "payload_keys": list(payload.keys()),
         "output_path": str(output_path),
         "response_type": response_type,
         "response_keys": response_keys,
