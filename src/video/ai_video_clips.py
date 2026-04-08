@@ -32,9 +32,9 @@ from src.ai_video_generation import (
 )
 from src.services.fal_video_test import (
     DEFAULT_FAL_VIDEO_MODEL,
-    extract_error_message as _shared_extract_error_message,
-    extract_video_url as _shared_extract_video_url,
     generate_fal_image_to_video,
+    normalize_image_input,
+    validate_fal_model_slug,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 SUPPORTED_PROVIDERS = ("falai", "veo", "sora")
 SUPPORTED_ASPECT_RATIOS = {"16:9", "9:16", "1:1"}
 MIN_VIDEO_BYTES = 1024
-FAL_VIDEO_IMAGE_MODEL = DEFAULT_FAL_VIDEO_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -209,64 +208,9 @@ def _call_veo_image_to_video(
     return video_bytes
 
 
-# ---------------------------------------------------------------------------
-# fal.ai: text-to-video and image-to-video via Wan 2.2
-# ---------------------------------------------------------------------------
-
-def extract_video_url(response: object) -> str | None:
-    """Extract first usable remote video URL from structured provider responses."""
-    return _shared_extract_video_url(response)
-
-
-def is_valid_video_file(path: Path) -> bool:
-    return path.exists() and path.is_file() and path.stat().st_size >= MIN_VIDEO_BYTES
-
-
-def extract_error_message(response: object) -> str | None:
-    return _shared_extract_error_message(response)
-
-
-def write_video_artifact(response: object, output_path: Path) -> tuple[bool, str]:
-    if response is None:
-        return False, "provider returned empty response"
-    extracted_error = extract_error_message(response)
-    if extracted_error:
-        return False, f"provider returned validation error: {extracted_error}"
-    if isinstance(response, (bytes, bytearray)):
-        output_path.write_bytes(bytes(response))
-        return (True, "") if is_valid_video_file(output_path) else (False, "provider returned byte payload but output file is too small")
-    if isinstance(response, str) and response.startswith(("http://", "https://")):
-        if maybe_download_file(response, output_path) and is_valid_video_file(output_path):
-            return True, ""
-        return False, "provider returned URL but download failed"
-    url = extract_video_url(response)
-    if url:
-        if maybe_download_file(url, output_path) and is_valid_video_file(output_path):
-            return True, ""
-        return False, "provider returned URL but download failed"
-    if isinstance(response, dict):
-        return False, "provider returned dict without video artifact"
-    if isinstance(response, list):
-        return False, "provider returned list without a video URL"
-    return False, f"provider returned unsupported response type={type(response).__name__}"
-
-
 def _write_automation_debug(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def maybe_download_file(url: str, output_path: Path) -> bool:
-    try:
-        with requests.get(url, timeout=180, stream=True) as resp:
-            resp.raise_for_status()
-            with output_path.open("wb") as handle:
-                for chunk in resp.iter_content(chunk_size=1024 * 128):
-                    if chunk:
-                        handle.write(chunk)
-    except Exception:  # noqa: BLE001
-        return False
-    return output_path.exists() and output_path.stat().st_size >= MIN_VIDEO_BYTES
 
 
 def _validate_fal_inputs(prompt: str, image_path: Optional[Path], aspect_ratio: str, duration_seconds: int) -> None:
@@ -278,6 +222,20 @@ def _validate_fal_inputs(prompt: str, image_path: Optional[Path], aspect_ratio: 
         raise ValueError("Duration must be between 1 and 12 seconds.")
     if image_path is not None and not image_path.exists():
         raise ValueError(f"Image path does not exist: {image_path}")
+
+def _resolve_fal_model(workflow_logger: logging.Logger) -> str:
+    override_model = str(get_secret("fal_video_model", "") or "").strip()
+    candidate = override_model or DEFAULT_FAL_VIDEO_MODEL
+    ok, detail = validate_fal_model_slug(candidate)
+    if not ok:
+        workflow_logger.warning(
+            "FAL_AUTOMATION_USING_SHARED_HELPER invalid_model_override=%s fallback_model=%s reason=%s",
+            override_model or "<none>",
+            DEFAULT_FAL_VIDEO_MODEL,
+            detail,
+        )
+        return DEFAULT_FAL_VIDEO_MODEL
+    return detail
 
 
 def _generate_falai_video_clip(
@@ -294,16 +252,44 @@ def _generate_falai_video_clip(
     _validate_fal_inputs(prompt, image_path, aspect_ratio, duration_seconds)
     wlog = workflow_logger or logger
     debug_path = Path("data/projects") / project_id / "debug" / f"fal_video_{clip_label}.json"
+    model_slug = _resolve_fal_model(wlog)
 
     if image_path is None:
         reason = "image input is required (upload, URL, data URI, or local file path)"
         _write_automation_debug(debug_path, {"ok": False, "clip": clip_label, "error": reason})
         return False, reason
 
+    normalized_image = normalize_image_input(str(image_path))
+    if not normalized_image:
+        reason = "image input normalization failed"
+        _write_automation_debug(debug_path, {"ok": False, "clip": clip_label, "error": reason, "image_path": str(image_path)})
+        return False, reason
+
+    prompt_clean = str(prompt or "").strip()
+    if not prompt_clean:
+        reason = "prompt cannot be empty"
+        _write_automation_debug(debug_path, {"ok": False, "clip": clip_label, "error": reason, "image_path": str(image_path)})
+        return False, reason
+
+    payload = {
+        "prompt": prompt_clean,
+        "image_url": normalized_image,
+        "duration": int(duration_seconds),
+        "aspect_ratio": str(aspect_ratio).strip(),
+    }
+    image_preview = f"{normalized_image[:96]}..." if len(normalized_image) > 96 else normalized_image
+    wlog.info(
+        "FAL_AUTOMATION_USING_SHARED_HELPER model=%s clip=%s payload_keys=%s image_input_preview=%s",
+        model_slug,
+        clip_label,
+        list(payload.keys()),
+        image_preview,
+    )
+
     result = generate_fal_image_to_video(
-        model=FAL_VIDEO_IMAGE_MODEL,
-        prompt=prompt,
-        image_source=str(image_path),
+        model=model_slug,
+        prompt=prompt_clean,
+        image_source=normalized_image,
         output_path=output_path,
         duration=duration_seconds,
         aspect_ratio=aspect_ratio,
@@ -313,7 +299,7 @@ def _generate_falai_video_clip(
     response_keys = result.get("response_keys") if isinstance(result.get("response_keys"), list) else []
     wlog.info(
         "FAL_AUTOMATION_USING_SHARED_HELPER model=%s clip=%s response_type=%s response_keys=%s",
-        FAL_VIDEO_IMAGE_MODEL,
+        model_slug,
         clip_label,
         response_type,
         response_keys[:20],
@@ -321,9 +307,11 @@ def _generate_falai_video_clip(
 
     metadata = {
         "ok": bool(result.get("ok")),
-        "model": FAL_VIDEO_IMAGE_MODEL,
+        "model": model_slug,
         "clip": clip_label,
         "image_path": str(image_path),
+        "image_input_preview": image_preview,
+        "payload_keys": list(payload.keys()),
         "output_path": str(output_path),
         "response_type": response_type,
         "response_keys": response_keys,
