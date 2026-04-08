@@ -118,6 +118,24 @@ def get_ai_clip_for_scene(scene_id: str, ai_clip_map: dict[str, str]) -> str | N
     return clip if clip else None
 
 
+def _tmp_output_path(output_path: Path) -> Path:
+    if output_path.suffix.lower() == ".mp4":
+        return output_path.with_name(f"{output_path.stem}_tmp.mp4")
+    return output_path.with_name(f"{output_path.stem}_tmp{output_path.suffix}")
+
+
+def _log_ffmpeg_io(input_paths: list[Path], tmp_output_path: Path, output_path: Path) -> None:
+    print(
+        "[ffmpeg_io] input=%s tmp_output=%s final_output=%s"
+        % (
+            [str(path) for path in input_paths],
+            str(tmp_output_path),
+            str(output_path),
+        ),
+        file=sys.stderr,
+    )
+
+
 def trim_clip(
     path: Path,
     duration: float,
@@ -128,6 +146,10 @@ def trim_clip(
     workdir: Path | None = None,
     cwd: Path | None = None,
 ) -> Path:
+    if path == output_path:
+        raise RuntimeError("FFmpeg input and output paths must differ")
+    tmp_output_path = _tmp_output_path(output_path)
+    _log_ffmpeg_io([path], tmp_output_path, output_path)
     cmd = [
         "ffmpeg",
         "-y",
@@ -146,10 +168,11 @@ def trim_clip(
         "24",
         "-pix_fmt",
         "yuv420p",
-        str(output_path),
+        str(tmp_output_path),
     ]
     ffmpeg_commands.append(cmd)
     run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    os.replace(tmp_output_path, output_path)
     return output_path
 
 
@@ -164,6 +187,10 @@ def concat_clips(
 ) -> Path:
     if not paths:
         raise ValueError("concat_clips requires at least one input path.")
+    if any(path == output_path for path in paths):
+        raise RuntimeError("FFmpeg input and output paths must differ")
+    tmp_output_path = _tmp_output_path(output_path)
+    _log_ffmpeg_io(paths, tmp_output_path, output_path)
     cmd = ["ffmpeg", "-y"]
     for clip_path in paths:
         cmd.extend(["-i", str(clip_path)])
@@ -183,11 +210,12 @@ def concat_clips(
             "24",
             "-pix_fmt",
             "yuv420p",
-            str(output_path),
+            str(tmp_output_path),
         ]
     )
     ffmpeg_commands.append(cmd)
     run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    os.replace(tmp_output_path, output_path)
     return output_path
 
 
@@ -224,16 +252,19 @@ def append_still_tail(
         workdir=workdir,
         cwd=cwd,
     )
-    return trim_clip(
+    normalized_output_path = output_path.with_name(f"{output_path.stem}_normalized{output_path.suffix}")
+    trim_clip(
         output_path,
         target_duration,
-        output_path,
+        normalized_output_path,
         ffmpeg_commands,
         log_path,
         command_timeout_sec,
         workdir=workdir,
         cwd=cwd,
     )
+    os.replace(normalized_output_path, output_path)
+    return output_path
 
 
 def build_scene_final_clip(
