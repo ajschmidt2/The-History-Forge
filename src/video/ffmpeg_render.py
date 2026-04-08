@@ -1243,6 +1243,27 @@ def render_video_from_timeline(
             _q2 = str(_proj_payload.get("ai_q2_clip_path", "") or "")
             _q3 = str(_proj_payload.get("ai_q3_clip_path", "") or "")
             _q4 = str(_proj_payload.get("ai_q4_clip_path", "") or "")
+
+            # Fallback: if payload paths are missing, scan assets/videos/ for ai clip files
+            from src.workflow.project_io import project_dir as _project_dir
+            _videos_dir = _project_dir(project_slug) / "assets" / "videos"
+            if not _opening:
+                _candidate = _videos_dir / "ai_opening_clip.mp4"
+                if _candidate.exists() and _candidate.stat().st_size > 0:
+                    _opening = str(_candidate)
+            if not _q2:
+                _candidate = _videos_dir / "ai_q2_clip.mp4"
+                if _candidate.exists() and _candidate.stat().st_size > 0:
+                    _q2 = str(_candidate)
+            if not _q3:
+                _candidate = _videos_dir / "ai_q3_clip.mp4"
+                if _candidate.exists() and _candidate.stat().st_size > 0:
+                    _q3 = str(_candidate)
+            if not _q4:
+                _candidate = _videos_dir / "ai_q4_clip.mp4"
+                if _candidate.exists() and _candidate.stat().st_size > 0:
+                    _q4 = str(_candidate)
+
             # Fall back to Streamlit session state (UI path)
             try:
                 import streamlit as _st_render
@@ -1261,6 +1282,11 @@ def render_video_from_timeline(
             # 8-scene projects and silently dropped 3 out of 4 clips on the
             # default 14-scene preset.
             _ai_scene_clip_mapping = compute_ai_scene_clip_mapping(len(timeline.scenes))
+            import logging as _log_cm
+            log = _log_cm.getLogger(__name__)
+            log.info("CLIP_MAPPING num_scenes=%d mapping=%s", len(timeline.scenes), _ai_scene_clip_mapping)
+            log.info("CLIP_SOURCES opening=%s q2=%s q3=%s q4=%s",
+                     bool(_opening), bool(_q2), bool(_q3), bool(_q4))
             _raw_clip_sources: dict[str, str] = {
                 "ai_opening_clip_path": _opening,
                 "ai_q2_clip_path": _q2,
@@ -1280,6 +1306,7 @@ def render_video_from_timeline(
                     continue
                 ai_scene_path = final_scene_dir / f"{scene_id}_ai_noaudio.mp4"
                 ai_clip_map[scene_id] = str(_strip_audio(src_path, ai_scene_path))
+            log.info("RESOLVED_CLIPS %s", {sid: Path(p).name for sid, p in ai_clip_map.items()})
             if log_file:
                 with log_file.open("a", encoding="utf-8") as handle:
                     handle.write(

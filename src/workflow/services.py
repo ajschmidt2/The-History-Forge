@@ -399,6 +399,13 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
         payload["ai_q4_clip_path"]      = str(q4_persisted)      if q4_persisted      else ""
         save_project_payload(project_id, payload)
 
+        _logger.info("ai_video_clips_payload_saved project=%s opening=%s q2=%s q3=%s q4=%s",
+                     project_id,
+                     bool(payload.get("ai_opening_clip_path")),
+                     bool(payload.get("ai_q2_clip_path")),
+                     bool(payload.get("ai_q3_clip_path")),
+                     bool(payload.get("ai_q4_clip_path")))
+
         # Also set session state for UI / Streamlit render path
         _try_set_session_state("auto_ai_opening_clip", str(opening_persisted) if opening_persisted else None)
         _try_set_session_state("auto_ai_q2_clip",      str(q2_persisted)      if q2_persisted      else None)
