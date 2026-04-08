@@ -155,8 +155,6 @@ def trim_clip(
         "-y",
         "-i",
         str(path),
-        "-vf",
-        f"tpad=stop_mode=clone:stop_duration={max(0.0, duration):.6f}",
         "-t",
         f"{max(0.0, duration):.6f}",
         "-an",
@@ -168,6 +166,38 @@ def trim_clip(
         "24",
         "-pix_fmt",
         "yuv420p",
+        str(tmp_output_path),
+    ]
+    ffmpeg_commands.append(cmd)
+    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    os.replace(tmp_output_path, output_path)
+    return output_path
+
+
+def trim_clip_copy(
+    path: Path,
+    duration: float,
+    output_path: Path,
+    ffmpeg_commands: list[list[str]],
+    log_path: Path | None,
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    if path == output_path:
+        raise RuntimeError("FFmpeg input and output paths must differ")
+    tmp_output_path = _tmp_output_path(output_path)
+    _log_ffmpeg_io([path], tmp_output_path, output_path)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(path),
+        "-t",
+        f"{max(0.0, duration):.6f}",
+        "-an",
+        "-c",
+        "copy",
         str(tmp_output_path),
     ]
     ffmpeg_commands.append(cmd)
@@ -252,18 +282,6 @@ def append_still_tail(
         workdir=workdir,
         cwd=cwd,
     )
-    normalized_output_path = output_path.with_name(f"{output_path.stem}_normalized{output_path.suffix}")
-    trim_clip(
-        output_path,
-        target_duration,
-        normalized_output_path,
-        ffmpeg_commands,
-        log_path,
-        command_timeout_sec,
-        workdir=workdir,
-        cwd=cwd,
-    )
-    os.replace(normalized_output_path, output_path)
     return output_path
 
 
@@ -279,6 +297,7 @@ def build_scene_final_clip(
     workdir: Path | None = None,
     cwd: Path | None = None,
 ) -> tuple[Path, str, float | None]:
+    duration_tolerance = 0.05
     ai_duration = get_media_duration(ai_clip_path) if ai_clip_path else None
     if ai_clip_path is None or not ai_clip_path.exists() or ai_duration is None or ai_duration <= 0:
         final_path = trim_clip(
@@ -291,10 +310,16 @@ def build_scene_final_clip(
             workdir=workdir,
             cwd=cwd,
         )
+        final_duration = ffprobe_duration(final_path)
+        if abs(final_duration - target_duration) > duration_tolerance:
+            raise RuntimeError(
+                f"Scene '{scene_id}' duration mismatch after still-only build: "
+                f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
+            )
         return final_path, "still_only", ai_duration
 
     if ai_duration >= target_duration - 0.01:
-        final_path = trim_clip(
+        final_path = trim_clip_copy(
             ai_clip_path,
             target_duration,
             output_path,
@@ -304,6 +329,12 @@ def build_scene_final_clip(
             workdir=workdir,
             cwd=cwd,
         )
+        final_duration = ffprobe_duration(final_path)
+        if abs(final_duration - target_duration) > duration_tolerance:
+            raise RuntimeError(
+                f"Scene '{scene_id}' duration mismatch after ai-only build: "
+                f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
+            )
         return final_path, "ai_only", ai_duration
 
     final_path = append_still_tail(
@@ -317,6 +348,12 @@ def build_scene_final_clip(
         workdir=workdir,
         cwd=cwd,
     )
+    final_duration = ffprobe_duration(final_path)
+    if abs(final_duration - target_duration) > duration_tolerance:
+        raise RuntimeError(
+            f"Scene '{scene_id}' duration mismatch after ai+tail build: "
+            f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
+        )
     return final_path, "ai_plus_still_tail", ai_duration
 
 
@@ -454,19 +491,12 @@ def _render_scene(
     source_path = Path(scene.image_path)
     is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
     if is_video:
-        try:
-            source_duration = max(0.0, float(get_media_duration(source_path))) if source_path.exists() else 0.0
-        except Exception:
-            source_duration = 0.0
-        pad_seconds = max(0.0, normalized_duration - source_duration)
         vf_parts = [
             f"scale={width}:{height}:force_original_aspect_ratio=decrease",
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black",
             f"fps={fps}",
             "setpts=PTS-STARTPTS",
         ]
-        if not bool(getattr(scene, "video_loop", False)) and pad_seconds > 0.01:
-            vf_parts.append(f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}")
         vf_parts.append("format=yuv420p")
         filter_chain = ",".join(vf_parts)
         cmd = ["ffmpeg", "-y", "-fflags", "+genpts"]
@@ -1101,6 +1131,7 @@ def render_video_from_timeline(
                 final_duration = get_media_duration(built_path)
                 final_scene_paths.append(built_path)
                 final_durations.append(final_duration if final_duration > 0 else target_duration)
+                duration_delta = final_duration - target_duration if final_duration > 0 else 0.0
                 scene_record = {
                     "scene_id": scene_id,
                     "target_duration": target_duration,
@@ -1111,21 +1142,24 @@ def render_video_from_timeline(
                     "strategy_used": strategy_used,
                     "final_clip_path": str(built_path),
                     "duration": final_duration,
+                    "duration_delta": duration_delta,
                 }
                 final_scene_records.append(scene_record)
                 manifest_items.append(scene_record)
                 if log_file:
                     with log_file.open("a", encoding="utf-8") as handle:
                         handle.write(
-                            "final_scene scene_id=%s still_scene_path=%s ai_clip_path=%s target_duration=%.3f strategy=%s final_scene_clip=%s final_scene_duration=%s\n"
+                            "final_scene scene_id=%s still_scene_path=%s ai_clip_path=%s target_duration=%.3f ai_duration=%s strategy=%s final_scene_clip=%s final_scene_duration=%s delta=%s\n"
                             % (
                                 scene_id,
                                 still_scene_path,
                                 str(ai_clip_path) if ai_clip_path else "",
                                 target_duration,
+                                f"{ai_duration:.3f}" if ai_duration is not None else "none",
                                 strategy_used,
                                 built_path,
                                 f"{final_duration:.3f}" if final_duration is not None else "unknown",
+                                f"{duration_delta:.3f}" if final_duration is not None else "unknown",
                             )
                         )
 
@@ -1161,10 +1195,32 @@ def render_video_from_timeline(
                 final_scene_records[idx]["strategy_used"] = "still_only"
                 final_scene_records[idx]["final_clip_path"] = str(rebuilt_path)
                 final_scene_records[idx]["duration"] = final_duration
+                final_scene_records[idx]["duration_delta"] = (final_duration - target_duration) if final_duration > 0 else 0.0
                 final_scene_records[idx]["ai_clip_used"] = False
 
             scene_paths = final_scene_paths
             durations = final_durations
+            total_visual_duration = float(sum(durations))
+            voiceover_duration_for_preflight: float | None = None
+            if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
+                voiceover_duration_for_preflight = get_media_duration(timeline.meta.voiceover.path)
+            if log_file:
+                with log_file.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        "pre_stitch_duration_check VISUAL_TOTAL=%.3f AUDIO_TOTAL=%s\n"
+                        % (
+                            total_visual_duration,
+                            f"{voiceover_duration_for_preflight:.3f}" if voiceover_duration_for_preflight is not None else "none",
+                        )
+                    )
+            if voiceover_duration_for_preflight is not None:
+                total_delta = abs(total_visual_duration - voiceover_duration_for_preflight)
+                if total_delta > 0.1:
+                    raise RuntimeError(
+                        "Visual/audio duration mismatch before stitching: "
+                        f"visual_total={total_visual_duration:.3f}s audio_total={voiceover_duration_for_preflight:.3f}s "
+                        f"delta={total_delta:.3f}s"
+                    )
 
             manifest_dir = project_root / "data" / "projects" / project_slug / "renders" / "final_render_logs"
             manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -1181,10 +1237,9 @@ def render_video_from_timeline(
                 "project_id": project_slug,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "ordered_scene_final_inputs": [str(path) for path in scene_paths],
-                "expected_total_duration": float(sum(durations)),
+                "expected_total_duration": float(total_visual_duration),
                 "actual_stitched_duration": 0.0,
                 "transitions_applied": False,
-                "tpad_applied": False,
             }
             if log_file:
                 with log_file.open("a", encoding="utf-8") as handle:
@@ -1241,7 +1296,7 @@ def render_video_from_timeline(
                 concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
 
             stitched_duration = ffprobe_duration(stitched_path)
-            expected_visual_duration = float(sum(durations))
+            expected_visual_duration = float(total_visual_duration)
             timeline_ok, timeline_ratio = validate_visual_timeline_duration(stitched_duration, expected_visual_duration)
             stitched_manifest["actual_stitched_duration"] = stitched_duration
 
@@ -1342,26 +1397,18 @@ def render_video_from_timeline(
                         )
 
                 debug_mode = bool(safe_mode or os.getenv("HF_RENDER_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"})
-                allow_tpad_fallback = bool(os.getenv("HF_ALLOW_TPAD_FALLBACK", "").strip().lower() in {"1", "true", "yes", "on"})
-                tpad_applied = False
                 if not timeline_ok:
                     timeline_msg = (
                         "Visual timeline too short before final mux: "
                         f"stitched={stitched_duration:.3f}s expected={expected_visual_duration:.3f}s ratio={timeline_ratio:.3f} "
                         "(minimum allowed ratio=0.800)."
                     )
-                    if debug_mode or not allow_tpad_fallback:
-                        raise RuntimeError(timeline_msg)
-                    if render_warnings is not None:
-                        render_warnings.append(timeline_msg + " Using guarded tpad fallback.")
-                    tpad_applied = True
+                    if debug_mode and render_warnings is not None:
+                        render_warnings.append(timeline_msg)
+                    raise RuntimeError(timeline_msg)
 
                 mux_cmd = ["ffmpeg", "-y", "-i", str(stitched_path), "-i", str(mixed_audio_path)]
                 vf_filters: list[str] = []
-                if tpad_applied and voiceover_duration is not None and stitched_duration > 0 and voiceover_duration > stitched_duration:
-                    pad_seconds = max(0.0, voiceover_duration - stitched_duration)
-                    vf_filters.append(f"tpad=stop_mode=clone:stop_duration={pad_seconds:.3f}")
-                    stitched_manifest["tpad_applied"] = True
                 if timeline.meta.burn_captions and ass_path.exists():
                     vf_filters.append(_subtitle_filter(ass_path))
                     subtitle_filter_applied = True
