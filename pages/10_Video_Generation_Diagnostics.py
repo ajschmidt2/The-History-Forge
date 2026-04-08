@@ -15,6 +15,7 @@ import requests
 import streamlit as st
 
 from src.config import get_secret, resolve_openai_key
+from src.services.fal_video_test import get_fal_key_status, run_fal_video_test
 from src.constants import SUPABASE_VIDEO_BUCKET
 from app import require_passcode
 
@@ -25,6 +26,94 @@ st.caption(
     "Diagnose Google Veo and OpenAI Sora video generation end-to-end. "
     "Each check tells you exactly what is wrong and how to fix it."
 )
+
+
+st.divider()
+with st.expander("🧪 fal.ai Video Test", expanded=False):
+    st.caption(
+        "Standalone fal.ai image-to-video probe. This does not run the automation workflow; "
+        "it directly calls `fal_client.subscribe(...)` with your test inputs."
+    )
+
+    fal_status = get_fal_key_status()
+    if fal_status.get("ok"):
+        st.success(
+            f"fal key detected (prefix: {fal_status.get('key_prefix', '')}…, "
+            f"length: {fal_status.get('key_length', 0)})."
+        )
+    else:
+        st.warning(f"fal key not available: {fal_status.get('error', 'unknown error')}")
+
+    fal_model = st.text_input(
+        "Model endpoint",
+        value="fal-ai/wan-2.2/i2v-480p",
+        key="fal_video_test_model",
+        help="Known fal.ai image-to-video endpoint. You can override for other models.",
+    )
+    fal_prompt = st.text_area(
+        "Prompt",
+        value="A cinematic slow dolly shot through drifting fog, dramatic lighting.",
+        key="fal_video_test_prompt",
+        height=100,
+    )
+
+    fal_image_file = st.file_uploader(
+        "Input image",
+        type=["png", "jpg", "jpeg", "webp"],
+        key="fal_video_test_image",
+        help="Upload a reference image for image-to-video.",
+    )
+    fal_duration = st.number_input(
+        "Duration (optional)",
+        min_value=1,
+        max_value=16,
+        value=5,
+        step=1,
+        key="fal_video_test_duration",
+    )
+    fal_aspect_ratio = st.text_input(
+        "Aspect ratio (optional)",
+        value="16:9",
+        key="fal_video_test_aspect_ratio",
+    )
+
+    if st.button("Run fal.ai Video Test", key="run_fal_video_test_btn"):
+        if not fal_image_file:
+            st.error("Please upload an image before running the fal.ai video test.")
+        elif not fal_prompt.strip():
+            st.error("Prompt cannot be empty.")
+        else:
+            with st.spinner("Running fal.ai test via queue-backed subscribe()…"):
+                fal_result = run_fal_video_test(
+                    model=fal_model,
+                    prompt=fal_prompt,
+                    image_source=fal_image_file,
+                    duration=int(fal_duration),
+                    aspect_ratio=fal_aspect_ratio.strip() or None,
+                )
+
+            st.subheader("fal.ai test result")
+            st.json({
+                "ok": fal_result.get("ok"),
+                "response_type": fal_result.get("response_type"),
+                "response_keys": fal_result.get("response_keys"),
+                "video_url": fal_result.get("video_url"),
+                "output_path": fal_result.get("output_path"),
+                "error": fal_result.get("error"),
+                "debug_request_path": fal_result.get("debug_request_path"),
+                "debug_response_path": fal_result.get("debug_response_path"),
+            })
+
+            if fal_result.get("ok") and fal_result.get("output_path"):
+                st.success("Video generated and saved successfully.")
+                st.video(fal_result["output_path"])
+            else:
+                st.error(f"Test failed: {fal_result.get('error', 'unknown error')}")
+                st.caption(
+                    "Review sanitized response metadata in the debug JSON files shown above "
+                    "to inspect payload shape and extraction behavior."
+                )
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
