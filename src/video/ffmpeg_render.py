@@ -70,6 +70,78 @@ def compute_ai_scene_clip_mapping(num_scenes: int) -> dict[str, str]:
 AI_SCENE_CLIP_MAPPING = compute_ai_scene_clip_mapping(8)
 
 
+def resolve_ai_clip_scene_mapping(
+    timeline: Timeline,
+    raw_clip_paths: dict[str, str],
+    source_images_meta: dict[str, str] | None,
+    render_warnings: list[str] | None = None,
+) -> tuple[dict[str, str], str, list[str]]:
+    """Return ``(scene_id -> raw clip path, strategy_used, orphan_messages)``.
+
+    Maps each AI video clip (keyed by payload key such as
+    ``ai_opening_clip_path``) to the scene in ``timeline`` that should
+    receive it. When ``source_images_meta`` contains the original source
+    image basenames captured at generation time, this uses a stable
+    filename-based lookup that survives scene-count changes. When the
+    metadata is missing (legacy projects generated before this field was
+    persisted) it falls back to the ``compute_ai_scene_clip_mapping``
+    formula so existing renders keep working.
+
+    Any payload key whose recorded source image no longer exists in the
+    timeline is treated as orphaned — it is omitted from the returned
+    mapping and a ``ai_clip_orphan …`` message is appended to both the
+    returned orphan list and (if provided) ``render_warnings``. Callers
+    can log the orphan messages to a render log file.
+    """
+
+    def _usable_meta(meta: dict[str, str] | None) -> bool:
+        if not meta:
+            return False
+        return any(str(value or "").strip() for value in meta.values())
+
+    orphan_messages: list[str] = []
+
+    if _usable_meta(source_images_meta):
+        image_to_scene_id: dict[str, str] = {}
+        for scene in timeline.scenes:
+            if scene.image_path:
+                image_to_scene_id[Path(scene.image_path).name.lower()] = scene.id
+
+        mapping: dict[str, str] = {}
+        for payload_key, clip_path in raw_clip_paths.items():
+            if not clip_path:
+                continue
+            source_filename = str(
+                (source_images_meta or {}).get(payload_key, "") or ""
+            ).strip().lower()
+            if not source_filename:
+                continue
+            scene_id = image_to_scene_id.get(source_filename)
+            if scene_id:
+                mapping[scene_id] = clip_path
+            else:
+                orphan_msg = (
+                    "ai_clip_orphan payload_key=%s source=%s available_scenes=%s"
+                    % (
+                        payload_key,
+                        source_filename,
+                        sorted(image_to_scene_id.keys()),
+                    )
+                )
+                orphan_messages.append(orphan_msg)
+                if render_warnings is not None:
+                    render_warnings.append(orphan_msg)
+        return mapping, "filename_based", orphan_messages
+
+    # Legacy projects generated before ai_clip_source_images was persisted.
+    formula_mapping = compute_ai_scene_clip_mapping(len(timeline.scenes))
+    mapping = {
+        scene_id: (raw_clip_paths.get(payload_key, "") or "")
+        for scene_id, payload_key in formula_mapping.items()
+    }
+    return mapping, "formula_fallback", orphan_messages
+
+
 def _normalize_xfade_transition(name: str | None) -> str:
     transition = str(name or "fade").strip().lower()
     return transition if transition in _ALLOWED_XFADE_TRANSITIONS else "fade"
@@ -1253,24 +1325,31 @@ def render_video_from_timeline(
             except Exception:
                 pass
 
-            # Map each AI clip payload key to the scene it was actually
-            # generated for. The clip generator picks image indices 0, n//4,
-            # n//2, 3n//4 where n == number of scenes in this project; we must
-            # use the same formula here so q2/q3/q4 clips land on the correct
-            # scene. The old hardcoded s01/s03/s05/s07 mapping only worked for
-            # 8-scene projects and silently dropped 3 out of 4 clips on the
-            # default 14-scene preset.
-            _ai_scene_clip_mapping = compute_ai_scene_clip_mapping(len(timeline.scenes))
+            # Map each AI clip to the scene it was actually generated for.
+            # Prefer the filename-based lookup using ai_clip_source_images
+            # recorded at generation time (survives scene-count changes);
+            # fall back to the formula-based mapping for legacy projects
+            # that predate that metadata.
             _raw_clip_sources: dict[str, str] = {
                 "ai_opening_clip_path": _opening,
                 "ai_q2_clip_path": _q2,
                 "ai_q3_clip_path": _q3,
                 "ai_q4_clip_path": _q4,
             }
-            ai_clip_map_raw: dict[str, str] = {
-                scene_id: _raw_clip_sources.get(payload_key, "") or ""
-                for scene_id, payload_key in _ai_scene_clip_mapping.items()
-            }
+            _source_images_meta = _proj_payload.get("ai_clip_source_images") or {}
+            if not isinstance(_source_images_meta, dict):
+                _source_images_meta = {}
+            ai_clip_map_raw, _mapping_strategy, _orphan_msgs = resolve_ai_clip_scene_mapping(
+                timeline=timeline,
+                raw_clip_paths=_raw_clip_sources,
+                source_images_meta=_source_images_meta,
+                render_warnings=render_warnings,
+            )
+            if log_file and _orphan_msgs:
+                with log_file.open("a", encoding="utf-8") as handle:
+                    for _msg in _orphan_msgs:
+                        handle.write(_msg + "\n")
+
             ai_clip_map: dict[str, str] = {}
             for scene_id, raw_path in ai_clip_map_raw.items():
                 if not raw_path:
@@ -1283,10 +1362,11 @@ def render_video_from_timeline(
             if log_file:
                 with log_file.open("a", encoding="utf-8") as handle:
                     handle.write(
-                        "ai_clip_scene_mapping scene_count=%d mapping=%s resolved=%s\n"
+                        "ai_clip_scene_mapping strategy=%s scene_count=%d source_images=%s resolved=%s\n"
                         % (
+                            _mapping_strategy,
                             len(timeline.scenes),
-                            _ai_scene_clip_mapping,
+                            _source_images_meta,
                             {sid: Path(p).name for sid, p in ai_clip_map.items()},
                         )
                     )

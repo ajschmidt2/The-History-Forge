@@ -699,10 +699,15 @@ def generate_ai_video_clips(
         image = _get_image(img_idx)
         prompt = _get_prompt(prompt_idx)
         out_path = tmp_dir / out_name
+        # Basename of the source image this clip was animated from. Persisted
+        # with the clip so the render pipeline can attach it to the right scene
+        # by filename even if the scene count changes between generation and
+        # render.
+        source_image_name = image.name if image else None
 
         _wlog.info(
             "ai_video_clips [%s]: generating %s clip image=%s prompt_idx=%d prompt_len=%d",
-            provider, label, image.name if image else "none", prompt_idx, len(prompt),
+            provider, label, source_image_name or "none", prompt_idx, len(prompt),
         )
 
         reason = ""
@@ -725,7 +730,12 @@ def generate_ai_video_clips(
                     _wlog.warning("ai_video_clips [veo]: no image for %s clip, skipping", label)
                     results.append(None)
                     failures.append(label)
-                    manifest["clips"].append({"label": label, "status": "failed", "reason": "missing source image"})
+                    manifest["clips"].append({
+                        "label": label,
+                        "status": "failed",
+                        "reason": "missing source image",
+                        "source_image": source_image_name,
+                    })
                     continue
                 video_bytes = _call_veo_image_to_video(
                     image, prompt, aspect_ratio, duration_seconds
@@ -747,7 +757,14 @@ def generate_ai_video_clips(
                 provider, label, out_path, len(video_bytes), elapsed,
             )
             results.append(out_path)
-            manifest["clips"].append({"label": label, "status": "success", "path": str(out_path), "bytes": len(video_bytes), "elapsed_seconds": round(elapsed, 2)})
+            manifest["clips"].append({
+                "label": label,
+                "status": "success",
+                "path": str(out_path),
+                "bytes": len(video_bytes),
+                "elapsed_seconds": round(elapsed, 2),
+                "source_image": source_image_name,
+            })
             if callable(clip_done_callback):
                 try:
                     clip_done_callback(label, True, len(results), len(clip_targets))
@@ -759,7 +776,13 @@ def generate_ai_video_clips(
             _wlog.warning("ai_video_clips [%s]: %s clip failed reason=%s elapsed=%.2fs", provider, label, reason, elapsed)
             results.append(None)
             failures.append(label)
-            manifest["clips"].append({"label": label, "status": "failed", "reason": reason, "elapsed_seconds": round(elapsed, 2)})
+            manifest["clips"].append({
+                "label": label,
+                "status": "failed",
+                "reason": reason,
+                "elapsed_seconds": round(elapsed, 2),
+                "source_image": source_image_name,
+            })
             if callable(clip_done_callback):
                 try:
                     clip_done_callback(label, False, len(results), len(clip_targets))

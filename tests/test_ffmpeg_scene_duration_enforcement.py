@@ -5,12 +5,44 @@ from pathlib import Path
 import pytest
 
 from src.video import ffmpeg_render
+from src.video.timeline_schema import CaptionStyle, Meta, Scene, Timeline
 
 
 def _touch(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"x")
     return path
+
+
+def _make_timeline(num_scenes: int) -> Timeline:
+    """Build a minimal Timeline with ``s01..sNN`` scenes whose image_path
+    basenames match the scene id (e.g. ``s04.png``). This mirrors what the
+    real image generator produces and lets tests exercise the filename-based
+    AI-clip scene lookup without hitting ffmpeg or ffprobe.
+    """
+    scenes = [
+        Scene(
+            id=f"s{i:02d}",
+            image_path=f"/tmp/project/assets/images/s{i:02d}.png",
+            start=0.0,
+            duration=3.0,
+        )
+        for i in range(1, num_scenes + 1)
+    ]
+    meta = Meta(
+        project_id="test-project",
+        title="test",
+        caption_style=CaptionStyle(),
+    )
+    return Timeline(meta=meta, scenes=scenes)
+
+
+_DUMMY_CLIP_PATHS = {
+    "ai_opening_clip_path": "/clips/opening.mp4",
+    "ai_q2_clip_path":      "/clips/q2.mp4",
+    "ai_q3_clip_path":      "/clips/q3.mp4",
+    "ai_q4_clip_path":      "/clips/q4.mp4",
+}
 
 
 def test_build_scene_final_clip_uses_copy_trim_for_ai_only(monkeypatch, tmp_path) -> None:
@@ -84,6 +116,107 @@ def test_compute_ai_scene_clip_mapping_collapses_small_scene_counts_without_losi
     assert ffmpeg_render.compute_ai_scene_clip_mapping(0) == {
         "s01": "ai_opening_clip_path",
     }
+
+
+def test_resolve_ai_clip_scene_mapping_survives_scene_count_shrink() -> None:
+    """Clips generated on a 14-scene project must still attach to the
+    surviving scenes when the user later renders with only 8 scenes.
+
+    Source images recorded at generation time: s01.png, s04.png, s08.png,
+    s11.png. After shrinking to 8 scenes, s11.png no longer exists so its
+    clip must be reported as orphaned (added to ``render_warnings`` and
+    returned in the orphan list) while the other three clips still attach
+    to the scenes that currently hold their source filenames.
+    """
+    source_images_meta = {
+        "ai_opening_clip_path": "s01.png",
+        "ai_q2_clip_path":      "s04.png",
+        "ai_q3_clip_path":      "s08.png",
+        "ai_q4_clip_path":      "s11.png",
+    }
+    render_warnings: list[str] = []
+    mapping, strategy, orphans = ffmpeg_render.resolve_ai_clip_scene_mapping(
+        timeline=_make_timeline(8),
+        raw_clip_paths=_DUMMY_CLIP_PATHS,
+        source_images_meta=source_images_meta,
+        render_warnings=render_warnings,
+    )
+
+    assert strategy == "filename_based"
+    assert mapping == {
+        "s01": "/clips/opening.mp4",
+        "s04": "/clips/q2.mp4",
+        "s08": "/clips/q3.mp4",
+    }
+    assert len(orphans) == 1
+    assert "ai_q4_clip_path" in orphans[0]
+    assert "s11.png" in orphans[0]
+    assert render_warnings == orphans
+
+
+def test_resolve_ai_clip_scene_mapping_survives_scene_count_grow() -> None:
+    """Clips generated on an 8-scene project must still attach to the
+    correct scenes when the user later renders with 14 scenes. All four
+    source images still exist so nothing is orphaned, and the 10 new
+    scenes get no AI clip.
+    """
+    source_images_meta = {
+        "ai_opening_clip_path": "s01.png",
+        "ai_q2_clip_path":      "s03.png",
+        "ai_q3_clip_path":      "s05.png",
+        "ai_q4_clip_path":      "s07.png",
+    }
+    mapping, strategy, orphans = ffmpeg_render.resolve_ai_clip_scene_mapping(
+        timeline=_make_timeline(14),
+        raw_clip_paths=_DUMMY_CLIP_PATHS,
+        source_images_meta=source_images_meta,
+    )
+
+    assert strategy == "filename_based"
+    assert mapping == {
+        "s01": "/clips/opening.mp4",
+        "s03": "/clips/q2.mp4",
+        "s05": "/clips/q3.mp4",
+        "s07": "/clips/q4.mp4",
+    }
+    assert orphans == []
+
+
+def test_resolve_ai_clip_scene_mapping_falls_back_to_formula_for_legacy_payload() -> None:
+    """Projects generated before ``ai_clip_source_images`` was persisted do
+    not carry per-clip source metadata. The helper must fall back to the
+    formula-based ``compute_ai_scene_clip_mapping`` path so existing projects
+    keep rendering their AI clips.
+    """
+    mapping, strategy, orphans = ffmpeg_render.resolve_ai_clip_scene_mapping(
+        timeline=_make_timeline(14),
+        raw_clip_paths=_DUMMY_CLIP_PATHS,
+        source_images_meta=None,
+    )
+
+    assert strategy == "formula_fallback"
+    assert mapping == {
+        "s01": "/clips/opening.mp4",
+        "s04": "/clips/q2.mp4",
+        "s08": "/clips/q3.mp4",
+        "s11": "/clips/q4.mp4",
+    }
+    assert orphans == []
+
+    # An empty dict (present but all values blank) must also trigger the
+    # fallback, not produce an empty mapping.
+    mapping_empty, strategy_empty, _ = ffmpeg_render.resolve_ai_clip_scene_mapping(
+        timeline=_make_timeline(14),
+        raw_clip_paths=_DUMMY_CLIP_PATHS,
+        source_images_meta={
+            "ai_opening_clip_path": "",
+            "ai_q2_clip_path": "",
+            "ai_q3_clip_path": "",
+            "ai_q4_clip_path": "",
+        },
+    )
+    assert strategy_empty == "formula_fallback"
+    assert mapping_empty == mapping
 
 
 def test_build_scene_final_clip_raises_when_duration_mismatch(monkeypatch, tmp_path) -> None:

@@ -397,6 +397,41 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
         payload["ai_q2_clip_path"]      = str(q2_persisted)      if q2_persisted      else ""
         payload["ai_q3_clip_path"]      = str(q3_persisted)      if q3_persisted      else ""
         payload["ai_q4_clip_path"]      = str(q4_persisted)      if q4_persisted      else ""
+
+        # Persist the source image basename each clip was generated from.
+        # The render pipeline uses this for a filename-based scene lookup so
+        # clips still land on the correct scene even if the user changes the
+        # scene count between clip generation and render. Falls back to the
+        # formula-based mapping on projects that predate this metadata.
+        ai_clip_source_images: dict[str, str] = {
+            "ai_opening_clip_path": "",
+            "ai_q2_clip_path": "",
+            "ai_q3_clip_path": "",
+            "ai_q4_clip_path": "",
+        }
+        try:
+            from src.video.ai_video_clips import _clip_manifest_path
+            _label_to_payload_key = {
+                "opening": "ai_opening_clip_path",
+                "q2":      "ai_q2_clip_path",
+                "q3":      "ai_q3_clip_path",
+                "q4":      "ai_q4_clip_path",
+            }
+            _manifest_file = _clip_manifest_path(project_id)
+            if _manifest_file.exists():
+                _manifest_data = json.loads(_manifest_file.read_text(encoding="utf-8"))
+                for _entry in _manifest_data.get("clips", []) or []:
+                    _key = _label_to_payload_key.get(str(_entry.get("label", "")))
+                    _src = str(_entry.get("source_image") or "")
+                    if _key and _src:
+                        ai_clip_source_images[_key] = _src
+        except Exception as _meta_exc:  # noqa: BLE001
+            _logger.warning(
+                "ai_video_clips project=%s could not read source image metadata from manifest: %s",
+                project_id, _meta_exc,
+            )
+        payload["ai_clip_source_images"] = ai_clip_source_images
+
         save_project_payload(project_id, payload)
 
         # Also set session state for UI / Streamlit render path
