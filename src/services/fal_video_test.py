@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 from datetime import datetime
@@ -16,7 +17,9 @@ from src.config import get_fal_key
 MIN_VIDEO_BYTES = 100_000
 DEFAULT_OUTPUT_DIR = Path("data/fal_video_tests")
 DEFAULT_FAL_VIDEO_MODEL = "fal-ai/wan/v2.2-5b/image-to-video"
+WORKING_TEST_MODEL_SLUG = DEFAULT_FAL_VIDEO_MODEL
 INVALID_MODEL_HELP = "Use a full fal model slug, e.g. fal-ai/wan/v2.2-5b/image-to-video"
+logger = logging.getLogger(__name__)
 
 
 def get_fal_key_status() -> dict[str, Any]:
@@ -293,7 +296,7 @@ def run_fal_video_test(
     )
 
 
-def generate_fal_image_to_video(
+def generate_fal_video_from_image(
     *,
     model: str,
     prompt: str,
@@ -304,6 +307,7 @@ def generate_fal_image_to_video(
     debug_request_path: str | Path | None = None,
     debug_response_path: str | Path | None = None,
     result_seed: dict[str, Any] | None = None,
+    fail_loud_missing_video_artifact: bool = False,
 ) -> dict[str, Any]:
     """Canonical fal image-to-video helper used by standalone tests and automation."""
     output = Path(output_path)
@@ -355,6 +359,10 @@ def generate_fal_image_to_video(
         args["duration"] = int(duration)
     if aspect_ratio:
         args["aspect_ratio"] = str(aspect_ratio).strip()
+    image_preview = f"{normalized_image[:96]}..." if len(normalized_image) > 96 else normalized_image
+    logger.info("FAL_SHARED_HELPER model_slug=%s", model_clean)
+    logger.info("FAL_SHARED_HELPER payload_keys=%s", list(args.keys()))
+    logger.info("FAL_SHARED_HELPER image_input_preview=%s", image_preview)
 
     if debug_request_path:
         _write_debug_json(
@@ -378,11 +386,17 @@ def generate_fal_image_to_video(
     result["response_type"] = type(response).__name__
     if isinstance(response, dict):
         result["response_keys"] = list(response.keys())
+    logger.info("FAL_SHARED_HELPER response_type=%s", result["response_type"])
+    logger.info("FAL_SHARED_HELPER response_keys=%s", result.get("response_keys", []))
 
+    response_has_video_key = isinstance(response, dict) and "video" in response
     video_url = extract_video_url(response)
     result["video_url"] = _sanitize_url(video_url) if isinstance(video_url, str) else ""
+    logger.info("FAL_SHARED_HELPER extracted_video_url=%s", result["video_url"])
 
     if not video_url:
+        if fail_loud_missing_video_artifact and not response_has_video_key:
+            raise RuntimeError("Workflow fal response missing video artifact")
         result["error"] = extract_error_message(response) or "no video URL found in structured response"
         return result
 
@@ -391,4 +405,10 @@ def generate_fal_image_to_video(
         return result
 
     result["ok"] = True
+    logger.info("FAL_SHARED_HELPER output_path=%s", str(output))
     return result
+
+
+def generate_fal_image_to_video(**kwargs: Any) -> dict[str, Any]:
+    """Backward-compatible alias for the canonical helper."""
+    return generate_fal_video_from_image(**kwargs)
