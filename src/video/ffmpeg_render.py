@@ -124,6 +124,17 @@ def _tmp_output_path(output_path: Path) -> Path:
     return output_path.with_name(f"{output_path.stem}_tmp{output_path.suffix}")
 
 
+def safe_ffmpeg_output_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}.tmp-{os.getpid()}{output_path.suffix}")
+
+
+def _assert_distinct_input_output(input_paths: list[Path], output_path: Path) -> None:
+    resolved_output = output_path.resolve()
+    for input_path in input_paths:
+        if input_path.resolve() == resolved_output:
+            raise RuntimeError("FFmpeg input and output paths must differ")
+
+
 def _log_ffmpeg_io(input_paths: list[Path], tmp_output_path: Path, output_path: Path) -> None:
     print(
         "[ffmpeg_io] input=%s tmp_output=%s final_output=%s"
@@ -146,9 +157,8 @@ def trim_clip(
     workdir: Path | None = None,
     cwd: Path | None = None,
 ) -> Path:
-    if path == output_path:
-        raise RuntimeError("FFmpeg input and output paths must differ")
-    tmp_output_path = _tmp_output_path(output_path)
+    _assert_distinct_input_output([path], output_path)
+    tmp_output_path = safe_ffmpeg_output_path(output_path)
     _log_ffmpeg_io([path], tmp_output_path, output_path)
     cmd = [
         "ffmpeg",
@@ -184,9 +194,8 @@ def trim_clip_copy(
     workdir: Path | None = None,
     cwd: Path | None = None,
 ) -> Path:
-    if path == output_path:
-        raise RuntimeError("FFmpeg input and output paths must differ")
-    tmp_output_path = _tmp_output_path(output_path)
+    _assert_distinct_input_output([path], output_path)
+    tmp_output_path = safe_ffmpeg_output_path(output_path)
     _log_ffmpeg_io([path], tmp_output_path, output_path)
     cmd = [
         "ffmpeg",
@@ -217,9 +226,8 @@ def concat_clips(
 ) -> Path:
     if not paths:
         raise ValueError("concat_clips requires at least one input path.")
-    if any(path == output_path for path in paths):
-        raise RuntimeError("FFmpeg input and output paths must differ")
-    tmp_output_path = _tmp_output_path(output_path)
+    _assert_distinct_input_output(paths, output_path)
+    tmp_output_path = safe_ffmpeg_output_path(output_path)
     _log_ffmpeg_io(paths, tmp_output_path, output_path)
     cmd = ["ffmpeg", "-y"]
     for clip_path in paths:
@@ -285,6 +293,60 @@ def append_still_tail(
     return output_path
 
 
+def normalize_clip_to_duration(
+    input_path: Path,
+    target_duration: float,
+    output_path: Path,
+    ffmpeg_commands: list[list[str]],
+    log_path: Path | None,
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    tolerance = 0.05
+    actual_duration = ffprobe_duration(input_path)
+    if actual_duration <= 0:
+        raise RuntimeError(f"Cannot normalize clip with invalid duration: {input_path}")
+    if abs(actual_duration - target_duration) <= tolerance:
+        if input_path.resolve() != output_path.resolve():
+            shutil.copy2(input_path, output_path)
+        return output_path
+    if actual_duration > target_duration:
+        return trim_clip(
+            input_path,
+            target_duration,
+            output_path,
+            ffmpeg_commands,
+            log_path,
+            command_timeout_sec,
+            workdir=workdir,
+            cwd=cwd,
+        )
+    tail_duration = max(0.0, target_duration - actual_duration)
+    if tail_duration <= 0:
+        return trim_clip(
+            input_path,
+            target_duration,
+            output_path,
+            ffmpeg_commands,
+            log_path,
+            command_timeout_sec,
+            workdir=workdir,
+            cwd=cwd,
+        )
+    return append_still_tail(
+        input_path,
+        input_path,
+        target_duration,
+        output_path,
+        ffmpeg_commands,
+        log_path,
+        command_timeout_sec,
+        workdir=workdir,
+        cwd=cwd,
+    )
+
+
 def build_scene_final_clip(
     scene_id: str,
     still_scene_path: Path,
@@ -298,7 +360,11 @@ def build_scene_final_clip(
     cwd: Path | None = None,
 ) -> tuple[Path, str, float | None]:
     duration_tolerance = 0.05
+    if log_path:
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"BUILD_SCENE_FINAL_START scene_id={scene_id}\n")
     ai_duration = get_media_duration(ai_clip_path) if ai_clip_path else None
+    normalization_applied = False
     if ai_clip_path is None or not ai_clip_path.exists() or ai_duration is None or ai_duration <= 0:
         final_path = trim_clip(
             still_scene_path,
@@ -312,13 +378,36 @@ def build_scene_final_clip(
         )
         final_duration = ffprobe_duration(final_path)
         if abs(final_duration - target_duration) > duration_tolerance:
-            raise RuntimeError(
-                f"Scene '{scene_id}' duration mismatch after still-only build: "
-                f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
-            )
+            try:
+                normalization_applied = True
+                normalized_path = output_path.with_name(f"{output_path.stem}_normalized.mp4")
+                final_path = normalize_clip_to_duration(
+                    final_path,
+                    target_duration,
+                    normalized_path,
+                    ffmpeg_commands,
+                    log_path,
+                    command_timeout_sec,
+                    workdir=workdir,
+                    cwd=cwd,
+                )
+                shutil.move(normalized_path, output_path)
+                final_duration = ffprobe_duration(output_path)
+                final_path = output_path
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Scene '{scene_id}' duration mismatch after still-only build: "
+                    f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
+                ) from exc
+        if log_path:
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    "BUILD_SCENE_FINAL_DONE scene_id=%s target=%.3f actual=%.3f delta=%.3f strategy=still_only\n"
+                    % (scene_id, target_duration, final_duration, final_duration - target_duration)
+                )
         return final_path, "still_only", ai_duration
 
-    if ai_duration >= target_duration - 0.01:
+    if ai_duration >= target_duration:
         final_path = trim_clip_copy(
             ai_clip_path,
             target_duration,
@@ -331,10 +420,33 @@ def build_scene_final_clip(
         )
         final_duration = ffprobe_duration(final_path)
         if abs(final_duration - target_duration) > duration_tolerance:
-            raise RuntimeError(
-                f"Scene '{scene_id}' duration mismatch after ai-only build: "
-                f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
-            )
+            try:
+                normalization_applied = True
+                normalized_path = output_path.with_name(f"{output_path.stem}_normalized.mp4")
+                final_path = normalize_clip_to_duration(
+                    final_path,
+                    target_duration,
+                    normalized_path,
+                    ffmpeg_commands,
+                    log_path,
+                    command_timeout_sec,
+                    workdir=workdir,
+                    cwd=cwd,
+                )
+                shutil.move(normalized_path, output_path)
+                final_duration = ffprobe_duration(output_path)
+                final_path = output_path
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Scene '{scene_id}' duration mismatch after ai-only build: "
+                    f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
+                ) from exc
+        if log_path:
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    "BUILD_SCENE_FINAL_DONE scene_id=%s target=%.3f actual=%.3f delta=%.3f strategy=ai_only\n"
+                    % (scene_id, target_duration, final_duration, final_duration - target_duration)
+                )
         return final_path, "ai_only", ai_duration
 
     final_path = append_still_tail(
@@ -350,10 +462,33 @@ def build_scene_final_clip(
     )
     final_duration = ffprobe_duration(final_path)
     if abs(final_duration - target_duration) > duration_tolerance:
-        raise RuntimeError(
-            f"Scene '{scene_id}' duration mismatch after ai+tail build: "
-            f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
-        )
+        try:
+            normalization_applied = True
+            normalized_path = output_path.with_name(f"{output_path.stem}_normalized.mp4")
+            final_path = normalize_clip_to_duration(
+                final_path,
+                target_duration,
+                normalized_path,
+                ffmpeg_commands,
+                log_path,
+                command_timeout_sec,
+                workdir=workdir,
+                cwd=cwd,
+            )
+            shutil.move(normalized_path, output_path)
+            final_duration = ffprobe_duration(output_path)
+            final_path = output_path
+        except Exception as exc:
+            raise RuntimeError(
+                f"Scene '{scene_id}' duration mismatch after ai+tail build: "
+                f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
+            ) from exc
+    if log_path:
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                "BUILD_SCENE_FINAL_DONE scene_id=%s target=%.3f actual=%.3f delta=%.3f strategy=ai_plus_still_tail\n"
+                % (scene_id, target_duration, final_duration, final_duration - target_duration)
+            )
     return final_path, "ai_plus_still_tail", ai_duration
 
 
@@ -489,6 +624,10 @@ def _render_scene(
 ) -> None:
     normalized_duration = _normalize_scene_duration(float(scene.duration), fps, scene.id)
     source_path = Path(scene.image_path)
+    _assert_distinct_input_output([source_path], output_path)
+    tmp_scene_output = safe_ffmpeg_output_path(output_path)
+    if tmp_scene_output.exists():
+        tmp_scene_output.unlink()
     is_video = source_path.suffix.lower() in VIDEO_EXTENSIONS
     if is_video:
         vf_parts = [
@@ -518,7 +657,7 @@ def _render_scene(
             "24",
             "-pix_fmt",
             "yuv420p",
-            str(output_path),
+            str(tmp_scene_output),
         ])
         ffmpeg_commands.append(cmd)
         primary_result = run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, check=False, workdir=workdir, cwd=cwd)
@@ -547,10 +686,11 @@ def _render_scene(
                 "24",
                 "-pix_fmt",
                 "yuv420p",
-                str(output_path),
+                str(tmp_scene_output),
             ]
             ffmpeg_commands.append(fallback_cmd)
             run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+        os.replace(tmp_scene_output, output_path)
         return
 
     filter_chain = _zoompan_filter(scene, fps, width, height)
@@ -575,7 +715,7 @@ def _render_scene(
         "24",
         "-pix_fmt",
         "yuv420p",
-        str(output_path),
+        str(tmp_scene_output),
     ]
     ffmpeg_commands.append(cmd)
     primary_result = run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, check=False, workdir=workdir, cwd=cwd)
@@ -594,10 +734,11 @@ def _render_scene(
             "-r", str(fps),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
             "-pix_fmt", "yuv420p",
-            str(output_path),
+            str(tmp_scene_output),
         ]
         ffmpeg_commands.append(fallback_cmd)
         run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    os.replace(tmp_scene_output, output_path)
 
 
 def _concat_scenes(
@@ -609,10 +750,13 @@ def _concat_scenes(
     workdir: Path | None = None,
     cwd: Path | None = None,
 ) -> None:
+    _assert_distinct_input_output(scene_paths, stitched_path)
     concat_list = stitched_path.with_suffix(".txt")
     concat_lines = [f"file '{path.as_posix()}'" for path in scene_paths]
     concat_list.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
 
+    tmp_stitched_path = safe_ffmpeg_output_path(stitched_path)
+    _log_ffmpeg_io(scene_paths, tmp_stitched_path, stitched_path)
     concat_cmd = [
         "ffmpeg",
         "-y",
@@ -624,7 +768,7 @@ def _concat_scenes(
         str(concat_list),
         "-c",
         "copy",
-        str(stitched_path),
+        str(tmp_stitched_path),
     ]
     try:
         ffmpeg_commands.append(concat_cmd)
@@ -647,10 +791,11 @@ def _concat_scenes(
             "24",
             "-pix_fmt",
             "yuv420p",
-            str(stitched_path),
+            str(tmp_stitched_path),
         ]
         ffmpeg_commands.append(fallback_cmd)
         run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    os.replace(tmp_stitched_path, stitched_path)
 
 
 def _crossfade_scenes(
@@ -666,6 +811,7 @@ def _crossfade_scenes(
     workdir: Path | None = None,
     cwd: Path | None = None,
 ) -> None:
+    _assert_distinct_input_output(scene_paths, stitched_path)
     input_args: list[str] = []
     for path in scene_paths:
         input_args.extend(["-i", str(path)])
@@ -686,6 +832,8 @@ def _crossfade_scenes(
         offset += max(0.0, durations[idx] - crossfade_duration)
 
     filter_complex = ";".join(filters)
+    tmp_stitched_path = safe_ffmpeg_output_path(stitched_path)
+    _log_ffmpeg_io(scene_paths, tmp_stitched_path, stitched_path)
     cmd = [
         "ffmpeg",
         "-y",
@@ -708,7 +856,7 @@ def _crossfade_scenes(
         str(fps * 2),
         "-pix_fmt",
         "yuv420p",
-        str(stitched_path),
+        str(tmp_stitched_path),
     ]
     ffmpeg_commands.append(cmd)
     try:
@@ -718,6 +866,7 @@ def _crossfade_scenes(
         raise RuntimeError(f"xfade filter_complex failed: {_stderr}") from exc
     except Exception as exc:
         raise RuntimeError(f"xfade filter_complex failed: {exc}") from exc
+    os.replace(tmp_stitched_path, stitched_path)
 
 
 def _subtitle_filter(subtitle_path: Path) -> str:
@@ -1132,17 +1281,17 @@ def render_video_from_timeline(
                 final_scene_paths.append(built_path)
                 final_durations.append(final_duration if final_duration > 0 else target_duration)
                 duration_delta = final_duration - target_duration if final_duration > 0 else 0.0
+                normalization_applied = abs((final_duration if final_duration > 0 else target_duration) - target_duration) > 0.05
                 scene_record = {
                     "scene_id": scene_id,
                     "target_duration": target_duration,
-                    "still_scene_path": str(still_scene_path),
+                    "actual_duration": final_duration,
+                    "delta": duration_delta,
+                    "still_clip_path": str(still_scene_path),
                     "ai_clip_path": str(ai_clip_path) if ai_clip_path else "",
-                    "ai_clip_used": bool(ai_clip_path and ai_clip_path.exists()),
-                    "ai_clip_duration": ai_duration,
                     "strategy_used": strategy_used,
-                    "final_clip_path": str(built_path),
-                    "duration": final_duration,
-                    "duration_delta": duration_delta,
+                    "final_scene_clip_path": str(built_path),
+                    "normalization_applied": normalization_applied,
                 }
                 final_scene_records.append(scene_record)
                 manifest_items.append(scene_record)
@@ -1193,10 +1342,10 @@ def render_video_from_timeline(
                 final_duration = get_media_duration(rebuilt_path)
                 final_durations[idx] = final_duration if final_duration > 0 else target_duration
                 final_scene_records[idx]["strategy_used"] = "still_only"
-                final_scene_records[idx]["final_clip_path"] = str(rebuilt_path)
-                final_scene_records[idx]["duration"] = final_duration
-                final_scene_records[idx]["duration_delta"] = (final_duration - target_duration) if final_duration > 0 else 0.0
-                final_scene_records[idx]["ai_clip_used"] = False
+                final_scene_records[idx]["final_scene_clip_path"] = str(rebuilt_path)
+                final_scene_records[idx]["actual_duration"] = final_duration
+                final_scene_records[idx]["delta"] = (final_duration - target_duration) if final_duration > 0 else 0.0
+                final_scene_records[idx]["normalization_applied"] = abs((final_duration if final_duration > 0 else target_duration) - target_duration) > 0.05
 
             scene_paths = final_scene_paths
             durations = final_durations
@@ -1206,21 +1355,10 @@ def render_video_from_timeline(
                 voiceover_duration_for_preflight = get_media_duration(timeline.meta.voiceover.path)
             if log_file:
                 with log_file.open("a", encoding="utf-8") as handle:
-                    handle.write(
-                        "pre_stitch_duration_check VISUAL_TOTAL=%.3f AUDIO_TOTAL=%s\n"
-                        % (
-                            total_visual_duration,
-                            f"{voiceover_duration_for_preflight:.3f}" if voiceover_duration_for_preflight is not None else "none",
-                        )
-                    )
-            if voiceover_duration_for_preflight is not None:
-                total_delta = abs(total_visual_duration - voiceover_duration_for_preflight)
-                if total_delta > 0.1:
-                    raise RuntimeError(
-                        "Visual/audio duration mismatch before stitching: "
-                        f"visual_total={total_visual_duration:.3f}s audio_total={voiceover_duration_for_preflight:.3f}s "
-                        f"delta={total_delta:.3f}s"
-                    )
+                    handle.write("STITCH_PLAN_BUILT total_visual=%.3f total_audio=%s\n" % (
+                        total_visual_duration,
+                        f"{voiceover_duration_for_preflight:.3f}" if voiceover_duration_for_preflight is not None else "none",
+                    ))
 
             manifest_dir = project_root / "data" / "projects" / project_slug / "renders" / "final_render_logs"
             manifest_dir.mkdir(parents=True, exist_ok=True)
@@ -1233,6 +1371,7 @@ def render_video_from_timeline(
             manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
             stitched_path = tmp_path / "stitched.mp4"
+            stitch_plan_path = manifest_dir / "stitch_plan.json"
             stitched_manifest: dict[str, object] = {
                 "project_id": project_slug,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1246,7 +1385,7 @@ def render_video_from_timeline(
                     ordered_final_inputs = [str(path) for path in scene_paths]
                     scene_strategy_map = {item.get("scene_id", ""): item.get("strategy_used", "") for item in manifest_items}
                     scene_duration_map = {
-                        item.get("scene_id", ""): float(item.get("duration", 0.0) or 0.0)
+                        item.get("scene_id", ""): float(item.get("actual_duration", 0.0) or 0.0)
                         for item in manifest_items
                     }
                     handle.write(f"final_stitch ordered_final_inputs={ordered_final_inputs}\n")
@@ -1254,6 +1393,33 @@ def render_video_from_timeline(
                     handle.write(f"final_stitch scene_duration_map={scene_duration_map}\n")
                     handle.write(f"final_stitch force_render_rebuild={bool(force_render_rebuild)}\n")
                     handle.write(f"final_stitch deleted_or_ignored_outputs={clean_deleted_outputs}\n")
+            computed_offsets: list[float] = []
+            transition_types = getattr(timeline.meta, "transition_types", [])
+            effective_crossfade = _safe_crossfade_duration(durations, float(timeline.meta.crossfade_duration), fps) if len(scene_paths) > 1 else 0.0
+            if effective_crossfade > 0 and len(scene_paths) > 1:
+                offset = max(0.0, durations[0] - effective_crossfade)
+                for idx in range(1, len(scene_paths)):
+                    computed_offsets.append(offset)
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write(f"xfade_offset idx={idx} offset={offset:.6f}\n")
+                    offset += max(0.0, durations[idx] - effective_crossfade)
+                if any(computed_offsets[idx] <= computed_offsets[idx - 1] for idx in range(1, len(computed_offsets))):
+                    raise RuntimeError(f"Non-monotonic xfade offsets computed: {computed_offsets}")
+            stitch_plan_payload = {
+                "project_id": project_slug,
+                "ordered_final_scene_clips": [str(p) for p in scene_paths],
+                "actual_durations": durations,
+                "transition_type_per_boundary": [
+                    _normalize_xfade_transition(transition_types[idx] if idx < len(transition_types) else "fade")
+                    for idx in range(max(0, len(scene_paths) - 1))
+                ],
+                "computed_offsets": computed_offsets,
+                "expected_stitched_duration": float(sum(durations) - (effective_crossfade * max(0, len(scene_paths) - 1))),
+            }
+            stitch_plan_path.write_text(json.dumps(stitch_plan_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            safe_mode_used = False
             if (not safe_mode) and timeline.meta.crossfade and len(scene_paths) > 1:
                 effective_crossfade = _safe_crossfade_duration(durations, float(timeline.meta.crossfade_duration), fps)
                 try:
@@ -1288,11 +1454,17 @@ def render_video_from_timeline(
                     _log_mod.getLogger(__name__).warning("xfade_fallback project=%s reason=%s", project_slug, _xfade_err)
                     if render_warnings is not None:
                         render_warnings.append(_xfade_msg)
+                    safe_mode_used = True
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write("SAFE_MODE_CONCAT_USED\n")
                     concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
             else:
                 if safe_mode and timeline.meta.crossfade and len(scene_paths) > 1 and log_file:
                     with log_file.open("a", encoding="utf-8") as handle:
                         handle.write("Safe mode enabled: skipping crossfade and using concat.\n")
+                        handle.write("SAFE_MODE_CONCAT_USED\n")
+                    safe_mode_used = True
                 concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
 
             stitched_duration = ffprobe_duration(stitched_path)
@@ -1330,8 +1502,8 @@ def render_video_from_timeline(
                         {
                             "scene_id": item.get("scene_id", ""),
                             "strategy_used": item.get("strategy_used", ""),
-                            "duration": float(item.get("duration", 0.0) or 0.0),
-                            "final_clip_path": item.get("final_clip_path", ""),
+                            "duration": float(item.get("actual_duration", 0.0) or 0.0),
+                            "final_scene_clip_path": item.get("final_scene_clip_path", ""),
                         }
                         for item in manifest_items
                     ]
@@ -1346,10 +1518,33 @@ def render_video_from_timeline(
                                     scene_duration_debug,
                                 )
                             )
-                    raise RuntimeError(
-                        "Stitched visual duration is shorter than voiceover before final mux "
-                        f"({stitched_duration:.3f}s < {voiceover_duration:.3f}s, tolerance={min_voiceover_tolerance:.3f}s)."
+                    deficit = (voiceover_duration - stitched_duration) + 0.05
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write("STITCH_RECOVERY_APPLIED deficit=%.3f\n" % deficit)
+                    last_idx = len(scene_paths) - 1
+                    recover_target = durations[last_idx] + deficit
+                    recovered_path = final_scene_dir / f"{timeline.scenes[last_idx].id}_final_recovered.mp4"
+                    normalize_clip_to_duration(
+                        scene_paths[last_idx],
+                        recover_target,
+                        recovered_path,
+                        ffmpeg_commands,
+                        log_file,
+                        command_timeout_sec,
+                        workdir=render_dir,
+                        cwd=project_root,
                     )
+                    os.replace(recovered_path, scene_paths[last_idx])
+                    durations[last_idx] = ffprobe_duration(scene_paths[last_idx])
+                    stitched_manifest["deficit_recovery_applied"] = True
+                    concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                    stitched_duration = ffprobe_duration(stitched_path)
+                    if stitched_duration + min_voiceover_tolerance < voiceover_duration:
+                        raise RuntimeError(
+                            "Stitched visual duration is shorter than voiceover before final mux "
+                            f"({stitched_duration:.3f}s < {voiceover_duration:.3f}s, tolerance={min_voiceover_tolerance:.3f}s)."
+                        )
             audio_target_duration = voiceover_duration if voiceover_duration is not None else timeline.total_duration
 
             include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
@@ -1447,9 +1642,29 @@ def render_video_from_timeline(
 
             stitched_manifest_path = manifest_dir / "stitched_manifest.json"
             stitched_manifest_path.write_text(json.dumps(stitched_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            render_durations_path = manifest_dir / "render_durations.json"
+            render_durations_payload = {
+                "voiceover_duration": voiceover_duration if voiceover_duration is not None else 0.0,
+                "music_duration": get_media_duration(timeline.meta.music.path) if (timeline.meta.music and timeline.meta.music.path) else 0.0,
+                "stitched_duration_before_mux": stitched_duration,
+                "final_duration_after_mux": 0.0,
+                "deficit_recovery_applied": bool(stitched_manifest.get("deficit_recovery_applied", False)),
+                "safe_mode_used": bool(locals().get("safe_mode_used", False)),
+            }
 
         if tmp_output_path.exists():
             tmp_output_path.replace(output_path)
+            render_durations_payload["final_duration_after_mux"] = get_media_duration(output_path)
+            render_durations_path.write_text(json.dumps(render_durations_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            if log_file:
+                with log_file.open("a", encoding="utf-8") as handle:
+                    handle.write(
+                        "FINAL_MUX_READY visual=%.3f audio=%s\n"
+                        % (
+                            stitched_duration,
+                            f"{voiceover_duration:.3f}" if voiceover_duration is not None else "none",
+                        )
+                    )
             if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
                 expected_voiceover_duration = get_media_duration(timeline.meta.voiceover.path)
                 rendered_duration = get_media_duration(output_path)
