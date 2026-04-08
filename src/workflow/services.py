@@ -78,6 +78,7 @@ class PipelineOptions:
     script_profile: str = "youtube_short_60s"
     ai_video_provider: str = "falai"
     image_provider: str = "falai"
+    force_render_rebuild: bool = False
 
 
 @dataclass(slots=True)
@@ -502,7 +503,8 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
                 progress({"step": step_name, "status": StepStatus.SKIPPED, "index": idx, "total": total, "message": "disabled"})
             continue
 
-        should_resume_existing = mode == "resume_missing" and not overwrite and _step_outputs_exist(project_id, step_name)
+        render_force_rebuild = step_name == "render" and bool(cfg.pipeline.force_render_rebuild)
+        should_resume_existing = mode == "resume_missing" and not overwrite and not render_force_rebuild and _step_outputs_exist(project_id, step_name)
         if should_resume_existing:
             if step_name == "voiceover":
                 result.completed_steps.append(step_name)
@@ -1569,7 +1571,17 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     report_path = project_dir(project_id) / "renders" / "render_report.json"
     try:
         ensure_ffmpeg_exists()
-        render_video_from_timeline(timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=2000, render_warnings=warnings)
+        if cfg.force_render_rebuild:
+            _invalidate_render_derivatives(project_id, include_render_artifacts=True)
+        render_video_from_timeline(
+            timeline_path,
+            output_path,
+            log_path=log_path,
+            report_path=report_path,
+            max_width=2000,
+            render_warnings=warnings,
+            force_render_rebuild=cfg.force_render_rebuild,
+        )
         try:
             _sb_store.upload_video(project_id, output_path.name, output_path)
         except Exception:
@@ -1581,7 +1593,15 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
                 fallback_timeline_path = project_dir(project_id) / "renders" / "timeline.no_captions.json"
                 fallback_timeline_path.parent.mkdir(parents=True, exist_ok=True)
                 fallback_timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
-                render_video_from_timeline(fallback_timeline_path, output_path, log_path=log_path, report_path=report_path, max_width=2000, render_warnings=warnings)
+                render_video_from_timeline(
+                    fallback_timeline_path,
+                    output_path,
+                    log_path=log_path,
+                    report_path=report_path,
+                    max_width=2000,
+                    render_warnings=warnings,
+                    force_render_rebuild=cfg.force_render_rebuild,
+                )
                 warnings.append(f"Caption render failed ({exc}); continued without burned captions.")
             except Exception as retry_exc:  # noqa: BLE001
                 update_step_status(project_id, "render", StepStatus.FAILED, error=str(retry_exc))
@@ -1610,12 +1630,20 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     return StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": str(output_path), "warnings": warnings, "preflight": preflight})
 
 
-def _invalidate_render_derivatives(project_id: str) -> None:
+def _invalidate_render_derivatives(project_id: str, include_render_artifacts: bool = False) -> None:
     pdir = project_dir(project_id)
     renders_dir = pdir / "renders"
     for candidate in [pdir / "timeline.json", renders_dir / "final.mp4"]:
         if candidate.exists():
             candidate.unlink()
+    if include_render_artifacts:
+        for candidate in [
+            renders_dir / "stitched.mp4",
+            renders_dir / "final_tmp.mp4",
+            renders_dir / "final_render_logs" / "scene_manifest.json",
+        ]:
+            if candidate.exists():
+                candidate.unlink()
     for timeline_artifact in renders_dir.glob("timeline*.json"):
         if timeline_artifact.exists():
             timeline_artifact.unlink()
