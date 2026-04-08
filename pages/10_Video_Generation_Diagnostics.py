@@ -46,9 +46,9 @@ with st.expander("🧪 fal.ai Video Test", expanded=False):
 
     fal_model = st.text_input(
         "Model endpoint",
-        value="fal-ai/wan-2.2/i2v-480p",
+        value="fal-ai/wan/v2.2-5b/image-to-video",
         key="fal_video_test_model",
-        help="Known fal.ai image-to-video endpoint. You can override for other models.",
+        help="Use a full fal slug, e.g. fal-ai/wan/v2.2-5b/image-to-video.",
     )
     fal_prompt = st.text_area(
         "Prompt",
