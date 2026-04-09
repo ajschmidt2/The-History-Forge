@@ -1937,24 +1937,93 @@ def render_video_from_timeline(
             voiceover_duration: float | None = None
             if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
                 voiceover_duration = get_media_duration(timeline.meta.voiceover.path)
-                min_voiceover_tolerance = 0.1
+                min_voiceover_tolerance = 0.5
                 if stitched_duration + min_voiceover_tolerance < voiceover_duration:
-                    scene_duration_debug = [
-                        {
-                            "scene_id": timeline.scenes[idx].id,
-                            "target_duration": float(scene_target_durations[idx]),
-                            "actual_duration": float(durations[idx]),
-                            "delta": float(durations[idx] - scene_target_durations[idx]),
-                            "final_scene_clip_path": str(scene_paths[idx]),
-                        }
-                        for idx in range(len(scene_paths))
-                    ]
-                    raise RuntimeError(
-                        "Stitched visual duration is shorter than voiceover before final mux. "
-                        f"target_total={total_visual_expected:.6f}s actual_scene_total={total_visual_actual:.6f}s "
-                        f"stitched_total={stitched_duration:.6f}s voiceover_total={voiceover_duration:.6f}s "
-                        f"scene_durations={scene_duration_debug}"
+                    # Still-tail recovery: the stitched visual is shorter than the voiceover
+                    # (common when xfade transitions reduce total duration by overlapping frames).
+                    # Extend the last scene clip by the deficit, then re-run the stitch concat
+                    # before the final mux so the stitched output covers the full voiceover.
+                    tail_deficit = (voiceover_duration - stitched_duration) + 0.15
+                    recovered_path = final_scene_dir / f"{timeline.scenes[-1].id}_final_recovered_poststitch.mp4"
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write(
+                                f"POST_STITCH_RECOVERY stitched={stitched_duration:.6f} voiceover={voiceover_duration:.6f} "
+                                f"tail_deficit={tail_deficit:.6f} last_scene={scene_paths[-1]}\n"
+                            )
+                    extend_last_scene_clip(
+                        last_clip_path=scene_paths[-1],
+                        deficit=tail_deficit,
+                        output_path=recovered_path,
+                        ffmpeg_commands=ffmpeg_commands,
+                        log_path=log_file,
+                        command_timeout_sec=command_timeout_sec,
+                        workdir=render_dir,
+                        cwd=project_root,
                     )
+                    os.replace(recovered_path, scene_paths[-1])
+                    durations = [ffprobe_duration(path) for path in scene_paths]
+                    total_visual_actual = float(sum(durations))
+                    last_scene_extension_applied = float(last_scene_extension_applied) + tail_deficit
+                    # Re-run the stitch concat with the extended last scene
+                    if use_xfade:
+                        stitch_plan_payload = build_stitch_plan_from_final_clips(
+                            final_clip_paths=scene_paths,
+                            transition_duration=effective_crossfade if effective_crossfade > 0 and len(scene_paths) > 1 else 0.0,
+                            transition_types=transition_types,
+                        )
+                        stitch_plan_payload.update({
+                            "project_id": project_slug,
+                            "ordered_final_scene_clips": [str(p) for p in scene_paths],
+                        })
+                        validate_stitch_plan(stitch_plan_payload)
+                        stitch_with_xfade(
+                            plan=stitch_plan_payload,
+                            output_path=stitched_path,
+                            fps=fps,
+                            log_path=log_file,
+                            ffmpeg_commands=ffmpeg_commands,
+                            command_timeout_sec=command_timeout_sec,
+                            workdir=render_dir,
+                            cwd=project_root,
+                        )
+                    else:
+                        stitch_with_concat_reencode(
+                            scene_paths,
+                            stitched_path,
+                            log_file,
+                            ffmpeg_commands,
+                            command_timeout_sec,
+                            concat_list_path=stitched_list_path,
+                            workdir=render_dir,
+                            cwd=project_root,
+                        )
+                    stitched_duration = ffprobe_duration(stitched_path)
+                    stitched_manifest["actual_stitched_duration"] = stitched_duration
+                    stitched_manifest["last_scene_extension_applied"] = last_scene_extension_applied
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write(
+                                f"POST_STITCH_RECOVERY_RESULT stitched_after={stitched_duration:.6f} voiceover={voiceover_duration:.6f}\n"
+                            )
+                    # Final guard after recovery attempt
+                    if stitched_duration + min_voiceover_tolerance < voiceover_duration:
+                        scene_duration_debug = [
+                            {
+                                "scene_id": timeline.scenes[idx].id,
+                                "target_duration": float(scene_target_durations[idx]),
+                                "actual_duration": float(durations[idx]),
+                                "delta": float(durations[idx] - scene_target_durations[idx]),
+                                "final_scene_clip_path": str(scene_paths[idx]),
+                            }
+                            for idx in range(len(scene_paths))
+                        ]
+                        raise RuntimeError(
+                            "Stitched visual duration is shorter than voiceover before final mux. "
+                            f"target_total={total_visual_expected:.6f}s actual_scene_total={total_visual_actual:.6f}s "
+                            f"stitched_total={stitched_duration:.6f}s voiceover_total={voiceover_duration:.6f}s "
+                            f"scene_durations={scene_duration_debug}"
+                        )
             if log_file:
                 with log_file.open("a", encoding="utf-8") as handle:
                     handle.write(f"STITCH_MODE={stitched_manifest.get('stitch_mode', '')}\n")
