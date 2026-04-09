@@ -35,6 +35,10 @@ _AI_CLIP_PAYLOAD_KEYS = (
     "ai_q4_clip_path",
 )
 
+DEFAULT_PREFER_AI_ONLY_SCENE_HANDOFF = True
+DEFAULT_PRESERVE_DURATION_OVER_PACING = False
+AI_SCENE_DEFICIT_RECOVERY_THRESHOLD_SEC = 0.75
+
 
 def compute_ai_scene_clip_mapping(num_scenes: int) -> dict[str, str]:
     """Return ``{scene_id: payload_key}`` for the four AI video clips.
@@ -331,6 +335,100 @@ def append_still_tail(
     return output_path
 
 
+def append_trimmed_still_tail(
+    ai_path: Path,
+    still_path: Path,
+    target_duration: float,
+    output_path: Path,
+    ffmpeg_commands: list[list[str]],
+    log_path: Path | None,
+    command_timeout_sec: float | None,
+    tail_start_offset_sec: float = 0.18,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    ai_duration = get_media_duration(ai_path) or 0.0
+    still_duration = get_media_duration(still_path) or 0.0
+    tail_duration = max(0.0, target_duration - ai_duration)
+    offset = min(max(0.0, tail_start_offset_sec), max(0.0, still_duration - 0.05))
+    still_tail_path = output_path.with_name(f"{output_path.stem}_still_tail_trimmed.mp4")
+    _assert_distinct_input_output([still_path], still_tail_path)
+    tmp_output_path = safe_ffmpeg_output_path(still_tail_path)
+    _log_ffmpeg_io([still_path], tmp_output_path, still_tail_path)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{offset:.6f}",
+        "-i",
+        str(still_path),
+        "-t",
+        f"{tail_duration:.6f}",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        str(tmp_output_path),
+    ]
+    ffmpeg_commands.append(cmd)
+    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    os.replace(tmp_output_path, still_tail_path)
+    concat_clips(
+        [ai_path, still_tail_path],
+        output_path,
+        ffmpeg_commands,
+        log_path,
+        command_timeout_sec,
+        workdir=workdir,
+        cwd=cwd,
+    )
+    return output_path
+
+
+def append_freeze_tail(
+    ai_path: Path,
+    target_duration: float,
+    output_path: Path,
+    ffmpeg_commands: list[list[str]],
+    log_path: Path | None,
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    ai_duration = get_media_duration(ai_path) or 0.0
+    tail_duration = max(0.0, target_duration - ai_duration)
+    _assert_distinct_input_output([ai_path], output_path)
+    tmp_output_path = safe_ffmpeg_output_path(output_path)
+    _log_ffmpeg_io([ai_path], tmp_output_path, output_path)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(ai_path),
+        "-vf",
+        f"tpad=stop_mode=clone:stop_duration={tail_duration:.6f}",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        str(tmp_output_path),
+    ]
+    ffmpeg_commands.append(cmd)
+    run_cmd(cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    os.replace(tmp_output_path, output_path)
+    return output_path
+
+
 def normalize_clip_to_duration(
     input_path: Path,
     target_duration: float,
@@ -394,9 +492,12 @@ def build_scene_final_clip(
     ffmpeg_commands: list[list[str]],
     log_path: Path | None,
     command_timeout_sec: float | None,
+    prefer_ai_only_scene_handoff: bool = DEFAULT_PREFER_AI_ONLY_SCENE_HANDOFF,
+    preserve_duration_over_pacing: bool = DEFAULT_PRESERVE_DURATION_OVER_PACING,
+    ai_scene_deficit_recovery_threshold_sec: float = AI_SCENE_DEFICIT_RECOVERY_THRESHOLD_SEC,
     workdir: Path | None = None,
     cwd: Path | None = None,
-) -> tuple[Path, str, float | None]:
+) -> tuple[Path, str, float | None, dict[str, float | bool | str]]:
     duration_tolerance = 0.05
     if log_path:
         with log_path.open("a", encoding="utf-8") as handle:
@@ -443,7 +544,12 @@ def build_scene_final_clip(
                     "BUILD_SCENE_FINAL_DONE scene_id=%s target=%.3f actual=%.3f delta=%.3f strategy=still_only\n"
                     % (scene_id, target_duration, final_duration, final_duration - target_duration)
                 )
-        return final_path, "still_only", ai_duration
+        return final_path, "still_only", ai_duration, {
+            "tail_strategy": "none",
+            "tail_start_offset_sec": 0.0,
+            "avoided_repeated_source_image": True,
+            "same_scene_tail_skipped": True,
+        }
 
     if ai_duration >= target_duration:
         final_path = trim_clip_copy(
@@ -485,19 +591,77 @@ def build_scene_final_clip(
                     "BUILD_SCENE_FINAL_DONE scene_id=%s target=%.3f actual=%.3f delta=%.3f strategy=ai_only\n"
                     % (scene_id, target_duration, final_duration, final_duration - target_duration)
                 )
-        return final_path, "ai_only", ai_duration
+        return final_path, "ai_only", ai_duration, {
+            "tail_strategy": "none",
+            "tail_start_offset_sec": 0.0,
+            "avoided_repeated_source_image": True,
+            "same_scene_tail_skipped": True,
+        }
 
-    final_path = append_still_tail(
-        ai_clip_path,
-        still_scene_path,
-        target_duration,
-        output_path,
-        ffmpeg_commands,
-        log_path,
-        command_timeout_sec,
-        workdir=workdir,
-        cwd=cwd,
+    deficit = max(0.0, target_duration - ai_duration)
+    use_tail_recovery = (
+        deficit > ai_scene_deficit_recovery_threshold_sec
+        and preserve_duration_over_pacing
+        and not prefer_ai_only_scene_handoff
+    ) or (
+        deficit > ai_scene_deficit_recovery_threshold_sec
+        and preserve_duration_over_pacing
+        and prefer_ai_only_scene_handoff
     )
+    if not use_tail_recovery:
+        if output_path.resolve() != ai_clip_path.resolve():
+            shutil.copy2(ai_clip_path, output_path)
+        final_path = output_path
+        final_duration = ffprobe_duration(final_path)
+        if log_path:
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    "AI_SCENE_HANDOFF scene_id=%s ai_duration=%.3f target_duration=%.3f deficit=%.3f strategy_used=ai_only same_scene_tail_skipped=true\n"
+                    % (scene_id, ai_duration, target_duration, deficit)
+                )
+                handle.write(
+                    "BUILD_SCENE_FINAL_DONE scene_id=%s target=%.3f actual=%.3f delta=%.3f strategy=ai_only\n"
+                    % (scene_id, target_duration, final_duration, final_duration - target_duration)
+                )
+        return final_path, "ai_only", ai_duration, {
+            "tail_strategy": "none",
+            "tail_start_offset_sec": 0.0,
+            "avoided_repeated_source_image": True,
+            "same_scene_tail_skipped": True,
+        }
+
+    tail_start_offset_sec = 0.18
+    try:
+        final_path = append_trimmed_still_tail(
+            ai_clip_path,
+            still_scene_path,
+            target_duration,
+            output_path,
+            ffmpeg_commands,
+            log_path,
+            command_timeout_sec,
+            tail_start_offset_sec=tail_start_offset_sec,
+            workdir=workdir,
+            cwd=cwd,
+        )
+        strategy_label = "ai_plus_trimmed_tail"
+        tail_strategy = "trimmed_still_tail"
+        avoided_repeated_source_image = True
+    except Exception:
+        final_path = append_freeze_tail(
+            ai_clip_path,
+            target_duration,
+            output_path,
+            ffmpeg_commands,
+            log_path,
+            command_timeout_sec,
+            workdir=workdir,
+            cwd=cwd,
+        )
+        strategy_label = "ai_plus_freeze_tail"
+        tail_strategy = "freeze_tail"
+        tail_start_offset_sec = 0.0
+        avoided_repeated_source_image = True
     final_duration = ffprobe_duration(final_path)
     if abs(final_duration - target_duration) > duration_tolerance:
         try:
@@ -518,16 +682,25 @@ def build_scene_final_clip(
             final_path = output_path
         except Exception as exc:
             raise RuntimeError(
-                f"Scene '{scene_id}' duration mismatch after ai+tail build: "
+                f"Scene '{scene_id}' duration mismatch after ai-tail recovery build: "
                 f"target={target_duration:.3f}s actual={final_duration:.3f}s delta={final_duration - target_duration:.3f}s"
             ) from exc
     if log_path:
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(
-                "BUILD_SCENE_FINAL_DONE scene_id=%s target=%.3f actual=%.3f delta=%.3f strategy=ai_plus_still_tail\n"
-                % (scene_id, target_duration, final_duration, final_duration - target_duration)
+                "AI_SCENE_HANDOFF scene_id=%s ai_duration=%.3f target_duration=%.3f deficit=%.3f strategy_used=%s same_scene_tail_skipped=false\n"
+                % (scene_id, ai_duration, target_duration, deficit, strategy_label)
             )
-    return final_path, "ai_plus_still_tail", ai_duration
+            handle.write(
+                "BUILD_SCENE_FINAL_DONE scene_id=%s target=%.3f actual=%.3f delta=%.3f strategy=%s\n"
+                % (scene_id, target_duration, final_duration, final_duration - target_duration, strategy_label)
+            )
+    return final_path, strategy_label, ai_duration, {
+        "tail_strategy": tail_strategy,
+        "tail_start_offset_sec": tail_start_offset_sec,
+        "avoided_repeated_source_image": avoided_repeated_source_image,
+        "same_scene_tail_skipped": False,
+    }
 
 
 def build_final_scene_clip(
@@ -539,9 +712,12 @@ def build_final_scene_clip(
     ffmpeg_commands: list[list[str]],
     log_path: Path | None,
     command_timeout_sec: float | None,
+    prefer_ai_only_scene_handoff: bool = DEFAULT_PREFER_AI_ONLY_SCENE_HANDOFF,
+    preserve_duration_over_pacing: bool = DEFAULT_PRESERVE_DURATION_OVER_PACING,
+    ai_scene_deficit_recovery_threshold_sec: float = AI_SCENE_DEFICIT_RECOVERY_THRESHOLD_SEC,
     workdir: Path | None = None,
     cwd: Path | None = None,
-) -> tuple[Path, str, float | None]:
+) -> tuple[Path, str, float | None, dict[str, float | bool | str]]:
     return build_scene_final_clip(
         scene_id=scene_id,
         still_scene_path=still_scene_path,
@@ -551,6 +727,9 @@ def build_final_scene_clip(
         ffmpeg_commands=ffmpeg_commands,
         log_path=log_path,
         command_timeout_sec=command_timeout_sec,
+        prefer_ai_only_scene_handoff=prefer_ai_only_scene_handoff,
+        preserve_duration_over_pacing=preserve_duration_over_pacing,
+        ai_scene_deficit_recovery_threshold_sec=ai_scene_deficit_recovery_threshold_sec,
         workdir=workdir,
         cwd=cwd,
     )
@@ -1300,7 +1479,7 @@ def render_video_from_timeline(
                 ai_clip_str = get_ai_clip_for_scene(scene_id, ai_clip_map)
                 ai_clip_path = Path(ai_clip_str) if ai_clip_str else None
                 final_scene_path = final_scene_dir / f"{scene_id}_final.mp4"
-                built_path, strategy_used, ai_duration = build_scene_final_clip(
+                built_path, strategy_used, ai_duration, tail_metadata = build_scene_final_clip(
                     scene_id=scene_id,
                     still_scene_path=still_scene_path,
                     ai_clip_path=ai_clip_path,
@@ -1319,7 +1498,7 @@ def render_video_from_timeline(
                                 "final_scene_missing scene_id=%s expected=%s; rebuilding from still scene clip\n"
                                 % (scene_id, final_scene_path)
                             )
-                    built_path, strategy_used, ai_duration = build_scene_final_clip(
+                    built_path, strategy_used, ai_duration, tail_metadata = build_scene_final_clip(
                         scene_id=scene_id,
                         still_scene_path=still_scene_path,
                         ai_clip_path=None,
@@ -1342,9 +1521,15 @@ def render_video_from_timeline(
                     "target_duration": target_duration,
                     "actual_duration": final_duration,
                     "delta": duration_delta,
+                    "ai_duration": ai_duration,
+                    "deficit": max(0.0, target_duration - (ai_duration or 0.0)) if ai_duration is not None else 0.0,
                     "still_clip_path": str(still_scene_path),
                     "ai_clip_path": str(ai_clip_path) if ai_clip_path else "",
                     "strategy_used": strategy_used,
+                    "tail_strategy": str(tail_metadata.get("tail_strategy", "none")),
+                    "tail_start_offset_sec": float(tail_metadata.get("tail_start_offset_sec", 0.0) or 0.0),
+                    "avoided_repeated_source_image": bool(tail_metadata.get("avoided_repeated_source_image", True)),
+                    "same_scene_tail_skipped": bool(tail_metadata.get("same_scene_tail_skipped", True)),
                     "final_scene_clip_path": str(built_path),
                     "normalization_applied": normalization_applied,
                 }
@@ -1381,7 +1566,7 @@ def render_video_from_timeline(
                             "final_scene_validation_error scene_id=%s missing_path=%s; rebuilding with still_only fallback\n"
                             % (scene_id, final_scene_path)
                         )
-                rebuilt_path, _, _ = build_scene_final_clip(
+                rebuilt_path, _, _, _ = build_scene_final_clip(
                     scene_id=scene_id,
                     still_scene_path=still_scene_path,
                     ai_clip_path=None,
@@ -1397,6 +1582,10 @@ def render_video_from_timeline(
                 final_duration = get_media_duration(rebuilt_path)
                 final_durations[idx] = final_duration if final_duration > 0 else target_duration
                 final_scene_records[idx]["strategy_used"] = "still_only"
+                final_scene_records[idx]["tail_strategy"] = "none"
+                final_scene_records[idx]["tail_start_offset_sec"] = 0.0
+                final_scene_records[idx]["avoided_repeated_source_image"] = True
+                final_scene_records[idx]["same_scene_tail_skipped"] = True
                 final_scene_records[idx]["final_scene_clip_path"] = str(rebuilt_path)
                 final_scene_records[idx]["actual_duration"] = final_duration
                 final_scene_records[idx]["delta"] = (final_duration - target_duration) if final_duration > 0 else 0.0
