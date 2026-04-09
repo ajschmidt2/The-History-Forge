@@ -1378,27 +1378,30 @@ def render_video_from_timeline(
             manifest_items: list[dict[str, object]] = []
             final_scene_records: list[dict[str, object]] = []
 
-            def _strip_audio(src: Path, dest: Path) -> Path:
+            def _strip_audio(src: Path, dest: Path, target_duration: float | None = None) -> Path:
                 """Re-encode AI clip to match scene format so xfade works correctly.
 
                 Uses the same target dimensions, fps, codec, and pixel format as the
                 rendered scene clips so the xfade filter never sees mismatched inputs.
+                When ``target_duration`` is provided, caps the re-encoded clip with
+                ``-t`` so it does not exceed the scene's target length (the xfade
+                step later relies on this duration being accurate).
                 Falls back to the source file if re-encoding fails.
                 """
                 import logging as _log_sa
                 try:
                     import subprocess as _sp
                     _ffmpeg_bin = resolve_ffmpeg_exe()
-                    _sp.run(
-                        [
-                            _ffmpeg_bin, "-y", "-i", str(src),
-                            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps},format=yuv420p",
-                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-                            "-an",
-                            str(dest),
-                        ],
-                        check=True, capture_output=True,
-                    )
+                    cmd = [
+                        _ffmpeg_bin, "-y", "-i", str(src),
+                        "-vf", f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},fps={fps},format=yuv420p",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                        "-an",
+                    ]
+                    if target_duration is not None and target_duration > 0:
+                        cmd.extend(["-t", f"{target_duration:.6f}"])
+                    cmd.append(str(dest))
+                    _sp.run(cmd, check=True, capture_output=True)
                     if dest.exists() and dest.stat().st_size > 0:
                         return dest
                     _log_sa.getLogger(__name__).warning("ai_clip_reencode produced empty file src=%s; using original", src)
@@ -1422,6 +1425,27 @@ def render_video_from_timeline(
             _q2 = str(_proj_payload.get("ai_q2_clip_path", "") or "")
             _q3 = str(_proj_payload.get("ai_q3_clip_path", "") or "")
             _q4 = str(_proj_payload.get("ai_q4_clip_path", "") or "")
+            # Fallback: scan assets/videos/ for ai clip files if payload paths
+            # are missing or stale (e.g. manual compile button before the
+            # payload has been refreshed on disk).
+            try:
+                from src.workflow.project_io import project_dir as _proj_dir_fn
+                _videos_dir = _proj_dir_fn(project_slug) / "assets" / "videos"
+
+                def _check_disk(current_val: str, filename: str) -> str:
+                    if current_val and Path(current_val).exists() and Path(current_val).stat().st_size > 0:
+                        return current_val
+                    candidate = _videos_dir / filename
+                    if candidate.exists() and candidate.stat().st_size > 0:
+                        return str(candidate)
+                    return current_val
+
+                _opening = _check_disk(_opening, "ai_opening_clip.mp4")
+                _q2 = _check_disk(_q2, "ai_q2_clip.mp4")
+                _q3 = _check_disk(_q3, "ai_q3_clip.mp4")
+                _q4 = _check_disk(_q4, "ai_q4_clip.mp4")
+            except Exception:
+                pass
             # Fall back to Streamlit session state (UI path)
             try:
                 import streamlit as _st_render
@@ -1458,7 +1482,19 @@ def render_video_from_timeline(
                 if not src_path.exists():
                     continue
                 ai_scene_path = final_scene_dir / f"{scene_id}_ai_noaudio.mp4"
-                ai_clip_map[scene_id] = str(_strip_audio(src_path, ai_scene_path))
+                # Cap the re-encoded clip at the scene's target duration so the
+                # downstream xfade step sees a clip length that matches the entry
+                # we record in ``final_durations``. Without this, AI clips are
+                # typically ~5s while the target scene duration may be larger,
+                # causing xfade/concat mismatches.
+                _scene_dur = scene_duration_lookup.get(scene_id, 0.0)
+                ai_clip_map[scene_id] = str(
+                    _strip_audio(
+                        src_path,
+                        ai_scene_path,
+                        target_duration=_scene_dur if _scene_dur > 0 else None,
+                    )
+                )
             if log_file:
                 with log_file.open("a", encoding="utf-8") as handle:
                     handle.write(
