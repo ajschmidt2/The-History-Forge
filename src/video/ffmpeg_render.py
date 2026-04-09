@@ -769,6 +769,134 @@ def add_transition_between_scene_finals(
         log_path=log_path,
         ffmpeg_commands=ffmpeg_commands,
         transition_types=transition_types,
+        offsets=None,
+        command_timeout_sec=command_timeout_sec,
+        workdir=workdir,
+        cwd=cwd,
+    )
+
+
+def build_stitch_plan_from_final_clips(
+    final_clip_paths: list[Path],
+    transition_duration: float,
+    transition_types: list[str] | None = None,
+) -> dict[str, object]:
+    scene_items: list[dict[str, object]] = []
+    durations: list[float] = []
+    offsets: list[float] = []
+    cumulative = 0.0
+    for idx, clip_path in enumerate(final_clip_paths):
+        duration = ffprobe_duration(clip_path)
+        if duration <= 0:
+            raise RuntimeError(f"Invalid probed duration for final clip: {clip_path}")
+        durations.append(duration)
+        cumulative += duration
+        offset: float | None = None
+        if idx > 0 and transition_duration > 0:
+            offset = max(0.0, sum(durations[:idx]) - (transition_duration * idx))
+            offsets.append(offset)
+        scene_items.append(
+            {
+                "scene_id": f"s{idx + 1:02d}",
+                "final_clip_path": str(clip_path),
+                "actual_duration": duration,
+                "cumulative_duration": cumulative,
+                "transition_offset": offset,
+            }
+        )
+    expected_stitched_duration = float(sum(durations) - (transition_duration * max(0, len(final_clip_paths) - 1)))
+    transition_by_boundary = [
+        _normalize_xfade_transition(transition_types[idx] if transition_types and idx < len(transition_types) else "fade")
+        for idx in range(max(0, len(final_clip_paths) - 1))
+    ]
+    return {
+        "scene_count": len(final_clip_paths),
+        "transition_duration": float(transition_duration),
+        "scenes": scene_items,
+        "actual_durations": durations,
+        "computed_offsets": offsets,
+        "transition_type_per_boundary": transition_by_boundary,
+        "expected_stitched_duration": expected_stitched_duration,
+        "total_transition_overlap": float(transition_duration * max(0, len(final_clip_paths) - 1)),
+    }
+
+
+def validate_stitch_plan(plan: dict[str, object], tolerance: float = 0.1) -> None:
+    offsets = [float(v) for v in (plan.get("computed_offsets") or [])]
+    durations = [float(v) for v in (plan.get("actual_durations") or [])]
+    transition_duration = float(plan.get("transition_duration", 0.0) or 0.0)
+    if offsets and offsets[0] < 0:
+        raise RuntimeError(f"Invalid stitch plan: first offset is negative ({offsets[0]:.6f})")
+    if any(offsets[idx] <= offsets[idx - 1] for idx in range(1, len(offsets))):
+        raise RuntimeError(f"Invalid stitch plan: non-increasing offsets ({offsets})")
+    expected_from_formula = float(sum(durations) - (transition_duration * max(0, len(durations) - 1)))
+    expected_in_plan = float(plan.get("expected_stitched_duration", 0.0) or 0.0)
+    if abs(expected_from_formula - expected_in_plan) > tolerance:
+        raise RuntimeError(
+            "Invalid stitch plan: expected duration mismatch "
+            f"(formula={expected_from_formula:.6f}, plan={expected_in_plan:.6f}, tolerance={tolerance:.3f})"
+        )
+
+
+def stitch_with_xfade(
+    plan: dict[str, object],
+    output_path: Path,
+    fps: int,
+    log_path: Path | None,
+    ffmpeg_commands: list[list[str]],
+    command_timeout_sec: float | None = None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> None:
+    scene_paths = [Path(str(item["final_clip_path"])) for item in (plan.get("scenes") or [])]
+    _crossfade_scenes(
+        scene_paths=scene_paths,
+        stitched_path=output_path,
+        durations=[float(v) for v in (plan.get("actual_durations") or [])],
+        fps=fps,
+        crossfade_duration=float(plan.get("transition_duration", 0.0) or 0.0),
+        log_path=log_path,
+        ffmpeg_commands=ffmpeg_commands,
+        transition_types=[str(v) for v in (plan.get("transition_type_per_boundary") or [])],
+        offsets=[float(v) for v in (plan.get("computed_offsets") or [])],
+        command_timeout_sec=command_timeout_sec,
+        workdir=workdir,
+        cwd=cwd,
+    )
+
+
+def stitch_with_concat_reencode(
+    final_clip_paths: list[Path],
+    output_path: Path,
+    log_path: Path | None,
+    ffmpeg_commands: list[list[str]],
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> None:
+    _concat_scenes(final_clip_paths, output_path, log_path, ffmpeg_commands, command_timeout_sec, workdir=workdir, cwd=cwd)
+
+
+def extend_last_scene_clip(
+    last_clip_path: Path,
+    deficit: float,
+    output_path: Path,
+    ffmpeg_commands: list[list[str]],
+    log_path: Path | None,
+    command_timeout_sec: float | None,
+    workdir: Path | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    current_duration = ffprobe_duration(last_clip_path)
+    if current_duration <= 0:
+        raise RuntimeError(f"Cannot extend scene with invalid duration: {last_clip_path}")
+    target_duration = current_duration + max(0.0, deficit)
+    return normalize_clip_to_duration(
+        input_path=last_clip_path,
+        target_duration=target_duration,
+        output_path=output_path,
+        ffmpeg_commands=ffmpeg_commands,
+        log_path=log_path,
         command_timeout_sec=command_timeout_sec,
         workdir=workdir,
         cwd=cwd,
@@ -983,35 +1111,18 @@ def _concat_scenes(
         "0",
         "-i",
         str(concat_list),
-        "-c",
-        "copy",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
         str(tmp_stitched_path),
     ]
-    try:
-        ffmpeg_commands.append(concat_cmd)
-        run_cmd(concat_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
-    except subprocess.CalledProcessError:
-        fallback_cmd = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(concat_list),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "24",
-            "-pix_fmt",
-            "yuv420p",
-            str(tmp_stitched_path),
-        ]
-        ffmpeg_commands.append(fallback_cmd)
-        run_cmd(fallback_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
+    ffmpeg_commands.append(concat_cmd)
+    run_cmd(concat_cmd, log_path=log_path, timeout_sec=command_timeout_sec, workdir=workdir, cwd=cwd)
     os.replace(tmp_stitched_path, stitched_path)
 
 
@@ -1024,6 +1135,7 @@ def _crossfade_scenes(
     log_path: Path | None,
     ffmpeg_commands: list[list[str]],
     transition_types: list[str] | None = None,
+    offsets: list[float] | None = None,
     command_timeout_sec: float | None = None,
     workdir: Path | None = None,
     cwd: Path | None = None,
@@ -1035,18 +1147,21 @@ def _crossfade_scenes(
 
     filters: list[str] = []
     current_label = "[0:v]"
-    offset = max(0.0, durations[0] - crossfade_duration)
     for idx in range(1, len(scene_paths)):
         next_label = f"[{idx}:v]"
         output_label = f"[v{idx}]"
         transition_name = _normalize_xfade_transition(
             transition_types[idx - 1] if transition_types and idx - 1 < len(transition_types) else "fade"
         )
+        offset = (
+            float(offsets[idx - 1])
+            if offsets is not None and idx - 1 < len(offsets)
+            else max(0.0, sum(durations[:idx]) - (crossfade_duration * idx))
+        )
         filters.append(
             f"{current_label}{next_label}xfade=transition={transition_name}:duration={crossfade_duration}:offset={offset}{output_label}"
         )
         current_label = output_label
-        offset += max(0.0, durations[idx] - crossfade_duration)
 
     filter_complex = ";".join(filters)
     tmp_stitched_path = safe_ffmpeg_output_path(stitched_path)
@@ -1628,7 +1743,9 @@ def render_video_from_timeline(
                 final_scene_records[idx]["normalization_applied"] = abs((final_duration if final_duration > 0 else target_duration) - target_duration) > 0.05
 
             scene_paths = final_scene_paths
-            durations = final_durations
+            durations = [ffprobe_duration(path) for path in scene_paths]
+            if any(duration <= 0 for duration in durations):
+                raise RuntimeError(f"Failed to probe one or more final scene durations: {durations}")
             total_visual_duration = float(sum(durations))
             voiceover_duration_for_preflight: float | None = None
             if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
@@ -1648,6 +1765,9 @@ def render_video_from_timeline(
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "scenes": manifest_items,
             }
+            for idx, scene_item in enumerate(manifest_payload["scenes"]):
+                if idx < len(durations):
+                    scene_item["actual_duration"] = float(durations[idx])
             manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
             stitched_path = tmp_path / "stitched.mp4"
@@ -1659,6 +1779,7 @@ def render_video_from_timeline(
                 "expected_total_duration": float(total_visual_duration),
                 "actual_stitched_duration": 0.0,
                 "transitions_applied": False,
+                "stitch_mode": "",
             }
             if log_file:
                 with log_file.open("a", encoding="utf-8") as handle:
@@ -1673,58 +1794,57 @@ def render_video_from_timeline(
                     handle.write(f"final_stitch scene_duration_map={scene_duration_map}\n")
                     handle.write(f"final_stitch force_render_rebuild={bool(force_render_rebuild)}\n")
                     handle.write(f"final_stitch deleted_or_ignored_outputs={clean_deleted_outputs}\n")
-            computed_offsets: list[float] = []
             transition_types = getattr(timeline.meta, "transition_types", [])
             effective_crossfade = _safe_crossfade_duration(durations, float(timeline.meta.crossfade_duration), fps) if len(scene_paths) > 1 else 0.0
-            if effective_crossfade > 0 and len(scene_paths) > 1:
-                offset = max(0.0, durations[0] - effective_crossfade)
-                for idx in range(1, len(scene_paths)):
-                    computed_offsets.append(offset)
-                    if log_file:
-                        with log_file.open("a", encoding="utf-8") as handle:
-                            handle.write(f"xfade_offset idx={idx} offset={offset:.6f}\n")
-                    offset += max(0.0, durations[idx] - effective_crossfade)
-                if any(computed_offsets[idx] <= computed_offsets[idx - 1] for idx in range(1, len(computed_offsets))):
-                    raise RuntimeError(f"Non-monotonic xfade offsets computed: {computed_offsets}")
-            stitch_plan_payload = {
+            stitch_plan_payload = build_stitch_plan_from_final_clips(
+                final_clip_paths=scene_paths,
+                transition_duration=effective_crossfade if effective_crossfade > 0 and len(scene_paths) > 1 else 0.0,
+                transition_types=transition_types,
+            )
+            stitch_plan_payload.update({
                 "project_id": project_slug,
                 "ordered_final_scene_clips": [str(p) for p in scene_paths],
-                "actual_durations": durations,
-                "transition_type_per_boundary": [
-                    _normalize_xfade_transition(transition_types[idx] if idx < len(transition_types) else "fade")
-                    for idx in range(max(0, len(scene_paths) - 1))
-                ],
-                "computed_offsets": computed_offsets,
-                "expected_stitched_duration": float(sum(durations) - (effective_crossfade * max(0, len(scene_paths) - 1))),
-            }
+            })
+            validate_stitch_plan(stitch_plan_payload)
+            if log_file:
+                with log_file.open("a", encoding="utf-8") as handle:
+                    for item in stitch_plan_payload.get("scenes", []):
+                        handle.write(
+                            "stitch_plan scene_id=%s final_clip_path=%s actual_duration=%.6f cumulative_duration=%.6f transition_offset=%s\n"
+                            % (
+                                item.get("scene_id", ""),
+                                item.get("final_clip_path", ""),
+                                float(item.get("actual_duration", 0.0) or 0.0),
+                                float(item.get("cumulative_duration", 0.0) or 0.0),
+                                "none" if item.get("transition_offset") is None else f"{float(item.get('transition_offset') or 0.0):.6f}",
+                            )
+                        )
             stitch_plan_path.write_text(json.dumps(stitch_plan_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
             safe_mode_used = False
             if (not safe_mode) and timeline.meta.crossfade and len(scene_paths) > 1:
-                effective_crossfade = _safe_crossfade_duration(durations, float(timeline.meta.crossfade_duration), fps)
                 try:
                     if effective_crossfade > 0:
-                        add_transition_between_scene_finals(
-                            scene_paths,
-                            stitched_path,
-                            durations,
-                            fps,
-                            effective_crossfade,
-                            log_file,
-                            ffmpeg_commands,
-                            transition_types=getattr(timeline.meta, "transition_types", []),
+                        stitch_with_xfade(
+                            plan=stitch_plan_payload,
+                            output_path=stitched_path,
+                            fps=fps,
+                            log_path=log_file,
+                            ffmpeg_commands=ffmpeg_commands,
                             command_timeout_sec=command_timeout_sec,
                             workdir=render_dir,
                             cwd=project_root,
                         )
                         stitched_manifest["transitions_applied"] = True
+                        stitched_manifest["stitch_mode"] = "xfade"
                     else:
                         if log_file:
                             with log_file.open("a", encoding="utf-8") as handle:
                                 handle.write(
                                     "Crossfade disabled because crossfade_duration is too large for one or more scene durations.\n"
                                 )
-                        concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                        stitch_with_concat_reencode(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                        stitched_manifest["stitch_mode"] = "concat_safe"
                 except (RuntimeError, subprocess.CalledProcessError) as _xfade_err:
                     _xfade_msg = f"Crossfade graph failed ({_xfade_err}); falling back to concat."
                     if log_file:
@@ -1738,16 +1858,31 @@ def render_video_from_timeline(
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
                             handle.write("SAFE_MODE_CONCAT_USED\n")
-                    concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                    stitch_with_concat_reencode(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                    stitched_manifest["stitch_mode"] = "concat_safe"
             else:
                 if safe_mode and timeline.meta.crossfade and len(scene_paths) > 1 and log_file:
                     with log_file.open("a", encoding="utf-8") as handle:
                         handle.write("Safe mode enabled: skipping crossfade and using concat.\n")
                         handle.write("SAFE_MODE_CONCAT_USED\n")
                     safe_mode_used = True
-                concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                stitch_with_concat_reencode(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                stitched_manifest["stitch_mode"] = "concat_safe"
 
             stitched_duration = ffprobe_duration(stitched_path)
+            expected_stitched_duration = float(stitch_plan_payload.get("expected_stitched_duration", total_visual_duration))
+            if stitched_manifest.get("stitch_mode") == "xfade" and stitched_duration + 0.25 < expected_stitched_duration:
+                if log_file:
+                    with log_file.open("a", encoding="utf-8") as handle:
+                        handle.write(
+                            "xfade_duration_shortfall expected=%.6f actual=%.6f; rebuilding using concat_safe\n"
+                            % (expected_stitched_duration, stitched_duration)
+                        )
+                if stitched_path.exists():
+                    stitched_path.unlink()
+                stitch_with_concat_reencode(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                stitched_duration = ffprobe_duration(stitched_path)
+                stitched_manifest["stitch_mode"] = "concat_safe"
             expected_visual_duration = float(total_visual_duration)
             timeline_ok, timeline_ratio = validate_visual_timeline_duration(stitched_duration, expected_visual_duration)
             stitched_manifest["actual_stitched_duration"] = stitched_duration
@@ -1798,33 +1933,41 @@ def render_video_from_timeline(
                                     scene_duration_debug,
                                 )
                             )
-                    deficit = (voiceover_duration - stitched_duration) + 0.05
+                    deficit = (voiceover_duration - stitched_duration) + 0.15
                     if log_file:
                         with log_file.open("a", encoding="utf-8") as handle:
                             handle.write("STITCH_RECOVERY_APPLIED deficit=%.3f\n" % deficit)
                     last_idx = len(scene_paths) - 1
-                    recover_target = durations[last_idx] + deficit
                     recovered_path = final_scene_dir / f"{timeline.scenes[last_idx].id}_final_recovered.mp4"
-                    normalize_clip_to_duration(
-                        scene_paths[last_idx],
-                        recover_target,
-                        recovered_path,
-                        ffmpeg_commands,
-                        log_file,
-                        command_timeout_sec,
+                    extend_last_scene_clip(
+                        last_clip_path=scene_paths[last_idx],
+                        deficit=deficit,
+                        output_path=recovered_path,
+                        ffmpeg_commands=ffmpeg_commands,
+                        log_path=log_file,
+                        command_timeout_sec=command_timeout_sec,
                         workdir=render_dir,
                         cwd=project_root,
                     )
                     os.replace(recovered_path, scene_paths[last_idx])
                     durations[last_idx] = ffprobe_duration(scene_paths[last_idx])
-                    stitched_manifest["deficit_recovery_applied"] = True
-                    concat_scene_finals(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                    stitched_manifest["deficit_recovery_applied"] = deficit
+                    stitch_with_concat_reencode(scene_paths, stitched_path, log_file, ffmpeg_commands, command_timeout_sec, workdir=render_dir, cwd=project_root)
+                    stitched_manifest["stitch_mode"] = "concat_safe"
                     stitched_duration = ffprobe_duration(stitched_path)
                     if stitched_duration + min_voiceover_tolerance < voiceover_duration:
                         raise RuntimeError(
                             "Stitched visual duration is shorter than voiceover before final mux "
                             f"({stitched_duration:.3f}s < {voiceover_duration:.3f}s, tolerance={min_voiceover_tolerance:.3f}s)."
                         )
+            if log_file:
+                with log_file.open("a", encoding="utf-8") as handle:
+                    handle.write(f"STITCH_MODE={stitched_manifest.get('stitch_mode', '')}\n")
+                    handle.write(f"EXPECTED_STITCHED_DURATION={expected_stitched_duration:.6f}\n")
+                    handle.write(f"ACTUAL_STITCHED_DURATION={stitched_duration:.6f}\n")
+                    handle.write(f"VOICEOVER_DURATION={(f'{voiceover_duration:.6f}' if voiceover_duration is not None else 'none')}\n")
+                    handle.write(f"DEFICIT_RECOVERY_APPLIED={float(stitched_manifest.get('deficit_recovery_applied', 0.0) or 0.0):.6f}\n")
+
             audio_target_duration = voiceover_duration if voiceover_duration is not None else timeline.total_duration
 
             include_audio = timeline.meta.include_voiceover or timeline.meta.include_music
@@ -1927,8 +2070,10 @@ def render_video_from_timeline(
                 "voiceover_duration": voiceover_duration if voiceover_duration is not None else 0.0,
                 "music_duration": get_media_duration(timeline.meta.music.path) if (timeline.meta.music and timeline.meta.music.path) else 0.0,
                 "stitched_duration_before_mux": stitched_duration,
+                "expected_stitched_duration": expected_stitched_duration,
                 "final_duration_after_mux": 0.0,
-                "deficit_recovery_applied": bool(stitched_manifest.get("deficit_recovery_applied", False)),
+                "stitch_mode": str(stitched_manifest.get("stitch_mode", "")),
+                "deficit_recovery_applied": float(stitched_manifest.get("deficit_recovery_applied", 0.0) or 0.0),
                 "safe_mode_used": bool(locals().get("safe_mode_used", False)),
             }
 
