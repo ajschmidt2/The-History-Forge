@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.ai_video_generation import generate_video
+from src.config import get_secret
 from src.audio import (
     TTS_PROVIDER_ELEVENLABS,
     TTS_PROVIDER_OPENAI,
@@ -303,7 +304,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
 
     _logger = _workflow_logger(project_id)
     aspect_ratio = (options.aspect_ratio if options else None) or "9:16"
-    provider = (options.ai_video_provider if options else None) or "falai"
+    provider = (options.ai_video_provider if options else None) or str(get_secret("HF_VIDEO_PROVIDER", "falai") or "falai")
 
     # Allow session_state overrides from the Automation tab per-run settings.
     # In headless mode st.session_state exists but is inert; detect via ScriptRunContext.
@@ -334,7 +335,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             if _preset_provider:
                 provider = _preset_provider
             else:
-                provider = "falai"
+                provider = str(get_secret("HF_VIDEO_PROVIDER", "falai") or "falai")
         except Exception:  # noqa: BLE001
             pass
 

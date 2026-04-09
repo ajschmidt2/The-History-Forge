@@ -16,6 +16,7 @@ bootstrap_api_keys()
 from image_gen import validate_gemini_api_key
 from src.ai_video_generation import veo_configured, sora_configured
 from src.config.secrets import fal_configured, fal_key_debug_snapshot
+from src.services.google_veo_video import google_veo_lite_configured
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.config.validate import validate_runtime_config
@@ -93,13 +94,17 @@ def main() -> None:
         _fal_ok = fal_configured()
         _veo_ok = veo_configured()
         _sora_ok = sora_configured()
+        _google_lite_ok = google_veo_lite_configured()
 
         # fal.ai is the default and always shown first.
         _provider_options = ["falai"]
+        if _google_lite_ok:
+            _provider_options.append("google_veo_lite")
         if _veo_ok:
             _provider_options.append("veo")
         if _sora_ok:
             _provider_options.append("sora")
+        _provider_options.append("auto")
 
         _current_provider = st.session_state.get("ai_video_provider", _provider_options[0])
         if _current_provider not in _provider_options:
@@ -107,8 +112,10 @@ def main() -> None:
 
         _provider_labels = {
             "falai": "✨ fal.ai (Wan 2.2) — Default",
+            "google_veo_lite": "🔷 Gemini Veo 3.1 Lite",
             "veo": "🎬 Google Veo",
             "sora": "🤖 OpenAI Sora",
+            "auto": "🧠 Auto (HF_VIDEO_PROVIDER)",
         }
         st.session_state["ai_video_provider"] = st.selectbox(
             "Provider",
@@ -117,6 +124,7 @@ def main() -> None:
             format_func=lambda p: _provider_labels.get(p, p.upper()),
             help=(
                 "fal.ai: Wan 2.2 text/image-to-video (default, cheapest).\n"
+                "Google Veo Lite: Gemini API image-to-video preview model.\n"
                 "Veo: Google image-to-video via Supabase Edge Function.\n"
                 "Sora: OpenAI text-to-video with image reference fallback."
             ),
@@ -139,6 +147,10 @@ def main() -> None:
             st.caption("✅ Veo configured")
         else:
             st.caption("⚠️ Veo not configured (check SUPABASE_URL + SUPABASE_KEY)")
+        if _google_lite_ok:
+            st.caption("✅ Gemini Veo Lite configured")
+        else:
+            st.caption("⚠️ Gemini Veo Lite not configured (check GEMINI_API_KEY)")
         if _sora_ok:
             st.caption("✅ Sora configured")
         else:
