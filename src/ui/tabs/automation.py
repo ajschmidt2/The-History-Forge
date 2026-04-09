@@ -16,6 +16,7 @@ from src.audio import (
     resolve_tts_settings,
 )
 from src.ai_video_generation import veo_configured, sora_configured
+from src.services.google_veo_video import google_veo_lite_configured
 from src.video.ai_video_clips import SUPPORTED_PROVIDERS
 from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import DEFAULT_VOICE_ID
@@ -320,7 +321,7 @@ def _render_daily_automation_status(project_id: str) -> None:
     daily_transition_label = st.selectbox("Daily scene transition", options=list(_daily_transition_options.keys()), index=list(_daily_transition_options.keys()).index(_daily_transition_label))
     daily_transition_type = _daily_transition_options[daily_transition_label]
 
-    _daily_ai_options = ["None", "falai", "sora", "veo"]
+    _daily_ai_options = ["None", "falai", "google_veo_lite", "sora", "veo", "auto"]
     _daily_ai_default = str(preset.get("ai_video_provider", "falai") or "falai")
     if _daily_ai_default not in _daily_ai_options:
         _daily_ai_default = "falai"
@@ -328,7 +329,14 @@ def _render_daily_automation_status(project_id: str) -> None:
         "Daily AI video provider",
         options=_daily_ai_options,
         index=_daily_ai_options.index(_daily_ai_default),
-        format_func=lambda p: {"None": "None", "falai": "fal.ai (Wan 2.2)", "sora": "OpenAI Sora", "veo": "Google Veo"}.get(p, p),
+        format_func=lambda p: {
+            "None": "None",
+            "falai": "fal.ai (Wan 2.2)",
+            "google_veo_lite": "Google Gemini Veo 3.1 Lite",
+            "sora": "OpenAI Sora",
+            "veo": "Google Veo (Supabase)",
+            "auto": "Auto (HF_VIDEO_PROVIDER)",
+        }.get(p, p),
     )
 
     project_music_tracks = _list_music_tracks(project_dir(project_id) / "assets/music")
@@ -454,11 +462,13 @@ def tab_automation(project_id: str) -> None:
 
     # ── AI Video Clips ─────────────────────────────────────────────
     st.subheader("🎬 AI Video Clips")
-    _ai_video_provider_options = ["None", "fal.ai (Wan 2.2)", "Google Veo (Supabase)", "OpenAI Sora"]
+    _ai_video_provider_options = ["None", "fal.ai (Wan 2.2)", "Google Gemini Veo 3.1 Lite", "Google Veo (Supabase)", "OpenAI Sora", "Auto (HF_VIDEO_PROVIDER)"]
     _ai_provider_internal_to_label = {
         "falai": "fal.ai (Wan 2.2)",
+        "google_veo_lite": "Google Gemini Veo 3.1 Lite",
         "sora": "OpenAI Sora",
         "veo": "Google Veo (Supabase)",
+        "auto": "Auto (HF_VIDEO_PROVIDER)",
     }
     _daily_ai_label = _ai_provider_internal_to_label.get(str(_daily_preset.get("ai_video_provider", "") or ""), "fal.ai (Wan 2.2)")
     _default_ai_video_provider = str(payload.get("ai_video_provider") or _daily_ai_label or "fal.ai (Wan 2.2)")
@@ -477,12 +487,16 @@ def tab_automation(project_id: str) -> None:
         _fal_ok = _fal_cfg()
         _veo_ok = veo_configured()
         _sora_ok = sora_configured()
+        _google_lite_ok = google_veo_lite_configured()
         # fal.ai is always available in the selector (default), even if not configured.
         _available = ["falai"]
+        if _google_lite_ok:
+            _available.append("google_veo_lite")
         if _veo_ok:
             _available.append("veo")
         if _sora_ok:
             _available.append("sora")
+        _available.append("auto")
 
         if not _available:
             st.warning(
@@ -502,8 +516,10 @@ def tab_automation(project_id: str) -> None:
 
             _provider_display = {
                 "falai": "✨ fal.ai",
+                "google_veo_lite": "🔷 Gemini Veo Lite",
                 "veo": "🎬 Veo",
                 "sora": "🤖 Sora",
+                "auto": "🧠 Auto",
             }
             _run_provider = st.selectbox(
                 "Provider for this run",
@@ -536,11 +552,18 @@ def tab_automation(project_id: str) -> None:
                 "fal.ai (Wan 2.2) uses image-to-video when a scene image is available, "
                 "and falls back to text-to-video otherwise. ~$0.50 per 5s clip."
             )
+        elif _run_provider == "google_veo_lite":
+            st.info(
+                "Gemini Veo 3.1 Lite preview supports text+image with audio output. "
+                "Current limitations: no 4K output and no clip extension support."
+            )
         elif _run_provider == "sora":
             st.info(
                 "Sora will attempt image-to-video using generated scene images. "
                 "If no image is available or the request fails, it falls back to text-to-video."
             )
+        elif _run_provider == "auto":
+            st.info("Auto resolves to HF_VIDEO_PROVIDER (defaults to falai when not set).")
         else:
             st.info(
                 "Veo requires generated scene images. "
@@ -551,8 +574,10 @@ def tab_automation(project_id: str) -> None:
     # If the main selectbox is "None", mark provider as empty so the step is skipped.
     _label_to_internal = {
         "fal.ai (Wan 2.2)": "falai",
+        "Google Gemini Veo 3.1 Lite": "google_veo_lite",
         "Google Veo (Supabase)": "veo",
         "OpenAI Sora": "sora",
+        "Auto (HF_VIDEO_PROVIDER)": "auto",
     }
     _main_selection_internal = _label_to_internal.get(ai_video_provider, "")
     if _main_selection_internal:

@@ -36,10 +36,14 @@ from src.services.fal_video_test import (
     generate_fal_video_from_image,
     validate_fal_model_slug,
 )
+from src.services.google_veo_video import (
+    DEFAULT_GOOGLE_VIDEO_MODEL,
+    generate_google_veo_lite_video,
+)
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDERS = ("falai", "veo", "sora")
+SUPPORTED_PROVIDERS = ("falai", "google_veo_lite", "veo", "sora", "auto")
 SUPPORTED_ASPECT_RATIOS = {"16:9", "9:16", "1:1"}
 MIN_VIDEO_BYTES = 1024
 
@@ -326,6 +330,77 @@ def _generate_falai_video_clip(
     reason = str(result.get("error") or "provider returned empty response")
     wlog.warning("FAL_AUTOMATION_USING_SHARED_HELPER failed clip=%s error=%s", clip_label, reason[:240])
     return False, reason
+
+
+def generate_scene_video(
+    provider,
+    prompt,
+    image_path,
+    aspect_ratio,
+    duration_seconds,
+    output_path,
+    debug_dir=None,
+):
+    """Provider abstraction for scene clip generation."""
+    provider_name = (str(provider or "falai").strip().lower() or "falai")
+    if provider_name == "auto":
+        provider_name = str(get_secret("HF_VIDEO_PROVIDER", "falai") or "falai").strip().lower() or "falai"
+    output = Path(output_path)
+
+    if provider_name == "falai":
+        model_slug, _ = _resolve_fal_model(logger)
+        if not image_path:
+            reason = "image input is required (upload, URL, data URI, or local file path)"
+            return {
+                "ok": False,
+                "provider": "falai",
+                "model": model_slug,
+                "response_type": "fal_subscribe",
+                "video_url": "",
+                "output_path": str(output),
+                "error": reason,
+            }
+        fal_result = generate_fal_video_from_image(
+            model=model_slug,
+            prompt=str(prompt or "").strip(),
+            image_source=str(image_path),
+            output_path=output,
+            duration=duration_seconds,
+            aspect_ratio=aspect_ratio,
+            fail_loud_missing_video_artifact=True,
+        )
+        ok = bool(fal_result.get("ok")) and output.exists() and output.stat().st_size >= MIN_VIDEO_BYTES
+        reason = str(fal_result.get("error") or "")
+        return {
+            "ok": bool(ok),
+            "provider": "falai",
+            "model": model_slug,
+            "response_type": str(fal_result.get("response_type") or "fal_subscribe"),
+            "video_url": str(fal_result.get("video_url") or ""),
+            "output_path": str(output),
+            "error": "" if ok else reason,
+        }
+
+    if provider_name == "google_veo_lite":
+        return generate_google_veo_lite_video(
+            prompt=str(prompt or ""),
+            image_source=str(image_path) if image_path else "",
+            aspect_ratio=aspect_ratio,
+            duration_seconds=duration_seconds,
+            output_path=str(output),
+            debug_dir=debug_dir,
+            model=str(get_secret("HF_GOOGLE_VIDEO_MODEL", DEFAULT_GOOGLE_VIDEO_MODEL) or DEFAULT_GOOGLE_VIDEO_MODEL),
+        )
+
+    return {
+        "ok": False,
+        "provider": provider_name,
+        "model": "",
+        "response_type": "unsupported_provider",
+        "video_url": "",
+        "output_path": str(output),
+        "error": f"Provider '{provider_name}' is not supported by generate_scene_video.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +717,8 @@ def generate_ai_video_clips(
         ValueError:   If an unknown provider is specified.
     """
     provider = (provider or "falai").strip().lower()
+    if provider == "auto":
+        provider = str(get_secret("HF_VIDEO_PROVIDER", "falai") or "falai").strip().lower() or "falai"
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(
             f"ai_video_clips: unknown provider '{provider}'. "
@@ -657,7 +734,7 @@ def generate_ai_video_clips(
         _wlog.warning("ai_video_clips [veo]: no scene images found for project %s, skipping", project_id)
         return None, None, None, None
 
-    if not prompts and provider in ("sora", "falai"):
+    if not prompts and provider in ("sora", "falai", "google_veo_lite"):
         _wlog.warning(
             "ai_video_clips [%s]: no scene prompts found for project %s, skipping",
             provider, project_id,
@@ -711,24 +788,29 @@ def generate_ai_video_clips(
         out_path = tmp_dir / out_name
 
         _wlog.info(
-            "ai_video_clips [%s]: generating %s clip image=%s prompt_idx=%d prompt_len=%d",
-            provider, label, image.name if image else "none", prompt_idx, len(prompt),
+            "ai_video_clips generate provider=%s model=%s clip=%s prompt_len=%d image_path=%s",
+            provider,
+            str(get_secret("HF_GOOGLE_VIDEO_MODEL", DEFAULT_GOOGLE_VIDEO_MODEL) if provider == "google_veo_lite" else get_secret("fal_video_model", DEFAULT_FAL_VIDEO_MODEL)),
+            label,
+            len(prompt),
+            str(image) if image else "",
         )
 
         reason = ""
         start = time.monotonic()
         try:
-            if provider == "falai":
-                ok, reason = _generate_falai_video_clip(
+            if provider in ("falai", "google_veo_lite"):
+                scene_result = generate_scene_video(
+                    provider=provider,
                     prompt=prompt,
-                    image_path=image,
+                    image_path=str(image) if image else "",
                     aspect_ratio=aspect_ratio,
                     duration_seconds=duration_seconds,
-                    output_path=out_path,
-                    clip_label=label,
-                    project_id=project_id,
-                    workflow_logger=_wlog,
+                    output_path=str(out_path),
+                    debug_dir=Path("data/projects") / project_id / "debug",
                 )
+                ok = bool(scene_result.get("ok"))
+                reason = str(scene_result.get("error") or "")
                 video_bytes = out_path.read_bytes() if ok and out_path.exists() else None
             elif provider == "veo":
                 if image is None:
@@ -753,7 +835,7 @@ def generate_ai_video_clips(
                 out_path.write_bytes(video_bytes)
             _normalize_clip_orientation(out_path, _clip_w, _clip_h)
             _wlog.info(
-                "ai_video_clips [%s]: %s clip saved path=%s bytes=%d elapsed=%.2fs",
+                "ai_video_clips complete provider=%s clip=%s success=true output=%s bytes=%d elapsed=%.2fs",
                 provider, label, out_path, len(video_bytes), elapsed,
             )
             results.append(out_path)
@@ -766,7 +848,10 @@ def generate_ai_video_clips(
         else:
             if not reason:
                 reason = "provider returned empty response"
-            _wlog.warning("ai_video_clips [%s]: %s clip failed reason=%s elapsed=%.2fs", provider, label, reason, elapsed)
+            _wlog.warning(
+                "ai_video_clips complete provider=%s clip=%s success=false output=%s reason=%s elapsed=%.2fs",
+                provider, label, out_path, reason, elapsed,
+            )
             results.append(None)
             failures.append(label)
             manifest["clips"].append({"label": label, "status": "failed", "reason": reason, "elapsed_seconds": round(elapsed, 2)})

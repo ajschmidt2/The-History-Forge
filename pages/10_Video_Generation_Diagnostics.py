@@ -16,6 +16,11 @@ import streamlit as st
 
 from src.config import get_secret, resolve_openai_key
 from src.services.fal_video_test import get_fal_key_status, run_fal_video_test
+from src.services.google_veo_video import (
+    DEFAULT_GOOGLE_VIDEO_MODEL,
+    generate_google_veo_lite_video,
+    get_gemini_api_key,
+)
 from src.constants import SUPABASE_VIDEO_BUCKET
 from app import require_passcode
 
@@ -113,6 +118,84 @@ with st.expander("🧪 fal.ai Video Test", expanded=False):
                     "Review sanitized response metadata in the debug JSON files shown above "
                     "to inspect payload shape and extraction behavior."
                 )
+
+with st.expander("🧪 Google Veo Lite Video Test", expanded=False):
+    st.caption(
+        "Standalone Gemini Veo 3.1 Lite image-to-video probe. "
+        "Current known limitations: no 4K output, no extension support, and preview behavior may change."
+    )
+    if get_gemini_api_key():
+        st.success("Gemini API key detected.")
+    else:
+        st.warning("Gemini API key not available (set GEMINI_API_KEY).")
+
+    google_model = st.text_input(
+        "Google model id",
+        value=str(get_secret("HF_GOOGLE_VIDEO_MODEL", DEFAULT_GOOGLE_VIDEO_MODEL) or DEFAULT_GOOGLE_VIDEO_MODEL),
+        key="google_veo_test_model",
+    )
+    google_prompt = st.text_area(
+        "Prompt",
+        value="A cinematic handheld documentary shot of a restored medieval market at dusk, natural motion and ambient crowd audio.",
+        key="google_veo_test_prompt",
+        height=100,
+    )
+    google_image_file = st.file_uploader(
+        "Input image",
+        type=["png", "jpg", "jpeg", "webp"],
+        key="google_veo_test_image_upload",
+    )
+    google_local_image = st.text_input(
+        "Or local image path",
+        value="",
+        key="google_veo_test_image_local",
+        help="Optional fallback to a local image path on disk.",
+    )
+    google_aspect_ratio = st.selectbox(
+        "Aspect ratio",
+        options=["9:16", "16:9", "1:1"],
+        index=0,
+        key="google_veo_test_aspect_ratio",
+    )
+    google_output_path = st.text_input(
+        "Output path",
+        value="data/google_veo_video_tests/google_veo_test.mp4",
+        key="google_veo_test_output_path",
+    )
+
+    if st.button("Run Google Veo Lite Video Test", key="run_google_veo_lite_video_test_btn"):
+        image_source = google_image_file or google_local_image.strip()
+        if not image_source:
+            st.error("Please upload an image or provide a local image path.")
+        elif not google_prompt.strip():
+            st.error("Prompt cannot be empty.")
+        else:
+            with st.spinner("Running Google Veo Lite test…"):
+                google_result = generate_google_veo_lite_video(
+                    prompt=google_prompt,
+                    image_source=image_source,
+                    aspect_ratio=google_aspect_ratio,
+                    output_path=google_output_path,
+                    model=google_model,
+                    debug_dir="data/google_veo_video_tests/debug",
+                )
+            st.subheader("Google Veo Lite test result")
+            st.json(
+                {
+                    "ok": google_result.get("ok"),
+                    "response_type": google_result.get("response_type"),
+                    "video_url": google_result.get("video_url"),
+                    "output_path": google_result.get("output_path"),
+                    "error": google_result.get("error"),
+                    "debug_request_path": google_result.get("debug_request_path"),
+                    "debug_response_path": google_result.get("debug_response_path"),
+                }
+            )
+            if google_result.get("ok") and google_result.get("output_path"):
+                st.success("Video generated and saved successfully.")
+                st.video(str(google_result.get("output_path")))
+            else:
+                st.error(f"Test failed: {str(google_result.get('error') or 'unknown error')[:500]}")
 
 
 # ---------------------------------------------------------------------------
