@@ -83,6 +83,7 @@ class Meta(BaseModel):
     video_effects_style: str = "Ken Burns - Standard"
     crossfade: bool = False
     crossfade_duration: float = 0.6
+    enable_polish_transitions: bool = False
     transition_types: List[str] = Field(default_factory=list)
     narration_wpm: float = 160
     narration_min_sec: float = 1.5
