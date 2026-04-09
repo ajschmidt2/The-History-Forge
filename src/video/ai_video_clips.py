@@ -83,15 +83,19 @@ def _extract_prompt_str(raw: object) -> str:
     return s
 
 
-def _find_scene_prompts(project_id: str) -> list[str]:
-    """Return image prompts in scene order from scenes.json."""
+def _find_scene_prompts(project_id: str) -> list[dict[str, str]]:
+    """Return image/video prompts in scene order from scenes.json."""
     scenes_path = Path("data/projects") / project_id / "scenes.json"
     if not scenes_path.exists():
         return []
     try:
         scenes = json.loads(scenes_path.read_text())
         return [
-            _extract_prompt_str(s.get("image_prompt") or s.get("prompt") or "")
+            {
+                "image_prompt": _extract_prompt_str(s.get("image_prompt") or s.get("prompt") or ""),
+                "video_prompt": _extract_prompt_str(s.get("video_prompt") or ""),
+                "negative_prompt": _extract_prompt_str(s.get("negative_prompt") or ""),
+            }
             for s in scenes
         ]
     except Exception:
@@ -666,8 +670,14 @@ def generate_ai_video_clips(
     _clip_w, _clip_h = (int(v) for v in size_str.split("x"))
 
     def _get_prompt(idx: int) -> str:
-        raw = prompts[idx] if idx < len(prompts) else ""
-        return _build_motion_prompt(raw) if raw else (
+        packed = prompts[idx] if idx < len(prompts) else {}
+        raw_video = str(packed.get("video_prompt", "") or "").strip() if isinstance(packed, dict) else ""
+        raw_image = str(packed.get("image_prompt", "") or "").strip() if isinstance(packed, dict) else str(packed or "").strip()
+        negative = str(packed.get("negative_prompt", "") or "").strip() if isinstance(packed, dict) else ""
+        base = raw_video or _build_motion_prompt(raw_image) if raw_image else ""
+        if base:
+            return f"{base}. Avoid: {negative}." if negative else base
+        return (
             "Animate this historical scene with natural cinematic motion, "
             "dramatic documentary atmosphere, slow deliberate movement."
         )

@@ -194,6 +194,15 @@ def _scene_to_serializable(scene: Scene) -> dict[str, object]:
         "visual_intent": str(scene.visual_intent or ""),
         "scene_id": str(getattr(scene, "scene_id", "") or ""),
         "image_prompt": str(scene.image_prompt or ""),
+        "video_prompt": str(getattr(scene, "video_prompt", "") or ""),
+        "negative_prompt": str(getattr(scene, "negative_prompt", "") or ""),
+        "scene_summary": str(getattr(scene, "scene_summary", "") or ""),
+        "continuity_notes": str(getattr(scene, "continuity_notes", "") or ""),
+        "scene_intent": str(getattr(scene, "scene_intent", "") or ""),
+        "source_confidence": str(getattr(scene, "source_confidence", "medium") or "medium"),
+        "prompt_spec": dict(getattr(scene, "prompt_spec", {}) or {}),
+        "video_prompt_spec": dict(getattr(scene, "video_prompt_spec", {}) or {}),
+        "prompt_scores": dict(getattr(scene, "prompt_scores", {}) or {}),
         "status": str(scene.status or "active"),
         "estimated_duration_sec": float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0),
         "video_path": str(getattr(scene, "video_path", "") or ""),
@@ -222,6 +231,15 @@ def _scene_from_serializable(raw: object, project_id: str) -> Scene | None:
         scene_id=str(raw.get("scene_id", "") or "").strip() or uuid4().hex,
         image_prompt=str(raw.get("image_prompt", "") or ""),
     )
+    scene.video_prompt = str(raw.get("video_prompt", "") or "")
+    scene.negative_prompt = str(raw.get("negative_prompt", "") or "")
+    scene.scene_summary = str(raw.get("scene_summary", "") or "")
+    scene.continuity_notes = str(raw.get("continuity_notes", "") or "")
+    scene.scene_intent = str(raw.get("scene_intent", "") or "")
+    scene.source_confidence = str(raw.get("source_confidence", "medium") or "medium")
+    scene.prompt_spec = raw.get("prompt_spec", {}) if isinstance(raw.get("prompt_spec"), dict) else {}
+    scene.video_prompt_spec = raw.get("video_prompt_spec", {}) if isinstance(raw.get("video_prompt_spec"), dict) else {}
+    scene.prompt_scores = raw.get("prompt_scores", {}) if isinstance(raw.get("prompt_scores"), dict) else {}
     scene.status = str(raw.get("status", "active") or "active")
     try:
         scene.estimated_duration_sec = float(raw.get("estimated_duration_sec", 0.0) or 0.0)

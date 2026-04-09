@@ -218,7 +218,12 @@ def _run_ai_video_step(project_id: str, options: FullWorkflowOptions) -> StepRes
     warnings: list[str] = []
     generated = 0
     for scene in targets:
-        prompt = str(getattr(scene, "image_prompt", "") or getattr(scene, "visual_intent", "") or getattr(scene, "script_excerpt", "")).strip()
+        prompt = str(
+            getattr(scene, "video_prompt", "")
+            or getattr(scene, "image_prompt", "")
+            or getattr(scene, "visual_intent", "")
+            or getattr(scene, "script_excerpt", "")
+        ).strip()
         if not prompt:
             warnings.append(f"Scene {scene.index}: missing prompt; using image fallback.")
             continue
@@ -962,14 +967,26 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
             scene_visual_intent = str(getattr(scene, "visual_intent", "") or "").strip()
             narration_text = str(getattr(scene, "narration_text", "") or scene_excerpt).strip()
             base_prompt = str(getattr(scene, "image_prompt", "") or "").strip()
-            scene.image_prompt = (
-                f"{base_prompt}\n"
-                f"Scene title: {scene_title}\n"
-                f"Scene excerpt: {scene_excerpt}\n"
-                f"Visual intent: {scene_visual_intent}\n"
-                f"Narration context: {narration_text}\n"
-                f"Aspect ratio: {cfg.aspect_ratio}."
-            ).strip()
+            if base_prompt:
+                scene.image_prompt = (
+                    f"{base_prompt}\n"
+                    f"Scene title: {scene_title}\n"
+                    f"Script anchor excerpt: {scene_excerpt}\n"
+                    f"Narration context: {narration_text}\n"
+                    f"Visual intent: {scene_visual_intent}\n"
+                    f"Aspect ratio: {cfg.aspect_ratio}."
+                ).strip()
+            scene.video_prompt = str(getattr(scene, "video_prompt", "") or "").strip()
+            scene.prompt_spec = dict(getattr(scene, "prompt_spec", {}) or {})
+            scene.prompt_spec["final_output"] = {
+                "scene_id": str(getattr(scene, "scene_id", "") or f"scene-{scene.index}"),
+                "image_prompt": scene.image_prompt,
+                "video_prompt": scene.video_prompt,
+                "negative_prompt": str(getattr(scene, "negative_prompt", "") or ""),
+                "scene_summary": str(getattr(scene, "scene_summary", "") or ""),
+                "continuity_notes": str(getattr(scene, "continuity_notes", "") or ""),
+                "scores": dict(getattr(scene, "prompt_scores", {}) or {}),
+            }
         save_scenes(project_id, scenes)
         sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001

@@ -142,6 +142,15 @@ class Scene:
     broll_duration_sec: float = 0.0
     broll_orientation: str = ""
     use_broll: bool = False
+    scene_summary: str = ""
+    scene_intent: str = ""
+    source_confidence: str = "medium"
+    video_prompt: str = ""
+    negative_prompt: str = ""
+    continuity_notes: str = ""
+    prompt_spec: Dict[str, Any] = field(default_factory=dict)
+    video_prompt_spec: Dict[str, Any] = field(default_factory=dict)
+    prompt_scores: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -1378,6 +1387,240 @@ def split_script_into_scenes(script: str, max_scenes: int = 8, outline: dict[str
 # ----------------------------
 # Prompt generation (ENFORCE one prompt per scene)
 # ----------------------------
+_DEFAULT_NEGATIVE_CUES = [
+    "no modern clothing",
+    "no modern weapons",
+    "no text overlays",
+    "no duplicated limbs",
+    "no floating objects",
+    "no futuristic architecture unless explicitly requested",
+    "no random smiling at camera unless appropriate",
+    "no fantasy elements unless script calls for speculation",
+]
+_FORBIDDEN_GENERIC_PHRASES = (
+    "epic scene",
+    "dramatic history",
+    "cinematic historical moment",
+)
+
+
+def _scene_anchor_keywords(text: str, limit: int = 8) -> list[str]:
+    words = re.findall(r"[A-Za-z][A-Za-z\-']{2,}", text or "")
+    stop_words = {
+        "the", "and", "for", "with", "that", "from", "this", "were", "their", "they", "into", "while", "over",
+        "have", "has", "had", "about", "during", "after", "before", "when", "where", "what", "which", "would",
+        "could", "should", "through", "across", "between", "there", "these", "those", "his", "her", "its", "our",
+        "your", "than", "then", "them", "been", "being", "also", "still", "very", "more", "most", "many",
+    }
+    ranked: list[str] = []
+    seen: set[str] = set()
+    for word in words:
+        token = word.lower()
+        if token in stop_words or token in seen:
+            continue
+        seen.add(token)
+        ranked.append(word)
+        if len(ranked) >= limit:
+            break
+    return ranked
+
+
+def _classify_scene_intent(excerpt: str) -> str:
+    text = (excerpt or "").lower()
+    if any(k in text for k in ("close-up", "artifact", "inscription", "coin", "map", "detail")):
+        return "object/detail shot"
+    if any(k in text for k in ("revealed", "discovered", "uncovered", "opened", "found")):
+        return "discovery/reveal"
+    if any(k in text for k in ("battle", "march", "attack", "charging", "fleeing", "burning")):
+        return "action moment"
+    if any(k in text for k in ("aftermath", "ruins", "debris", "smoke", "silent")):
+        return "aftermath"
+    if any(k in text for k in ("city", "valley", "harbor", "palace", "temple", "fortress", "landscape")):
+        return "location establishing shot"
+    if any(k in text for k in ("he", "she", "leader", "official", "queen", "king", "commander")):
+        return "character portrait"
+    return "mystery/speculation reconstruction"
+
+
+def _infer_time_period(excerpt: str, title: str) -> tuple[str, str]:
+    text = f"{title} {excerpt}"
+    year_match = re.search(r"\b(1[0-9]{3}|20[0-9]{2}|[5-9][0-9]{2})\b", text)
+    if year_match:
+        year = year_match.group(1)
+        return f"around {year} CE", "high"
+    lower = text.lower()
+    if "roman" in lower:
+        return "Roman era (approximately 1st century BCE to 4th century CE)", "medium"
+    if "medieval" in lower:
+        return "Medieval period (approximately 5th to 15th century)", "medium"
+    if "victorian" in lower:
+        return "Victorian period (19th century)", "medium"
+    if "bronze age" in lower:
+        return "Bronze Age (approximately 3300 to 1200 BCE)", "medium"
+    return "historical period unspecified; use plausible reconstruction", "low"
+
+
+def _infer_location(excerpt: str) -> str:
+    phrases = re.findall(r"\b(?:in|at|near|inside)\s+([A-Z][A-Za-z\-]*(?:\s+[A-Z][A-Za-z\-]*){0,3})", excerpt or "")
+    if phrases:
+        return phrases[0]
+    return "location inferred from the narration context"
+
+
+def _clean_generic_phrases(text: str) -> str:
+    out = text
+    for phrase in _FORBIDDEN_GENERIC_PHRASES:
+        out = re.sub(re.escape(phrase), "", out, flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", out).strip(" ,.")
+
+
+def _prompt_scores(spec: dict[str, Any], image_prompt: str, video_prompt: str) -> dict[str, float]:
+    excerpt = str(spec.get("script_excerpt", "")).lower()
+    keywords = [k.lower() for k in spec.get("anchor_keywords", []) if str(k).strip()]
+    image_lower = image_prompt.lower()
+    video_lower = video_prompt.lower()
+    keyword_hits = sum(1 for k in keywords if k and (k in image_lower or k in video_lower))
+    script_alignment = min(5.0, 1.0 + keyword_hits * 0.7)
+    historical_signals = sum(
+        1 for v in (
+            spec.get("time_period", ""),
+            spec.get("setting/location", ""),
+            spec.get("wardrobe_or_architecture_details", ""),
+            spec.get("historical_context", ""),
+        )
+        if str(v).strip()
+    )
+    historical_specificity = min(5.0, historical_signals * 1.2)
+    visual_clarity = 5.0 if all(str(spec.get(k, "")).strip() for k in ("primary_subject", "visible_action", "camera_framing")) else 3.0
+    action_clarity = min(5.0, 1.0 + sum(1 for k in ("opening frame description", "subject motion", "camera motion", "ending frame description") if str(spec.get("video_spec", {}).get(k, "")).strip()))
+    if excerpt and not any(tok in image_lower for tok in keywords[:2]):
+        script_alignment = max(0.0, script_alignment - 1.0)
+    return {
+        "script_alignment": round(script_alignment, 2),
+        "historical_specificity": round(historical_specificity, 2),
+        "visual_clarity": round(visual_clarity, 2),
+        "action_clarity_for_video": round(action_clarity, 2),
+    }
+
+
+def _build_scene_prompt_spec(scene: Scene, continuity_ctx: dict[str, str]) -> dict[str, Any]:
+    excerpt = str(scene.script_excerpt or "").strip()
+    anchor_keywords = _scene_anchor_keywords(excerpt)
+    intent = _classify_scene_intent(excerpt)
+    time_period, confidence = _infer_time_period(excerpt, scene.title)
+    location = _infer_location(excerpt) or continuity_ctx.get("location_family", "")
+    lower_excerpt = excerpt.lower()
+    role_candidates = [
+        "engineer", "official", "soldier", "queen", "king", "scribe", "merchant", "artisan", "commander", "priest",
+        "worker", "guard", "scholar", "leader", "ruler",
+    ]
+    primary_subject = next((r for r in role_candidates if r in lower_excerpt), "")
+    if not primary_subject:
+        primary_subject = anchor_keywords[0] if anchor_keywords else (scene.title or "historical subject")
+    secondary_subjects = anchor_keywords[1:4]
+    visible_action = _clean_generic_phrases(
+        f"{primary_subject} {('and ' + ', '.join(secondary_subjects)) if secondary_subjects else ''} during {anchor_keywords[0] if anchor_keywords else 'the narrated event'}."
+    )
+    one_sentence_summary = _clean_generic_phrases(
+        f"{scene.title or 'Scene'} shows {visible_action} in {location} during {time_period}."
+    )
+    historical_context = _clean_generic_phrases(
+        f"Ground visuals in {time_period}; avoid modern props and use plausible regional materials tied to {location}."
+    )
+    wardrobe = continuity_ctx.get("costume_family", "") or "period-appropriate clothing, tools, and architecture matching the era"
+    composition = "clear subject hierarchy, leading lines toward the primary subject, foreground-midground-background depth"
+    if intent == "location establishing shot":
+        composition = "wide depth, horizon-led composition, architecture scale emphasized, small human figures for scale"
+    elif intent == "object/detail shot":
+        composition = "tight framing, texture emphasis, shallow depth of field around key object"
+
+    cinematic_moment = _clean_generic_phrases(
+        f"{primary_subject} {('interacting with ' + secondary_subjects[0]) if secondary_subjects else 'at a decisive story beat'} in {location}"
+    )
+    spec = {
+        "scene_id": scene.scene_id or f"scene-{scene.index}",
+        "script_excerpt": excerpt,
+        "one_sentence_scene_summary": one_sentence_summary,
+        "primary_subject": primary_subject,
+        "secondary_subjects": secondary_subjects,
+        "setting/location": location,
+        "time_period": time_period,
+        "historical_context": historical_context,
+        "visible_action": visible_action,
+        "emotional_tone": "somber and investigative" if "aftermath" in intent else "focused documentary tension",
+        "camera_framing": "medium shot, eye-level, 35mm lens equivalent",
+        "composition_notes": composition,
+        "lighting": continuity_ctx.get("lighting_direction", "directional natural light with era-appropriate practical sources"),
+        "important_objects": anchor_keywords[2:7],
+        "wardrobe_or_architecture_details": wardrobe,
+        "exclusions / negative prompt cues": list(_DEFAULT_NEGATIVE_CUES),
+        "continuity_notes": (
+            f"location family: {continuity_ctx.get('location_family', location)}; "
+            f"costume family: {wardrobe}; "
+            f"time-of-day logic: {continuity_ctx.get('time_logic', 'maintain adjacent-scene consistency')}"
+        ),
+        "source_confidence": confidence,
+        "scene_intent": intent,
+        "moment_selection": cinematic_moment,
+        "anchor_keywords": anchor_keywords,
+    }
+    return spec
+
+
+def _build_image_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> str:
+    return _clean_generic_phrases(
+        f"{style_phrase}; {tone}. "
+        f"Frozen moment: {spec.get('moment_selection', '')}. "
+        f"Primary subject: {spec.get('primary_subject', '')}. "
+        f"Secondary subjects: {', '.join(spec.get('secondary_subjects', [])) or 'none'}. "
+        f"Setting: {spec.get('setting/location', '')}, {spec.get('time_period', '')}. "
+        f"Visible action: {spec.get('visible_action', '')}. "
+        f"Camera framing: {spec.get('camera_framing', '')}. "
+        f"Composition: {spec.get('composition_notes', '')}. "
+        f"Lighting: {spec.get('lighting', '')}. "
+        f"Historical grounding: {spec.get('historical_context', '')}; {spec.get('wardrobe_or_architecture_details', '')}. "
+        f"Important objects: {', '.join(spec.get('important_objects', [])) or 'none'}. "
+        f"Script anchor keywords: {', '.join(spec.get('anchor_keywords', []))}. "
+        "Photoreal detail, subject priority, no text overlays."
+    )
+
+
+def _build_video_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> tuple[str, dict[str, Any]]:
+    opening = _clean_generic_phrases(
+        f"Opening frame: {spec.get('primary_subject', '')} in {spec.get('setting/location', '')}, {spec.get('time_period', '')}, {spec.get('camera_framing', '')}"
+    )
+    subject_motion = _clean_generic_phrases(
+        f"Subject motion: {spec.get('primary_subject', '')} performs {spec.get('visible_action', '')} with stable body proportions and identity."
+    )
+    camera_motion = "Camera motion: slow dolly-in with subtle lateral drift, no abrupt cuts."
+    environment_motion = "Environment motion: smoke, dust, cloth, firelight, and ambient particles move naturally with consistent wind direction."
+    ending = _clean_generic_phrases(
+        f"Ending frame: same subject, same location, same lighting direction, action resolves into {spec.get('emotional_tone', 'documentary tension')}."
+    )
+    continuity_lock = {
+        "same clothing": True,
+        "same location": True,
+        "same lighting direction": True,
+        "no jump cuts": True,
+        "no new subjects appearing unexpectedly": True,
+    }
+    video_spec = {
+        "opening frame description": opening,
+        "subject motion": subject_motion,
+        "camera motion": camera_motion,
+        "environment motion": environment_motion,
+        "ending frame description": ending,
+        "continuity lock": continuity_lock,
+    }
+    prompt = (
+        f"{style_phrase}; {tone}. 5-second continuous historical shot. "
+        f"{opening}. {subject_motion}. {camera_motion}. {environment_motion}. {ending}. "
+        f"Keep subject stable and temporally continuous from first second to last second. "
+        f"Script anchor keywords: {', '.join(spec.get('anchor_keywords', []))}."
+    )
+    return _clean_generic_phrases(prompt), video_spec
+
+
 def generate_prompts_for_scenes(
     scenes: List[Scene],
     tone: str,
@@ -1387,8 +1630,6 @@ def generate_prompts_for_scenes(
 ) -> List[Scene]:
     if not scenes:
         return scenes
-
-    client = _openai_client()
     style_phrase = style.strip() or "Photorealistic cinematic"
 
     # Build subject consistency block from defined characters and objects
@@ -1413,96 +1654,55 @@ def generate_prompts_for_scenes(
             consistency_lines.append(f"  Object '{o['name'].strip()}': {o['description'].strip()}")
     consistency_block = "\n".join(consistency_lines)
 
-    # fallback (no OpenAI) — still ensures prompts exist
-    if client is None:
-        for s in scenes:
-            parts = [
-                f"Style: {style_phrase}. Tone: {tone}.",
-                s.visual_intent,
-                f"Scene excerpt: {s.script_excerpt}",
-                "No text overlays, captions, logos, or watermarks. High detail.",
-            ]
-            if consistency_block:
-                parts.append(consistency_block)
-            s.image_prompt = "\n".join(parts)
-        return scenes
-
-    packed = [
-        {"index": s.index, "title": s.title, "text": s.script_excerpt, "visual_intent": s.visual_intent}
-        for s in scenes
-    ]
-    constraints = [
-        "No text overlays, captions, logos, or watermarks.",
-        "Be specific about subject, setting, era cues, lighting, mood, camera feel.",
-        "Explicitly state the era/time period and setting grounded in the excerpt.",
-        "Match the selected style strongly.",
-    ]
-    payload: dict = {
-        "tone": tone,
-        "style": style_phrase,
-        "task": (
-            "Write one image prompt per scene. Return exactly one prompt per scene in the same order. "
-            "Each prompt must name the time period and location inferred from the excerpt, plus concrete "
-            "setting details (architecture, clothing, props) that match the story."
-        ),
-        "output": {"format": "json", "field": "prompts"},
-        "scenes": packed,
-        "constraints": constraints,
+    continuity_ctx: dict[str, str] = {
+        "location_family": "",
+        "costume_family": "",
+        "time_logic": "preserve neighboring scene chronology",
+        "lighting_direction": "key light from frame-left",
     }
-    if valid_chars or valid_objs:
-        payload["subject_consistency"] = {
-            "characters": [
-                {"name": c["name"].strip(), "description": c["description"].strip()} for c in valid_chars
-            ],
-            "objects": [
-                {"name": o["name"].strip(), "description": o["description"].strip()} for o in valid_objs
-            ],
-        }
-        constraints.append(
-            "For any character or object listed in subject_consistency that appears in the scene, "
-            "include their exact visual description in the prompt."
-        )
+    score_threshold = 3.5
 
-    prompts: List[str] = []
-    try:
-        resp = openai_chat_completion(client, 
-            model=get_openai_text_model(),
-            temperature=0.6,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": "Return ONLY valid JSON."},
-                {"role": "user", "content": json.dumps(payload)},
-            ],
-        )
-        data = json.loads(resp.choices[0].message.content)
-        raw = data.get("prompts", [])
-        if isinstance(raw, list):
-            prompts = [str(x).strip() for x in raw]
-    except Exception:
-        prompts = []
+    for s in scenes:
+        spec = _build_scene_prompt_spec(s, continuity_ctx)
+        if valid_chars or valid_objs:
+            details = []
+            for c in valid_chars:
+                if c["name"].strip().lower() in str(s.script_excerpt).lower():
+                    details.append(f"{c['name'].strip()}: {c['description'].strip()}")
+            for o in valid_objs:
+                if o["name"].strip().lower() in str(s.script_excerpt).lower():
+                    details.append(f"{o['name'].strip()}: {o['description'].strip()}")
+            if details:
+                spec["wardrobe_or_architecture_details"] = (
+                    f"{spec.get('wardrobe_or_architecture_details', '')}; continuity descriptors: {'; '.join(details)}"
+                ).strip("; ")
 
-    # ✅ ENFORCE count == scenes count
-    while len(prompts) < len(scenes):
-        prompts.append("")
-    prompts = prompts[:len(scenes)]
+        image_prompt = _build_image_prompt(spec, style_phrase=style_phrase, tone=tone)
+        video_prompt, video_spec = _build_video_prompt(spec, style_phrase=style_phrase, tone=tone)
+        spec["video_spec"] = video_spec
+        scores = _prompt_scores(spec, image_prompt, video_prompt)
+        if any(value < score_threshold for value in scores.values()):
+            spec["historical_context"] = (
+                f"{spec.get('historical_context', '')}. Plausible reconstruction only where evidence is uncertain."
+            ).strip()
+            image_prompt = _build_image_prompt(spec, style_phrase=style_phrase, tone=tone)
+            video_prompt, video_spec = _build_video_prompt(spec, style_phrase=style_phrase, tone=tone)
+            spec["video_spec"] = video_spec
+            scores = _prompt_scores(spec, image_prompt, video_prompt)
 
-    for i, s in enumerate(scenes):
-        p = prompts[i].strip()
-        context_parts = [
-            f"Visual intent: {s.visual_intent}",
-            f"Scene excerpt: {s.script_excerpt}",
-            "Include the time period and location inferred from the excerpt. "
-            "Call out architecture, clothing, and props that fit the era. "
-            "No text overlays, captions, logos, or watermarks. High detail.",
-        ]
-        if consistency_block:
-            context_parts.append(consistency_block)
-        context = "\n".join(context_parts)
-        if not p:
-            p = f"Style: {style_phrase}. Tone: {tone}.\n{context}"
-        else:
-            p = f"{p}\n\n{context}"
-        s.image_prompt = p
+        s.image_prompt = image_prompt
+        s.video_prompt = video_prompt
+        s.negative_prompt = ", ".join(_DEFAULT_NEGATIVE_CUES)
+        s.scene_summary = str(spec.get("one_sentence_scene_summary", "") or "")
+        s.continuity_notes = str(spec.get("continuity_notes", "") or "")
+        s.scene_intent = str(spec.get("scene_intent", "") or "")
+        s.source_confidence = str(spec.get("source_confidence", "medium") or "medium")
+        s.prompt_spec = spec
+        s.video_prompt_spec = video_spec
+        s.prompt_scores = scores
+
+        continuity_ctx["location_family"] = str(spec.get("setting/location", "") or continuity_ctx["location_family"])
+        continuity_ctx["costume_family"] = str(spec.get("wardrobe_or_architecture_details", "") or continuity_ctx["costume_family"])
 
     return scenes
 
