@@ -240,8 +240,12 @@ def _is_likely_filtered_or_empty(result: Any) -> bool:
 
     # If image metadata exists but no decodable bytes, this is usually
     # a filtered/empty response rather than a parser bug.
-    if has_generated_images_field or has_candidates_field:
+    if has_generated_images_field and generated_len == 0:
         return True
+    if has_candidates_field:
+        candidates = getattr(result, "candidates", None)
+        if not candidates:
+            return True
 
     # Also treat explicit safety metadata as a likely filtered response.
     if has_safety_field and generated_len in (None, 0):

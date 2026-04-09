@@ -55,6 +55,13 @@ jobs:
             missing=1
           fi
 
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "GEMINI_API_KEY detected"
+          else
+            echo "GEMINI_API_KEY missing"
+            missing=1
+          fi
+
           if [ "$missing" -ne 0 ]; then
             echo "One or more required secrets are missing."
             exit 1
@@ -81,8 +88,9 @@ jobs:
           fi
 
       - name: Run daily video job
+        timeout-minutes: 30
         env:
-          HIST_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_AI_STUDIO_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

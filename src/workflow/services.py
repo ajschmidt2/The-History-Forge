@@ -874,6 +874,16 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
         update_step_status(project_id, "images", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "images", StepStatus.FAILED, message=str(exc), outputs={"generated": generated})
 
+    scene_count = len(scenes[: cfg.number_of_scenes])
+    if generated == 0 and scene_count > 0:
+        update_step_status(project_id, "images", StepStatus.FAILED)
+        return StepResult(
+            project_id,
+            "images",
+            StepStatus.FAILED,
+            message=f"Image generation produced 0 images for {scene_count} scene(s).",
+            outputs={"generated": 0},
+        )
     update_step_status(project_id, "images", StepStatus.COMPLETED)
     return StepResult(project_id, "images", StepStatus.COMPLETED, outputs={"generated": generated})
 
