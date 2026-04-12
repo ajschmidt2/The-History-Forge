@@ -1480,6 +1480,82 @@ def render_video_from_timeline(
             width, height = _apply_max_width(width, height, max_width=max_width)
             fps = timeline.meta.fps
 
+            # ── FIX 1: Redistribute timeline durations to match actual AI clip lengths ──
+            # Probe AI clip durations before rendering still-image clips so that
+            # (a) video-clip scenes get their duration set to the actual clip length
+            # (b) image scenes absorb any remaining voiceover time proportionally.
+            # This prevents freeze-frame padding on short AI clips.
+            try:
+                from src.workflow.project_io import (
+                    load_project_payload as _load_pp_early,
+                    project_dir as _proj_dir_early,
+                )
+                _pp_early = _load_pp_early(project_slug)
+            except Exception:
+                _pp_early = {}
+
+            _early_opening = str(_pp_early.get("ai_opening_clip_path", "") or "")
+            _early_q2      = str(_pp_early.get("ai_q2_clip_path", "") or "")
+            _early_q3      = str(_pp_early.get("ai_q3_clip_path", "") or "")
+            _early_q4      = str(_pp_early.get("ai_q4_clip_path", "") or "")
+            try:
+                _vdir_early = _proj_dir_early(project_slug) / "assets" / "videos"
+
+                def _disk_fallback(val: str, fn: str) -> str:
+                    if val and Path(val).exists() and Path(val).stat().st_size > 0:
+                        return val
+                    c = _vdir_early / fn
+                    return str(c) if c.exists() and c.stat().st_size > 0 else val
+
+                _early_opening = _disk_fallback(_early_opening, "ai_opening_clip.mp4")
+                _early_q2      = _disk_fallback(_early_q2,      "ai_q2_clip.mp4")
+                _early_q3      = _disk_fallback(_early_q3,      "ai_q3_clip.mp4")
+                _early_q4      = _disk_fallback(_early_q4,      "ai_q4_clip.mp4")
+            except Exception:
+                pass
+
+            _early_clip_mapping = compute_ai_scene_clip_mapping(len(timeline.scenes))
+            _early_sources: dict[str, str] = {
+                "ai_opening_clip_path": _early_opening,
+                "ai_q2_clip_path":      _early_q2,
+                "ai_q3_clip_path":      _early_q3,
+                "ai_q4_clip_path":      _early_q4,
+            }
+            # Probe each resolved AI clip and collect (scene_id → actual_duration)
+            _probed_ai_durations: dict[str, float] = {}
+            for _sid, _pkey in _early_clip_mapping.items():
+                _cp = _early_sources.get(_pkey, "") or ""
+                if _cp and Path(_cp).exists():
+                    _dur = get_media_duration(_cp)
+                    if _dur > 0:
+                        _probed_ai_durations[_sid] = _dur
+
+            if _probed_ai_durations:
+                _total_before = sum(float(s.duration) for s in timeline.scenes)
+                _video_total  = sum(_probed_ai_durations.values())
+                _img_scene_ids = [s.id for s in timeline.scenes if s.id not in _probed_ai_durations]
+                _remaining = max(0.0, _total_before - _video_total)
+                _per_image = (_remaining / len(_img_scene_ids)) if _img_scene_ids else 0.0
+                for _ts in timeline.scenes:
+                    if _ts.id in _probed_ai_durations:
+                        _ts.duration = _probed_ai_durations[_ts.id]
+                    elif _ts.id in _img_scene_ids and _per_image > 0:
+                        _ts.duration = _per_image
+                if log_file:
+                    with log_file.open("a", encoding="utf-8") as _h:
+                        _h.write(
+                            "ai_clip_duration_redistribution video_scenes=%s video_total=%.3f "
+                            "image_scenes=%d per_image=%.3f total_before=%.3f\n"
+                            % (
+                                dict(_probed_ai_durations),
+                                _video_total,
+                                len(_img_scene_ids),
+                                _per_image,
+                                _total_before,
+                            )
+                        )
+            # ── End FIX 1 ────────────────────────────────────────────────────────────
+
             scene_paths: list[Path] = []
             durations: list[float] = []
             scene_duration_lookup: dict[str, float] = {}
