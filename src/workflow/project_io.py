@@ -87,6 +87,7 @@ def _scene_to_dict(scene: Any) -> dict[str, Any]:
         "broll_duration_sec": float(getattr(scene, "broll_duration_sec", 0.0) or 0.0),
         "broll_orientation": str(getattr(scene, "broll_orientation", "") or ""),
         "use_broll": bool(getattr(scene, "use_broll", False)),
+        "visual_context": dict(getattr(scene, "visual_context", {}) or {}),
     }
 
 
@@ -147,6 +148,7 @@ def _scene_from_dict(raw: object) -> Any | None:
         scene.broll_duration_sec = 0.0
     scene.broll_orientation = str(raw.get("broll_orientation", "") or "")
     scene.use_broll = bool(raw.get("use_broll", False))
+    scene.visual_context = raw.get("visual_context", {}) if isinstance(raw.get("visual_context"), dict) else {}
     return scene
 
 

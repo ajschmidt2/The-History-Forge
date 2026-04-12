@@ -99,6 +99,7 @@ def _find_scene_prompts(project_id: str) -> list[dict[str, str]]:
                 "image_prompt": _extract_prompt_str(s.get("image_prompt") or s.get("prompt") or ""),
                 "video_prompt": _extract_prompt_str(s.get("video_prompt") or ""),
                 "negative_prompt": _extract_prompt_str(s.get("negative_prompt") or ""),
+                "visual_context": s.get("visual_context") if isinstance(s.get("visual_context"), dict) else {},
             }
             for s in scenes
         ]
@@ -751,13 +752,26 @@ def generate_ai_video_clips(
         raw_video = str(packed.get("video_prompt", "") or "").strip() if isinstance(packed, dict) else ""
         raw_image = str(packed.get("image_prompt", "") or "").strip() if isinstance(packed, dict) else str(packed or "").strip()
         negative = str(packed.get("negative_prompt", "") or "").strip() if isinstance(packed, dict) else ""
+        # Inject global visual context as a prefix (FIX 2)
+        vc = packed.get("visual_context", {}) if isinstance(packed, dict) else {}
+        vc_prefix = ""
+        if vc and any(vc.get(k, "") for k in ("time_period", "location", "clothing_style", "visual_atmosphere")):
+            vc_prefix = (
+                f"{vc.get('time_period', '')}, "
+                f"{vc.get('location', '')}, "
+                f"{vc.get('clothing_style', '')}, "
+                f"{vc.get('visual_atmosphere', '')}. "
+            ).strip(" ,")
+            if vc_prefix:
+                vc_prefix += ". "
         base = raw_video or _build_motion_prompt(raw_image) if raw_image else ""
         if base:
-            return f"{base}. Avoid: {negative}." if negative else base
+            full = f"{vc_prefix}{base}".strip()
+            return f"{full}. Avoid: {negative}." if negative else full
         return (
-            "Animate this historical scene with natural cinematic motion, "
+            f"{vc_prefix}Animate this historical scene with natural cinematic motion, "
             "dramatic documentary atmosphere, slow deliberate movement."
-        )
+        ).strip()
 
     def _get_image(idx: int) -> Optional[Path]:
         return images[idx] if idx < len(images) else None

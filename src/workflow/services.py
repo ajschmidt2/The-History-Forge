@@ -37,6 +37,7 @@ from src.workflow.project_io import (
 )
 from src.workflow.state import load_workflow_state, save_workflow_state, update_step_status
 from utils import (
+    extract_visual_context,
     generate_image_for_scene,
     generate_prompts_for_scenes,
     generate_script,
@@ -951,7 +952,24 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
         return StepResult(project_id, "prompts", StepStatus.FAILED, message="No scenes available.")
 
     update_step_status(project_id, "prompts", StepStatus.IN_PROGRESS)
+    logger = _workflow_logger(project_id)
     try:
+        # Extract persistent visual context from the full script once (FIX 2)
+        full_script = str(payload.get("script_text", "") or "").strip()
+        visual_ctx: dict = {}
+        if full_script:
+            try:
+                visual_ctx = extract_visual_context(full_script)
+                logger.info(
+                    "visual_context_extracted time_period=%r location=%r clothing=%r atmosphere=%r",
+                    visual_ctx.get("time_period", ""),
+                    visual_ctx.get("location", ""),
+                    visual_ctx.get("clothing_style", ""),
+                    visual_ctx.get("visual_atmosphere", ""),
+                )
+            except Exception as _vc_exc:
+                logger.warning("visual_context_extraction_failed: %s", _vc_exc)
+
         for scene in scenes:
             narration_text = str(getattr(scene, "narration_text", "") or getattr(scene, "subtitle_text", "") or getattr(scene, "script_excerpt", "") or "").strip()
             scene.narration_text = narration_text
@@ -961,6 +979,7 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
             style=cfg.visual_style,
             characters=payload.get("character_registry", []),
             objects=payload.get("object_registry", []),
+            visual_context=visual_ctx or None,
         )
         for scene in scenes:
             scene_title = str(getattr(scene, "title", "") or "").strip()

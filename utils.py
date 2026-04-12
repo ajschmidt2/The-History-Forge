@@ -151,6 +151,8 @@ class Scene:
     prompt_spec: Dict[str, Any] = field(default_factory=dict)
     video_prompt_spec: Dict[str, Any] = field(default_factory=dict)
     prompt_scores: Dict[str, float] = field(default_factory=dict)
+    # Global visual context extracted once from the full script (FIX 2)
+    visual_context: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -1621,12 +1623,55 @@ def _build_video_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> t
     return _clean_generic_phrases(prompt), video_spec
 
 
+def extract_visual_context(full_script: str) -> dict:
+    """Extract persistent visual context from the full script via a single LLM call.
+
+    Returns a dict with keys: time_period, location, clothing_style, visual_atmosphere.
+    Falls back to empty strings if the call fails or the key is missing.
+    """
+    client = _openai_client()
+    if not client or not (full_script or "").strip():
+        return {"time_period": "", "location": "", "clothing_style": "", "visual_atmosphere": ""}
+
+    prompt_text = (
+        "You are a film production designer. Read this historical documentary script and extract "
+        "the persistent visual details that should appear in EVERY scene.\n\n"
+        f"Script:\n{full_script.strip()}\n\n"
+        "Return ONLY a JSON object with these exact keys:\n"
+        "{\n"
+        '  "time_period": "specific era and century, e.g. Ancient Rome, 1st century AD",\n'
+        '  "location": "primary geographic setting, e.g. the Roman Forum, ancient Rome",\n'
+        '  "clothing_style": "era-accurate clothing description, e.g. Roman togas and military tunics in red and white",\n'
+        '  "visual_atmosphere": "lighting and mood that defines the whole piece, e.g. golden hour Mediterranean sunlight, dusty and dramatic"\n'
+        "}\n"
+        "Return only JSON, no other text."
+    )
+    try:
+        import json as _json
+        resp = openai_chat_completion(
+            client,
+            messages=[{"role": "user", "content": prompt_text}],
+            temperature=0.2,
+            max_tokens=300,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return _json.loads(raw.strip())
+    except Exception:
+        return {"time_period": "", "location": "", "clothing_style": "", "visual_atmosphere": ""}
+
+
 def generate_prompts_for_scenes(
     scenes: List[Scene],
     tone: str,
     style: str = "Photorealistic cinematic",
     characters: Optional[List[dict]] = None,
     objects: Optional[List[dict]] = None,
+    visual_context: Optional[dict] = None,
 ) -> List[Scene]:
     if not scenes:
         return scenes
@@ -1662,8 +1707,42 @@ def generate_prompts_for_scenes(
     }
     score_threshold = 3.5
 
+    # Build a reusable context prefix from global visual_context (FIX 2)
+    _vc = visual_context or {}
+    _vc_prefix = ""
+    if _vc and any(_vc.get(k, "") for k in ("time_period", "location", "clothing_style", "visual_atmosphere")):
+        _vc_prefix = (
+            f"Global visual context — "
+            f"Era: {_vc.get('time_period', '')}. "
+            f"Setting: {_vc.get('location', '')}. "
+            f"Clothing: {_vc.get('clothing_style', '')}. "
+            f"Atmosphere: {_vc.get('visual_atmosphere', '')}."
+        ).strip()
+
     for s in scenes:
         spec = _build_scene_prompt_spec(s, continuity_ctx)
+        # Inject global visual context into spec fields so prompts carry era DNA
+        if _vc:
+            if _vc.get("time_period") and not str(spec.get("time_period", "")).strip():
+                spec["time_period"] = _vc["time_period"]
+            if _vc.get("location") and not str(spec.get("setting/location", "")).strip():
+                spec["setting/location"] = _vc["location"]
+            if _vc.get("clothing_style"):
+                existing = str(spec.get("wardrobe_or_architecture_details", "") or "")
+                spec["wardrobe_or_architecture_details"] = (
+                    f"{_vc['clothing_style']}; {existing}".strip("; ") if existing else _vc["clothing_style"]
+                )
+            if _vc.get("visual_atmosphere"):
+                existing_lighting = str(spec.get("lighting", "") or "")
+                spec["lighting"] = (
+                    f"{existing_lighting}; atmosphere: {_vc['visual_atmosphere']}".strip("; ")
+                    if existing_lighting
+                    else _vc["visual_atmosphere"]
+                )
+            if _vc_prefix:
+                spec["global_visual_context"] = _vc_prefix
+        # Store visual_context on the scene for later use in image/video generation
+        s.visual_context = dict(_vc) if _vc else {}
         if valid_chars or valid_objs:
             details = []
             for c in valid_chars:
@@ -1891,9 +1970,23 @@ def generate_image_for_scene(
     ).strip()
 
     _anchor_line = f"Visual setting anchor: {visual_anchor}\n" if visual_anchor else ""
+
+    # Build global visual context block from scene.visual_context (FIX 2)
+    _vc = getattr(scene, "visual_context", None) or {}
+    _context_block = ""
+    if _vc and any(_vc.get(k, "") for k in ("time_period", "location", "clothing_style", "visual_atmosphere")):
+        _context_block = (
+            f"Time period: {_vc.get('time_period', '')}. "
+            f"Location: {_vc.get('location', '')}. "
+            f"Clothing: {_vc.get('clothing_style', '')}. "
+            f"Atmosphere: {_vc.get('visual_atmosphere', '')}.\n"
+        )
+        print(f"[visual_context] scene={scene.index} context_block={_context_block[:120]!r}")
+
     prompt = (
         f"Style: {visual_style}. Unified cinematic color grade and period-accurate historical atmosphere.\n"
         f"{_anchor_line}"
+        f"{_context_block}"
         f"STRICT RULE: Absolutely no text, letters, words, numbers, captions, subtitles, watermarks, logos, "
         f"labels, signs with readable text, or writing of any kind anywhere in the image.\n"
         f"{base}\n\n"
