@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import logging
 from typing import Iterable
 
 from src.trend_intelligence.adapters.interfaces import TopicAnalysisAdapter, TrendsSourceAdapter, YouTubeSourceAdapter
@@ -26,6 +27,8 @@ from src.trend_intelligence.types import (
     TrendScanFilters,
     YouTubeVideoCandidate,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,16 @@ class TrendIntelligencePipelineService:
         analysis_adapter: TopicAnalysisAdapter | None = None,
     ) -> None:
         self.trends_adapter = trends_adapter or GoogleTrendsSeedsAdapter()
-        self.youtube_adapter = youtube_adapter or YouTubeTopicSourceAdapter()
+        self.youtube_adapter_error: str | None = None
+        if youtube_adapter is not None:
+            self.youtube_adapter = youtube_adapter
+        else:
+            try:
+                self.youtube_adapter = YouTubeTopicSourceAdapter()
+            except Exception as exc:
+                self.youtube_adapter = None
+                self.youtube_adapter_error = f"YouTube source unavailable: {exc}"
+                logger.exception("Failed to initialize YouTubeTopicSourceAdapter.")
         self.analysis_adapter = analysis_adapter or OpenAITopicAnalysisAdapter()
         self.brand_profile = DEFAULT_BRAND_PROFILE
 
@@ -81,13 +93,14 @@ class TrendIntelligencePipelineService:
 
         merged_results: list[PipelineTopicResult] = []
         for seed in seeds:
-            videos = self.youtube_adapter.search_topic_videos(seed.topic, limit=videos_per_topic)
+            videos = self._safe_search_topic_videos(seed.topic, videos_per_topic)
             analysis = self.analysis_adapter.analyze_topic(seed.topic, videos)
             merged_results.append(PipelineTopicResult(seed=seed, videos=tuple(videos), analysis=analysis))
 
+        youtube_source = self.youtube_adapter.source_name if self.youtube_adapter is not None else "youtube_unavailable"
         source_names = (
             self.trends_adapter.source_name,
-            self.youtube_adapter.source_name,
+            youtube_source,
             self.analysis_adapter.source_name,
         )
         return FullScanPipelineResult(sources=source_names, topics=tuple(merged_results))
@@ -129,6 +142,8 @@ class TrendIntelligencePipelineService:
         worker_count = max(1, min(max_workers, len(seeds)))
         ranked_results: list[TopicResult] = []
         warnings: list[ScanWarning] = []
+        if self.youtube_adapter_error:
+            warnings.append(ScanWarning(source="youtube", message=self.youtube_adapter_error))
 
         # NOTE: ThreadPoolExecutor is sufficient here because adapter calls are primarily I/O-bound.
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -165,7 +180,7 @@ class TrendIntelligencePipelineService:
         else:
             youtube_query = f"{seed.topic} history"
 
-        videos = self.youtube_adapter.search_topic_videos(youtube_query, limit=videos_per_topic)
+        videos = self._safe_search_topic_videos(youtube_query, videos_per_topic)
         analysis = self.analysis_adapter.analyze_topic(seed.topic, videos, brand_focus=filters.brand_focus)
 
         video_candidates = tuple(self._to_video_candidate(video) for video in videos)
@@ -210,6 +225,17 @@ class TrendIntelligencePipelineService:
             source=source_metadata,
             sampled_videos=video_candidates,
         )
+
+    def _safe_search_topic_videos(self, topic: str, videos_per_topic: int) -> list[VideoResult]:
+        if self.youtube_adapter is None:
+            return []
+        try:
+            return self.youtube_adapter.search_topic_videos(topic, limit=videos_per_topic)
+        except Exception as exc:
+            if self.youtube_adapter_error is None:
+                self.youtube_adapter_error = f"YouTube source query failed: {exc}"
+            logger.exception("YouTube adapter query failed.", extra={"topic": topic, "limit": videos_per_topic})
+            return []
 
     def _to_raw_topic(self, seed: TrendingTopicSeed) -> RawTrendTopic:
         raw = seed.raw or {}

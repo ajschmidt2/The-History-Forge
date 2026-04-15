@@ -1,4 +1,5 @@
 from src.trend_intelligence.adapters.mock_adapters import GoogleTrendsSeedsAdapter, MockTrendsSourceAdapter, MockYouTubeSourceAdapter
+import src.trend_intelligence.pipeline_service as pipeline_mod
 from src.trend_intelligence.pipeline_service import TrendIntelligencePipelineService
 from src.trend_intelligence.types import TrendScanFilters
 
@@ -79,3 +80,33 @@ def test_run_trend_intelligence_scan_applies_minimum_score_filter():
     results = service.run_trend_intelligence_scan(filters, topic_limit=5, videos_per_topic=2, max_workers=3)
 
     assert all(result.score.overall >= 95 for result in results)
+
+
+def test_pipeline_service_survives_missing_youtube_key(monkeypatch):
+    class _DisabledYoutube:
+        source_name = "youtube_data_api"
+        enabled = False
+
+        def search_topic_videos(self, _topic: str, *, limit: int):
+            return [] if limit > 0 else []
+
+    monkeypatch.setattr(pipeline_mod, "YouTubeTopicSourceAdapter", _DisabledYoutube)
+    service = TrendIntelligencePipelineService(trends_adapter=MockTrendsSourceAdapter())
+
+    filters = TrendScanFilters(timeframe="7d", content_type="both", brand_focus="all", minimum_score=0)
+    execution = service.run_trend_intelligence_scan_with_status(filters, topic_limit=2, videos_per_topic=2, max_workers=1)
+
+    assert service.youtube_adapter is not None
+    assert len(execution.topics) == 2
+
+
+def test_pipeline_service_records_youtube_init_error(monkeypatch):
+    class _BrokenYoutube:
+        def __init__(self):
+            raise RuntimeError("bad youtube config")
+
+    monkeypatch.setattr(pipeline_mod, "YouTubeTopicSourceAdapter", _BrokenYoutube)
+    service = TrendIntelligencePipelineService(trends_adapter=GoogleTrendsSeedsAdapter())
+
+    assert service.youtube_adapter is None
+    assert service.youtube_adapter_error is not None
