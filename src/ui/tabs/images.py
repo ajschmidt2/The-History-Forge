@@ -12,7 +12,7 @@ from src.ui.state import active_project_id, scenes_ready
 from src.ui.timeline_sync import sync_timeline_for_project
 from src.workflow.models import StepStatus
 from src.workflow.services import PipelineOptions, run_generate_images
-from src.workflow.project_io import load_scenes
+from src.workflow.project_io import load_project_payload, load_scenes
 
 
 MAX_UPLOAD_IMAGE_BYTES = 20 * 1024 * 1024
@@ -178,6 +178,7 @@ def tab_create_images() -> None:
                     aspect_ratio=st.session_state.aspect_ratio,
                     visual_style=st.session_state.visual_style,
                     tone=st.session_state.tone,
+                    image_provider=str(st.session_state.get("image_provider", "falai") or "falai"),
                 ),
             )
         if result.status != StepStatus.COMPLETED:
@@ -247,10 +248,18 @@ def tab_create_images() -> None:
             with c1:
                 if st.button("Regenerate this scene", key=f"regen_{s.index}", width="stretch"):
                     with st.spinner("Regenerating..."):
+                        _payload = load_project_payload(active_project_id())
+                        _topic = str(_payload.get("topic", "") or _payload.get("project_title", "") or "").strip()
+                        _era = str(_payload.get("era", "") or "").strip()
+                        _visual_anchor = ""
+                        if _topic:
+                            _visual_anchor = f"{_topic}. {_era + '. ' if _era else ''}Consistent historical era, unified palette, same cinematic treatment across all scenes."
                         updated = generate_image_for_scene(
                             s,
                             aspect_ratio=st.session_state.aspect_ratio,
                             visual_style=st.session_state.visual_style,
+                            visual_anchor=_visual_anchor,
+                            provider=str(st.session_state.get("image_provider", "falai") or "falai"),
                         )
                         s.image_bytes = updated.image_bytes
                         if s.image_variations:
