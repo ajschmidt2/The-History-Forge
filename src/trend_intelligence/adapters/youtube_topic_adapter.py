@@ -48,18 +48,25 @@ class YouTubeTopicSourceAdapter(YouTubeSourceAdapter):
         throttle_seconds: float = 0.15,
         fallback: YouTubeSourceAdapter | None = None,
     ) -> None:
-        self.api_key = (api_key or get_secret("YOUTUBE_API_KEY")).strip()
+        raw_api_key = api_key if api_key is not None else get_secret("YOUTUBE_API_KEY")
+        if isinstance(raw_api_key, str):
+            raw_api_key = raw_api_key.strip()
+        self.api_key = raw_api_key or None
+        self.enabled = bool(self.api_key)
+        self.status_message = "" if self.enabled else "YouTube source disabled: missing YOUTUBE_API_KEY."
         self.throttle_seconds = max(0.0, throttle_seconds)
         self.fallback = fallback or MockYouTubeSourceAdapter()
+        if not self.enabled:
+            logger.warning("YOUTUBE_API_KEY is missing or empty; YouTube Trend adapter is disabled.")
 
     def search_topic_videos(self, topic: str, *, limit: int) -> list[VideoResult]:
         safe_limit = max(0, int(limit))
         if safe_limit == 0:
             return []
 
-        if not self.api_key:
-            logger.info("YouTube API key missing; using fallback adapter.")
-            return self.fallback.search_topic_videos(topic, limit=safe_limit)
+        if not self.enabled:
+            logger.info("YouTube Trend adapter is disabled; returning empty results.")
+            return []
 
         try:
             client = self._client()
@@ -96,6 +103,8 @@ class YouTubeTopicSourceAdapter(YouTubeSourceAdapter):
             return self.fallback.search_topic_videos(topic, limit=safe_limit)
 
     def _client(self):
+        if not self.enabled:
+            raise RuntimeError("YouTube API client unavailable: missing YOUTUBE_API_KEY.")
         try:
             return build("youtube", "v3", developerKey=self.api_key, cache_discovery=False)
         except Exception:

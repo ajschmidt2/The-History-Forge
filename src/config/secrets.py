@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+import logging
 from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
@@ -72,6 +73,7 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
 _FAL_KEY_CANDIDATES: tuple[str, ...] = ("FAL_KEY", "fal_key", "FAL_API_KEY", "fal_api_key")
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=None)
@@ -338,21 +340,24 @@ def resolve_openai_key() -> str:
     return ""
 
 def get_secret(key: str, default=None):
-    canonical = key.upper()
-    aliases = _aliases(key)
+    canonical = str(key).upper()
+    aliases = _aliases(str(key))
 
     # 1) Streamlit secrets (root aliases first)
-    secrets = _safe_streamlit_secrets()
-    if secrets is not None:
-        for alias in aliases:
-            found, raw = _read_key(secrets, alias)
-            value = _normalize(raw) if found else ""
-            if value:
-                return value
-        for path in _NESTED_STREAMLIT_PATHS.get(canonical, ()):
-            nested = _mapping_path_get(secrets, path)
-            if nested:
-                return nested
+    try:
+        secrets = _safe_streamlit_secrets()
+        if secrets is not None:
+            for alias in aliases:
+                found, raw = _read_key(secrets, alias)
+                value = _normalize(raw) if found else ""
+                if value:
+                    return value
+            for path in _NESTED_STREAMLIT_PATHS.get(canonical, ()):
+                nested = _mapping_path_get(secrets, path)
+                if nested:
+                    return nested
+    except Exception:
+        logger.exception("get_secret failed for key '%s'; using default.", key)
 
     # 2) Environment variables by aliases
     for alias in aliases:
@@ -371,7 +376,7 @@ def get_secret(key: str, default=None):
         if nested:
             return nested
 
-    # 4) Default if not found
+    # 4) Default if not found or any error occurs
     return default
 
 

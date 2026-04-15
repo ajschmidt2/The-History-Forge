@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import UTC, datetime
+import logging
 from uuid import UUID
 
 import streamlit as st
@@ -27,6 +28,7 @@ DEFAULT_FILTERS = TrendScanFilters(
 )
 
 LOCAL_DEV_USER_UUID = "00000000-0000-0000-0000-000000000001"
+logger = logging.getLogger(__name__)
 
 
 def _resolve_user_id() -> str:
@@ -96,7 +98,15 @@ def tab_trend_intelligence() -> None:
 
     filters = render_filter_panel(DEFAULT_FILTERS)
 
-    st.session_state.setdefault("trend_scan_service", TrendIntelligencePipelineService())
+    if "trend_scan_service" not in st.session_state:
+        try:
+            st.session_state.trend_scan_service = TrendIntelligencePipelineService()
+            st.session_state.trend_scan_service_error = None
+        except Exception as exc:
+            logger.exception("TrendIntelligencePipelineService initialization failed.")
+            st.session_state.trend_scan_service = None
+            st.session_state.trend_scan_service_error = f"Trend Intelligence service initialization failed: {exc}"
+
     st.session_state.setdefault("trend_scan_repo", TrendIntelligenceRepository())
 
     st.session_state.setdefault("trend_scan_has_run", False)
@@ -108,6 +118,16 @@ def tab_trend_intelligence() -> None:
     st.session_state.setdefault("trend_scan_topic_result_ids", {})
     st.session_state.setdefault("trend_scan_persistence_ready", None)
     st.session_state.setdefault("trend_scan_persistence_error", None)
+    st.session_state.setdefault("trend_scan_service_error", None)
+
+    service = st.session_state.get("trend_scan_service")
+    service_error = st.session_state.get("trend_scan_service_error")
+    if service_error:
+        st.warning(service_error)
+    if service is not None:
+        youtube_error = getattr(service, "youtube_adapter_error", None)
+        if youtube_error:
+            st.caption(f"⚠️ {youtube_error}")
 
     if st.session_state.trend_scan_persistence_ready is None:
         ready, admin_error = _validate_trend_persistence_at_startup(st.session_state.trend_scan_repo)
@@ -120,6 +140,11 @@ def tab_trend_intelligence() -> None:
         _render_trend_persistence_admin_error(persistence_error)
 
     if st.button("Run Scan", type="primary", use_container_width=True):
+        if st.session_state.trend_scan_service is None:
+            st.session_state.trend_scan_error = "Trend Intelligence service is unavailable. Please check configuration."
+            st.session_state.trend_scan_has_run = False
+            return
+
         st.session_state.trend_scan_has_run = True
         st.session_state.trend_scan_error = None
         st.session_state.trend_scan_warnings = []
