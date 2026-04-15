@@ -747,43 +747,58 @@ def generate_ai_video_clips(
     size_str = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["9:16"])
     _clip_w, _clip_h = (int(v) for v in size_str.split("x"))
 
-    def _get_prompt(idx: int) -> str:
+    # Camera motion instruction per clip position — reinforces narrative pacing
+    # and gives each clip a distinct cinematic feel.
+    _CLIP_CAMERA_MOTIONS = {
+        "opening": "slow dramatic push-in establishing shot",
+        "q2":      "medium shot, subtle rack focus",
+        "q3":      "low angle dramatic upward tilt",
+        "q4":      "slow pull-out revealing shot",
+    }
+
+    def _get_prompt(idx: int, label: str = "") -> str:
         packed = prompts[idx] if idx < len(prompts) else {}
         raw_video = str(packed.get("video_prompt", "") or "").strip() if isinstance(packed, dict) else ""
         raw_image = str(packed.get("image_prompt", "") or "").strip() if isinstance(packed, dict) else str(packed or "").strip()
         negative = str(packed.get("negative_prompt", "") or "").strip() if isinstance(packed, dict) else ""
-        # Inject global visual context as a prefix (FIX 2)
+        # Build a rich visual context prefix from the enriched visual_context dict
         vc = packed.get("visual_context", {}) if isinstance(packed, dict) else {}
-        vc_prefix = ""
-        if vc and any(vc.get(k, "") for k in ("time_period", "location", "clothing_style", "visual_atmosphere")):
-            vc_prefix = (
-                f"{vc.get('time_period', '')}, "
-                f"{vc.get('location', '')}, "
-                f"{vc.get('clothing_style', '')}, "
-                f"{vc.get('visual_atmosphere', '')}. "
-            ).strip(" ,")
-            if vc_prefix:
-                vc_prefix += ". "
+        vc_parts = []
+        for _k, _label in [
+            ("time_period", ""), ("location", ""), ("clothing_style", ""),
+            ("visual_atmosphere", ""), ("character_name", "Subject"),
+            ("character_appearance", "Appearance"), ("visual_style", "Style"),
+            ("color_palette", "Palette"),
+        ]:
+            _val = str(vc.get(_k, "") or "").strip()
+            if _val:
+                vc_parts.append(f"{_label}: {_val}" if _label else _val)
+        vc_prefix = ", ".join(vc_parts) + ". " if vc_parts else ""
+        # Per-clip camera motion appended to base prompt
+        camera_motion = _CLIP_CAMERA_MOTIONS.get(label, "slow dolly-in with subtle lateral drift")
         base = raw_video or _build_motion_prompt(raw_image) if raw_image else ""
         if base:
-            full = f"{vc_prefix}{base}".strip()
-            return f"{full}. Avoid: {negative}." if negative else full
+            full = f"{vc_prefix}{base}. Camera: {camera_motion}.".strip()
+            return f"{full} Avoid: {negative}." if negative else full
         return (
             f"{vc_prefix}Animate this historical scene with natural cinematic motion, "
-            "dramatic documentary atmosphere, slow deliberate movement."
+            f"dramatic documentary atmosphere, {camera_motion}."
         ).strip()
 
     def _get_image(idx: int) -> Optional[Path]:
         return images[idx] if idx < len(images) else None
 
-    # Define clips: (label, image_index, prompt_index, output_filename)
-    # 1 at the opening, then 3 spread evenly at 1/4, 1/2, 3/4 of the image set.
+    # Define clips at narrative story beats rather than equal math splits.
+    # Beat placement: opening (scene 1), rising action (~25%), climax (~65%),
+    # closing (last scene).  Using max(images, prompts) as the reference so
+    # text-to-video providers (Sora) use the prompt count, not the image count.
     num_images = max(len(images), 1)
+    _n = max(len(images), len(prompts), 1)
     clip_targets = [
-        ("opening", 0,                       0,                       "ai_clip_opening.mp4"),
-        ("q2",      num_images // 4,         num_images // 4,         "ai_clip_q2.mp4"),
-        ("q3",      num_images // 2,         num_images // 2,         "ai_clip_q3.mp4"),
-        ("q4",      3 * num_images // 4,     3 * num_images // 4,     "ai_clip_q4.mp4"),
+        ("opening", 0,                              0,                              "ai_clip_opening.mp4"),
+        ("q2",      max(1, round(_n * 0.25)),       max(1, round(_n * 0.25)),       "ai_clip_q2.mp4"),
+        ("q3",      max(2, round(_n * 0.65)),       max(2, round(_n * 0.65)),       "ai_clip_q3.mp4"),
+        ("q4",      _n - 1,                         _n - 1,                         "ai_clip_q4.mp4"),
     ]
 
     results = []
@@ -798,7 +813,7 @@ def generate_ai_video_clips(
 
     for label, img_idx, prompt_idx, out_name in clip_targets:
         image = _get_image(img_idx)
-        prompt = _get_prompt(prompt_idx)
+        prompt = _get_prompt(prompt_idx, label=label)
         out_path = tmp_dir / out_name
 
         _wlog.info(

@@ -43,23 +43,25 @@ AI_SCENE_DEFICIT_RECOVERY_THRESHOLD_SEC = 0.75
 def compute_ai_scene_clip_mapping(num_scenes: int) -> dict[str, str]:
     """Return ``{scene_id: payload_key}`` for the four AI video clips.
 
-    The clip generator in ``src/video/ai_video_clips.py`` places four clips at
-    image indices ``0``, ``n//4``, ``n//2`` and ``3n//4`` where ``n`` is the
-    scene count. This helper mirrors that formula so the render pipeline can
-    attach each generated clip to the correct scene regardless of how many
-    scenes the project has. The previous hardcoded ``s01/s03/s05/s07`` mapping
-    only matched 8-scene projects; with the default 14-scene preset the q2/q3/q4
-    clips were silently dropped and the render fell back to still images.
+    Clips are placed at narrative story beats rather than equal math splits:
+      - opening  → scene 1  (always the hook)
+      - q2       → ~25% into the script  (rising action)
+      - q3       → ~65% into the script  (climax)
+      - q4       → last scene  (payoff / closing)
+
+    This mirrors the beat placement used in ``src/video/ai_video_clips.py``
+    so the render pipeline always attaches each clip to the correct scene
+    regardless of total scene count.
 
     When two clips land on the same scene (very small projects) the earlier
     clip in the sequence wins, so the opening clip is always preserved.
     """
     safe_scene_count = max(int(num_scenes), 1)
     targets = (
-        (0, "ai_opening_clip_path"),
-        (safe_scene_count // 4, "ai_q2_clip_path"),
-        (safe_scene_count // 2, "ai_q3_clip_path"),
-        ((3 * safe_scene_count) // 4, "ai_q4_clip_path"),
+        (0,                                            "ai_opening_clip_path"),
+        (max(1, round(safe_scene_count * 0.25)),       "ai_q2_clip_path"),
+        (max(2, round(safe_scene_count * 0.65)),       "ai_q3_clip_path"),
+        (safe_scene_count - 1,                         "ai_q4_clip_path"),
     )
     mapping: dict[str, str] = {}
     for idx, payload_key in targets:
@@ -1511,6 +1513,26 @@ def render_video_from_timeline(
                 _early_q2      = _disk_fallback(_early_q2,      "ai_q2_clip.mp4")
                 _early_q3      = _disk_fallback(_early_q3,      "ai_q3_clip.mp4")
                 _early_q4      = _disk_fallback(_early_q4,      "ai_q4_clip.mp4")
+
+                # Final fallback: load from the canonical clip_manifest.json written
+                # by services.py after persisting clips. This catches the case where
+                # the payload is blank but the manifest has the authoritative paths.
+                import json as _json_render_early
+                _manifest_path_early = _vdir_early / "clip_manifest.json"
+                if _manifest_path_early.exists():
+                    try:
+                        _mdata = _json_render_early.loads(_manifest_path_early.read_text())
+                        def _manifest_fallback(val: str, key: str) -> str:
+                            if val and Path(val).exists() and Path(val).stat().st_size > 0:
+                                return val
+                            mp = str(_mdata.get(key, "") or "")
+                            return mp if mp and Path(mp).exists() and Path(mp).stat().st_size > 0 else val
+                        _early_opening = _manifest_fallback(_early_opening, "ai_opening_clip_path")
+                        _early_q2      = _manifest_fallback(_early_q2,      "ai_q2_clip_path")
+                        _early_q3      = _manifest_fallback(_early_q3,      "ai_q3_clip_path")
+                        _early_q4      = _manifest_fallback(_early_q4,      "ai_q4_clip_path")
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -1646,6 +1668,24 @@ def render_video_from_timeline(
                 _q2 = _check_disk(_q2, "ai_q2_clip.mp4")
                 _q3 = _check_disk(_q3, "ai_q3_clip.mp4")
                 _q4 = _check_disk(_q4, "ai_q4_clip.mp4")
+
+                # Also try the canonical clip_manifest.json written by services.py
+                import json as _json_render_main
+                _main_manifest_path = _videos_dir / "clip_manifest.json"
+                if _main_manifest_path.exists():
+                    try:
+                        _mm = _json_render_main.loads(_main_manifest_path.read_text())
+                        def _manifest_check(val: str, key: str) -> str:
+                            if val and Path(val).exists() and Path(val).stat().st_size > 0:
+                                return val
+                            mp = str(_mm.get(key, "") or "")
+                            return mp if mp and Path(mp).exists() and Path(mp).stat().st_size > 0 else val
+                        _opening = _manifest_check(_opening, "ai_opening_clip_path")
+                        _q2      = _manifest_check(_q2,      "ai_q2_clip_path")
+                        _q3      = _manifest_check(_q3,      "ai_q3_clip_path")
+                        _q4      = _manifest_check(_q4,      "ai_q4_clip_path")
+                    except Exception:
+                        pass
             except Exception:
                 pass
             # Fall back to Streamlit session state (UI path)

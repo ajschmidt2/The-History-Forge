@@ -406,6 +406,24 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
         payload["ai_q4_clip_path"]      = str(q4_persisted)      if q4_persisted      else ""
         save_project_payload(project_id, payload)
 
+        # Write a canonical clip manifest so ffmpeg_render can find clips
+        # even when the payload keys are stale (e.g. manual compile after
+        # session restart).  This is the authoritative source for persisted
+        # clip paths and lives alongside the clip files in assets/videos/.
+        import json as _json_svc
+        _clip_manifest = {
+            "ai_opening_clip_path": str(opening_persisted) if opening_persisted else "",
+            "ai_q2_clip_path":      str(q2_persisted)      if q2_persisted      else "",
+            "ai_q3_clip_path":      str(q3_persisted)      if q3_persisted      else "",
+            "ai_q4_clip_path":      str(q4_persisted)      if q4_persisted      else "",
+        }
+        try:
+            (videos_dir / "clip_manifest.json").write_text(
+                _json_svc.dumps(_clip_manifest, indent=2), encoding="utf-8"
+            )
+        except Exception as _cm_err:
+            _logger.warning("ai_video_clips clip_manifest write failed: %s", _cm_err)
+
         # Also set session state for UI / Streamlit render path
         _try_set_session_state("auto_ai_opening_clip", str(opening_persisted) if opening_persisted else None)
         _try_set_session_state("auto_ai_q2_clip",      str(q2_persisted)      if q2_persisted      else None)

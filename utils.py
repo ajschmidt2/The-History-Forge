@@ -1570,8 +1570,11 @@ def _build_scene_prompt_spec(scene: Scene, continuity_ctx: dict[str, str]) -> di
 
 
 def _build_image_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> str:
+    _style = spec.get("visual_style", "") or style_phrase
+    _palette = spec.get("color_palette", "")
+    _palette_clause = f"Color palette: {_palette}. " if _palette else ""
     return _clean_generic_phrases(
-        f"{style_phrase}; {tone}. "
+        f"{_style}; {tone}. "
         f"Frozen moment: {spec.get('moment_selection', '')}. "
         f"Primary subject: {spec.get('primary_subject', '')}. "
         f"Secondary subjects: {', '.join(spec.get('secondary_subjects', [])) or 'none'}. "
@@ -1580,6 +1583,7 @@ def _build_image_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> s
         f"Camera framing: {spec.get('camera_framing', '')}. "
         f"Composition: {spec.get('composition_notes', '')}. "
         f"Lighting: {spec.get('lighting', '')}. "
+        f"{_palette_clause}"
         f"Historical grounding: {spec.get('historical_context', '')}; {spec.get('wardrobe_or_architecture_details', '')}. "
         f"Important objects: {', '.join(spec.get('important_objects', [])) or 'none'}. "
         f"Script anchor keywords: {', '.join(spec.get('anchor_keywords', []))}. "
@@ -1588,13 +1592,18 @@ def _build_image_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> s
 
 
 def _build_video_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> tuple[str, dict[str, Any]]:
+    _style = spec.get("visual_style", "") or style_phrase
+    _palette = spec.get("color_palette", "")
+    _palette_clause = f"Color palette: {_palette}. " if _palette else ""
     opening = _clean_generic_phrases(
         f"Opening frame: {spec.get('primary_subject', '')} in {spec.get('setting/location', '')}, {spec.get('time_period', '')}, {spec.get('camera_framing', '')}"
     )
     subject_motion = _clean_generic_phrases(
         f"Subject motion: {spec.get('primary_subject', '')} performs {spec.get('visible_action', '')} with stable body proportions and identity."
     )
-    camera_motion = "Camera motion: slow dolly-in with subtle lateral drift, no abrupt cuts."
+    # Per-clip camera motion is injected at generation time (ai_video_clips.py);
+    # this default covers scenes rendered as still-image video.
+    camera_motion = spec.get("camera_motion_override") or "Camera motion: slow dolly-in with subtle lateral drift, no abrupt cuts."
     environment_motion = "Environment motion: smoke, dust, cloth, firelight, and ambient particles move naturally with consistent wind direction."
     ending = _clean_generic_phrases(
         f"Ending frame: same subject, same location, same lighting direction, action resolves into {spec.get('emotional_tone', 'documentary tension')}."
@@ -1615,7 +1624,8 @@ def _build_video_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> t
         "continuity lock": continuity_lock,
     }
     prompt = (
-        f"{style_phrase}; {tone}. 5-second continuous historical shot. "
+        f"{_style}; {tone}. 5-second continuous historical shot. "
+        f"{_palette_clause}"
         f"{opening}. {subject_motion}. {camera_motion}. {environment_motion}. {ending}. "
         f"Keep subject stable and temporally continuous from first second to last second. "
         f"Script anchor keywords: {', '.join(spec.get('anchor_keywords', []))}."
@@ -1626,25 +1636,35 @@ def _build_video_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> t
 def extract_visual_context(full_script: str) -> dict:
     """Extract persistent visual context from the full script via a single LLM call.
 
-    Returns a dict with keys: time_period, location, clothing_style, visual_atmosphere.
-    Falls back to empty strings if the call fails or the key is missing.
+    Returns a dict with keys:
+      time_period, location, clothing_style, visual_atmosphere  (original)
+      character_name, character_appearance, visual_style, color_palette  (new)
+    Falls back to empty strings for any key that is missing or on any failure.
     """
+    _fallback = {
+        "time_period": "", "location": "", "clothing_style": "", "visual_atmosphere": "",
+        "character_name": "", "character_appearance": "", "visual_style": "", "color_palette": "",
+    }
     client = _openai_client()
     if not client or not (full_script or "").strip():
-        return {"time_period": "", "location": "", "clothing_style": "", "visual_atmosphere": ""}
+        return _fallback.copy()
 
     prompt_text = (
-        "You are a film production designer. Read this historical documentary script and extract "
-        "the persistent visual details that should appear in EVERY scene.\n\n"
+        "You are a cinematic art director for historical documentary shorts. "
+        "Read this script and extract the visual DNA that must stay consistent across ALL scenes.\n\n"
         f"Script:\n{full_script.strip()}\n\n"
         "Return ONLY a JSON object with these exact keys:\n"
         "{\n"
         '  "time_period": "specific era and century, e.g. Ancient Rome, 1st century AD",\n'
         '  "location": "primary geographic setting, e.g. the Roman Forum, ancient Rome",\n'
         '  "clothing_style": "era-accurate clothing description, e.g. Roman togas and military tunics in red and white",\n'
-        '  "visual_atmosphere": "lighting and mood that defines the whole piece, e.g. golden hour Mediterranean sunlight, dusty and dramatic"\n'
+        '  "visual_atmosphere": "lighting and mood that defines the whole piece, e.g. golden hour Mediterranean sunlight, dusty and dramatic",\n'
+        '  "character_name": "main subject, e.g. Julius Caesar, Joan of Arc",\n'
+        '  "character_appearance": "specific physical description — hair, build, distinguishing features",\n'
+        '  "visual_style": "cinematic rendering style, e.g. cinematic oil painting style, dramatic chiaroscuro",\n'
+        '  "color_palette": "dominant colors, e.g. warm golds, deep crimson, stone gray"\n'
         "}\n"
-        "Return only JSON, no other text."
+        "Return only JSON, no other text. Be specific — these values are injected verbatim into image and video prompts."
     )
     try:
         import json as _json
@@ -1652,7 +1672,7 @@ def extract_visual_context(full_script: str) -> dict:
             client,
             messages=[{"role": "user", "content": prompt_text}],
             temperature=0.2,
-            max_tokens=300,
+            max_tokens=400,
         )
         raw = (resp.choices[0].message.content or "").strip()
         # Strip markdown code fences if present
@@ -1660,9 +1680,15 @@ def extract_visual_context(full_script: str) -> dict:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        return _json.loads(raw.strip())
+        result = _json.loads(raw.strip())
+        # Ensure all expected keys exist, filling blanks for any new keys the
+        # model omitted and preserving backwards compatibility for callers that
+        # only read the original four keys.
+        for _k, _v in _fallback.items():
+            result.setdefault(_k, _v)
+        return result
     except Exception:
-        return {"time_period": "", "location": "", "clothing_style": "", "visual_atmosphere": ""}
+        return _fallback.copy()
 
 
 def generate_prompts_for_scenes(
@@ -1707,17 +1733,30 @@ def generate_prompts_for_scenes(
     }
     score_threshold = 3.5
 
-    # Build a reusable context prefix from global visual_context (FIX 2)
+    # Build a reusable context prefix from global visual_context
     _vc = visual_context or {}
     _vc_prefix = ""
-    if _vc and any(_vc.get(k, "") for k in ("time_period", "location", "clothing_style", "visual_atmosphere")):
-        _vc_prefix = (
-            f"Global visual context — "
-            f"Era: {_vc.get('time_period', '')}. "
-            f"Setting: {_vc.get('location', '')}. "
-            f"Clothing: {_vc.get('clothing_style', '')}. "
-            f"Atmosphere: {_vc.get('visual_atmosphere', '')}."
-        ).strip()
+    _vc_all_keys = ("time_period", "location", "clothing_style", "visual_atmosphere",
+                    "character_name", "character_appearance", "visual_style", "color_palette")
+    if _vc and any(_vc.get(k, "") for k in _vc_all_keys):
+        _vc_parts = []
+        if _vc.get("time_period"):
+            _vc_parts.append(f"Era: {_vc['time_period']}")
+        if _vc.get("location"):
+            _vc_parts.append(f"Setting: {_vc['location']}")
+        if _vc.get("clothing_style"):
+            _vc_parts.append(f"Clothing: {_vc['clothing_style']}")
+        if _vc.get("visual_atmosphere"):
+            _vc_parts.append(f"Atmosphere: {_vc['visual_atmosphere']}")
+        if _vc.get("character_name"):
+            _vc_parts.append(f"Subject: {_vc['character_name']}")
+        if _vc.get("character_appearance"):
+            _vc_parts.append(f"Appearance: {_vc['character_appearance']}")
+        if _vc.get("visual_style"):
+            _vc_parts.append(f"Style: {_vc['visual_style']}")
+        if _vc.get("color_palette"):
+            _vc_parts.append(f"Palette: {_vc['color_palette']}")
+        _vc_prefix = "Global visual context — " + ". ".join(_vc_parts) + "."
 
     for s in scenes:
         spec = _build_scene_prompt_spec(s, continuity_ctx)
@@ -1739,6 +1778,20 @@ def generate_prompts_for_scenes(
                     if existing_lighting
                     else _vc["visual_atmosphere"]
                 )
+            # Inject new enriched fields
+            if _vc.get("character_name") and not str(spec.get("primary_subject", "")).strip():
+                spec["primary_subject"] = _vc["character_name"]
+            if _vc.get("character_appearance"):
+                existing_wardrobe = str(spec.get("wardrobe_or_architecture_details", "") or "")
+                appearance_note = f"appearance: {_vc['character_appearance']}"
+                if appearance_note not in existing_wardrobe:
+                    spec["wardrobe_or_architecture_details"] = (
+                        f"{existing_wardrobe}; {appearance_note}".strip("; ") if existing_wardrobe else appearance_note
+                    )
+            if _vc.get("visual_style") and not str(spec.get("visual_style", "")).strip():
+                spec["visual_style"] = _vc["visual_style"]
+            if _vc.get("color_palette"):
+                spec["color_palette"] = _vc["color_palette"]
             if _vc_prefix:
                 spec["global_visual_context"] = _vc_prefix
         # Store visual_context on the scene for later use in image/video generation
