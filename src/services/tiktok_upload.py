@@ -67,18 +67,14 @@ class TikTokUploadResult:
 # Credential helpers
 # ---------------------------------------------------------------------------
 
-def _get_access_token() -> str:
-    return (
-        get_secret("TIKTOK_ACCESS_TOKEN")
-        or get_secret("tiktok_access_token")
-    ).strip()
+def _get_access_token() -> str | None:
+    value = get_secret("TIKTOK_ACCESS_TOKEN") or get_secret("tiktok_access_token") or ""
+    return value.strip() or None
 
 
-def _get_open_id() -> str:
-    return (
-        get_secret("TIKTOK_OPEN_ID")
-        or get_secret("tiktok_open_id")
-    ).strip()
+def _get_open_id() -> str | None:
+    value = get_secret("TIKTOK_OPEN_ID") or get_secret("tiktok_open_id") or ""
+    return value.strip() or None
 
 
 def _auth_headers() -> dict[str, str]:
@@ -90,7 +86,10 @@ def _auth_headers() -> dict[str, str]:
 
 def tiktok_configured() -> bool:
     """Return True if TikTok credentials are present in secrets."""
-    return bool(_get_access_token())
+    try:
+        return bool(_get_access_token())
+    except Exception:
+        return False
 
 
 def validate_tiktok_credentials() -> tuple[bool, str]:
