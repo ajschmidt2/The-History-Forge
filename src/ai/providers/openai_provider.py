@@ -44,8 +44,22 @@ class OpenAIProvider:
             kwargs["response_format"] = response_format
 
         client = self._client()
-        response = client.chat.completions.create(**kwargs)
-        return str(response.choices[0].message.content or "").strip()
+        last_exc: Exception | None = None
+        for candidate_model in self._candidate_models(model or self.text_model):
+            request_kwargs = dict(kwargs)
+            request_kwargs["model"] = candidate_model
+            try:
+                response = client.chat.completions.create(**request_kwargs)
+                return str(response.choices[0].message.content or "").strip()
+            except Exception as exc:
+                last_exc = exc
+                if not self._is_model_access_error(exc):
+                    raise
+                _LOG.warning("OpenAI model %s unavailable; retrying with fallback model", candidate_model)
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("OpenAI text generation failed before any request was attempted.")
 
     def generate_structured(
         self,
@@ -81,4 +95,33 @@ class OpenAIProvider:
             instructions=instructions,
             output_format=output_format,
             output_path=output_path,
+        )
+
+    def _candidate_models(self, requested_model: str) -> list[str]:
+        candidates: list[str] = []
+
+        def _add(name: str | None) -> None:
+            candidate = str(name or "").strip()
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+        _add(requested_model)
+
+        if requested_model == self.text_model:
+            _add(self.fast_model)
+        elif requested_model == self.fast_model:
+            _add(self.text_model)
+
+        for fallback in ("gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1", "gpt-4o"):
+            _add(fallback)
+
+        return candidates
+
+    @staticmethod
+    def _is_model_access_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return (
+            "model_not_found" in text
+            or ("does not have access to model" in text)
+            or ("invalid_request_error" in text and "model" in text)
         )
