@@ -25,6 +25,7 @@ from src.services.youtube_upload import validate_youtube_credentials as _validat
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.topics.daily_topics import generate_daily_topic, load_used_topics, save_used_topic
+from src.workflow.assets import resolve_music_track_for_project
 from src.workflow.presets import DAILY_SHORT_PRESET, DailyShortPreset
 from src.workflow.project_io import ensure_project_files, load_project_payload, project_dir, save_project_payload
 from src.workflow.services import FullWorkflowOptions, run_full_workflow
@@ -464,6 +465,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     target_date = run_date or date.today()
     project_id = _project_id_for_day(target_date, channel_id=profile.channel_id)
     timestamp = _utc_now().isoformat()
+    job_warnings: list[str] = []
 
     settings = load_daily_automation_settings(path=profile.automation_settings_path)
     preset = _resolve_daily_short_preset(settings, extra_overrides=profile.preset_overrides or {})
@@ -477,11 +479,27 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
 
     script_text = generate_daily_short_script(topic, preset, channel_name=profile.channel_name)
     music_track = str(settings.get("selected_music_track", "") or "").strip() or _resolve_default_music_track()
-    if preset.music_enabled and not music_track:
-        raise RuntimeError("Background music is enabled but no track was found. Add an mp3/wav/m4a to data/music_library or select a project music track.")
 
     ensure_project_files(project_id)
     upsert_project(project_id, f"{profile.channel_name} — {target_date.isoformat()}")
+
+    if preset.music_enabled:
+        if not music_track:
+            job_warnings.append(
+                "Background music is enabled but no track was found on this runner. Continuing without music."
+            )
+            preset = replace(preset, music_enabled=False)
+        else:
+            resolved_music = resolve_music_track_for_project(project_id, music_track)
+            resolved_music_path = str(resolved_music.get("resolved_path", "") or "").strip()
+            if resolved_music_path:
+                music_track = resolved_music_path
+            else:
+                job_warnings.append(
+                    f"Background music is enabled but the selected track could not be resolved on this runner ({music_track}). Continuing without music."
+                )
+                music_track = ""
+                preset = replace(preset, music_enabled=False)
 
     payload = load_project_payload(project_id)
     payload.update(
@@ -515,6 +533,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
             "daily_preset": preset.as_dict(),
             "daily_job_run_date": target_date.isoformat(),
             "daily_job_started_at": timestamp,
+            "daily_job_warnings": list(job_warnings),
         }
     )
     save_project_payload(project_id, payload)
@@ -550,7 +569,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
         ),
     )
     print(
-        f"[Checkpoint 2] Workflow returned. failed_step={run_result.failed_step!r}  warnings={run_result.warnings}",
+        f"[Checkpoint 2] Workflow returned. failed_step={run_result.failed_step!r}  warnings={run_result.warnings} job_warnings={job_warnings}",
         file=sys.stderr,
     )
 
@@ -707,6 +726,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
         "music_track": music_track if preset.music_enabled else "",
         "music_relative_level": preset.music_relative_level,
         "scene_count": preset.scene_count,
+        "warnings": list(job_warnings) + list(run_result.warnings or []),
         "youtube_enabled": publishing["youtube_enabled"],
         "youtube_privacy_status": publishing["youtube_privacy_status"],
         "instagram_enabled": publishing["instagram_enabled"],
@@ -725,6 +745,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     payload["generated_video_bucket_path"] = upload_result["object_path"]
     payload["generated_video_public_url"] = upload_result["public_url"]
     payload["enable_subtitles"] = preset.subtitles_enabled
+    payload["daily_job_warnings"] = summary["warnings"]
     payload["youtube_video_id"] = youtube_video_id
     payload["youtube_url"] = youtube_url
     payload["instagram_media_id"] = instagram_media_id
