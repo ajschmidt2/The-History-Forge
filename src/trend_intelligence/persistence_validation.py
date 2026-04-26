@@ -67,6 +67,18 @@ def classify_trend_setup_error(error_text: str) -> str:
     return "connection_error"
 
 
+def _response_error_text(resp: Any) -> str:
+    raw_error = getattr(resp, "error", None)
+    if raw_error:
+        return str(raw_error)
+
+    data = getattr(resp, "data", None)
+    if isinstance(data, dict):
+        fragments = [str(data.get("code", "")), str(data.get("message", "")), str(data.get("hint", ""))]
+        return " | ".join(fragment for fragment in fragments if fragment and fragment != "None")
+    return ""
+
+
 def check_trend_intelligence_setup(supabase) -> dict[str, Any]:
     if supabase is None:
         return {
@@ -78,7 +90,10 @@ def check_trend_intelligence_setup(supabase) -> dict[str, Any]:
     table_errors: dict[str, str] = {}
     for table_name in REQUIRED_TREND_TABLES:
         try:
-            supabase.table(table_name).select("id").limit(1).execute()
+            resp = supabase.table(table_name).select("id").limit(1).execute()
+            response_error = _response_error_text(resp)
+            if response_error:
+                table_errors[table_name] = response_error
         except Exception as exc:  # noqa: BLE001
             table_errors[table_name] = str(exc)
 
