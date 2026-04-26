@@ -118,6 +118,62 @@ def _get_access_token() -> str:
     return token
 
 
+def inspect_access_token(
+    *,
+    token: str | None = None,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+) -> dict[str, Any]:
+    """Inspect the current Instagram/Meta token via the Graph debug_token endpoint."""
+    access_token = str(token or _get_access_token() or "").strip()
+    if not access_token:
+        raise InstagramUploadError("No INSTAGRAM_ACCESS_TOKEN configured.")
+
+    _app_id = str(app_id or get_secret("META_APP_ID") or get_secret("meta_app_id") or "").strip()
+    _app_secret = str(app_secret or get_secret("META_APP_SECRET") or get_secret("meta_app_secret") or "").strip()
+    if not _app_id or not _app_secret:
+        raise InstagramUploadError("META_APP_ID and META_APP_SECRET are required to inspect the Instagram token.")
+
+    app_access_token = f"{_app_id}|{_app_secret}"
+    resp = requests.get(
+        f"{GRAPH_BASE}/debug_token",
+        params={"input_token": access_token, "access_token": app_access_token},
+        timeout=15,
+    )
+    data = resp.json()
+    if not resp.ok or "error" in data:
+        err = data.get("error", {}).get("message", resp.text[:200])
+        raise InstagramUploadError(
+            "Instagram token inspection failed. META_APP_ID / META_APP_SECRET may not match the app "
+            f"that issued this token. Details: {err}"
+        )
+
+    token_data = data.get("data")
+    if not isinstance(token_data, dict):
+        raise InstagramUploadError("Instagram token inspection returned an unexpected payload.")
+    return token_data
+
+
+def should_refresh_access_token(
+    *,
+    window_days: int = 7,
+    token: str | None = None,
+    app_id: str | None = None,
+    app_secret: str | None = None,
+) -> tuple[bool, int | None]:
+    """Return (should_refresh, seconds_remaining_or_none)."""
+    token_data = inspect_access_token(token=token, app_id=app_id, app_secret=app_secret)
+    expires_at = token_data.get("expires_at")
+    if not token_data.get("is_valid", False):
+        return True, None
+    if not isinstance(expires_at, int) or expires_at <= 0:
+        return True, None
+
+    seconds_remaining = int(expires_at - int(time.time()))
+    refresh_window = max(1, int(window_days)) * 86400
+    return seconds_remaining <= refresh_window, seconds_remaining
+
+
 def instagram_configured() -> bool:
     """Return True if Instagram credentials are present in secrets."""
     try:
@@ -225,6 +281,19 @@ def refresh_access_token(
             "META_APP_ID and META_APP_SECRET are required to refresh the access token."
         )
 
+    try:
+        should_refresh, seconds_remaining = should_refresh_access_token(
+            token=token,
+            app_id=_app_id,
+            app_secret=_app_secret,
+        )
+        if not should_refresh:
+            return token, int(seconds_remaining or 0)
+    except InstagramUploadError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.warning("instagram: token preflight inspection failed before refresh: %s", exc)
+
     resp = requests.get(
         f"{GRAPH_BASE}/oauth/access_token",
         params={
@@ -238,7 +307,10 @@ def refresh_access_token(
     data = resp.json()
     if not resp.ok or "error" in data:
         err = data.get("error", {}).get("message", resp.text[:200])
-        raise InstagramUploadError(f"Token refresh failed: {err}")
+        raise InstagramUploadError(
+            "Token refresh failed. META_APP_ID / META_APP_SECRET may not match the app that issued this token, "
+            f"or this token type may not support refresh through this endpoint. Details: {err}"
+        )
 
     return data["access_token"], int(data.get("expires_in", 0))
 
