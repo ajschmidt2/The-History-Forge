@@ -30,7 +30,7 @@ def test_build_youtube_auth_url_includes_expected_google_oauth_params(monkeypatc
     assert parsed.netloc == "accounts.google.com"
     assert parsed.path == "/o/oauth2/v2/auth"
     assert params["client_id"] == ["test-client-id.apps.googleusercontent.com"]
-    assert params["redirect_uri"] == ["https://example.com/oauth/callback"]
+    assert params["redirect_uri"] == ["https://example.com/"]
     assert params["response_type"] == ["code"]
     assert params["scope"] == ["scope.one scope.two"]
     assert params["access_type"] == ["offline"]
@@ -38,3 +38,21 @@ def test_build_youtube_auth_url_includes_expected_google_oauth_params(monkeypatc
     assert params["prompt"] == ["consent"]
     assert params["state"] == [state]
     assert state
+
+
+def test_resolve_youtube_redirect_uri_keeps_root_url(monkeypatch):
+    monkeypatch.setattr(
+        youtube_oauth,
+        "st",
+        SimpleNamespace(
+            secrets={
+                "google_oauth": {
+                    "client_id": "test-client-id.apps.googleusercontent.com",
+                    "redirect_uri": "https://example.com",
+                },
+                "youtube": {"scopes": ["scope.one"]},
+            }
+        ),
+    )
+
+    assert youtube_oauth.resolve_youtube_redirect_uri() == "https://example.com/"

@@ -22,6 +22,15 @@ def _normalize_secret(value: str) -> str:
 
 
 from src.config import get_secret as _config_get_secret
+from src.providers.gemini_provider import (
+    GeminiEmptyResponseError,
+    GeminiMissingKeyError,
+    GeminiModelError,
+    GeminiQuotaError,
+    generate_images as _gemini_generate_images,
+    get_gemini_api_key as _provider_get_gemini_api_key,
+    get_image_model as _provider_get_image_model,
+)
 
 
 def _get_secret(name: str, default: str = "") -> str:
@@ -59,31 +68,17 @@ def _resolve_api_key() -> str:
 
 
 def validate_gemini_api_key(*, required: bool = True) -> str:
-    api_key = _resolve_api_key()
-
-    # Keep validation permissive to avoid rejecting valid keys from older/newer formats.
-    if not api_key:
-        if not required:
-            return ""
-        raise RuntimeError(
-            "Invalid GOOGLE_AI_STUDIO_API_KEY. Generate a valid Google AI Studio API key "
-            "and set it in Streamlit secrets as GEMINI_API_KEY (or GOOGLE_AI_STUDIO_API_KEY)."
-        )
-
-    # Ensure both env names are populated for downstream SDKs.
-    os.environ["GEMINI_API_KEY"] = api_key
-    os.environ["GOOGLE_AI_STUDIO_API_KEY"] = api_key
-
+    try:
+        api_key = _provider_get_gemini_api_key(required=required)
+    except GeminiMissingKeyError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if api_key:
+        os.environ["GOOGLE_AI_STUDIO_API_KEY"] = api_key
     return api_key
 
 
 def _resolve_model() -> str:
-    return (
-        _get_secret("GOOGLE_AI_STUDIO_IMAGE_MODEL", "")
-        or _get_secret("IMAGEN_MODEL", "")
-        or _get_secret("imagen_model", "")
-        or "gemini-2.5-flash-image"
-    ).strip()
+    return _provider_get_image_model()
 
 
 def _is_gemini_image_model(model: str) -> bool:
@@ -316,34 +311,6 @@ def _candidate_models(primary_model: str) -> list[str]:
     return ordered
 
 
-def _generate_images_with_model(client: Any, model: str, prompt: str, config: dict[str, Any]) -> Any:
-    if _is_gemini_image_model(model):
-        generation_config: dict[str, Any] = {
-            "response_modalities": ["IMAGE"],
-            "candidate_count": max(1, int(config.get("number_of_images", 1))),
-        }
-        return client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=generation_config,
-        )
-
-    try:
-        return client.models.generate_images(
-            model=model,
-            prompt=prompt,
-            config={**config, "person_generation": "ALLOW_ALL"},
-        )
-    except ValueError as exc:
-        if "PersonGeneration.ALLOW_ALL" not in str(exc):
-            raise
-        return client.models.generate_images(
-            model=model,
-            prompt=prompt,
-            config=config,
-        )
-
-
 def generate_falai_images(
     prompt: str,
     number_of_images: int = 1,
@@ -421,22 +388,22 @@ def generate_scene_image_bytes(
     prompt: str,
     number_of_images: int = 1,
     aspect_ratio: str = "16:9",
-    provider: str = "falai",
+    provider: str = "gemini",
 ) -> List[bytes]:
     """
     Provider-routed scene image generation.
 
     provider:
-      - "falai"  — fal.ai FLUX Dev (default, cheapest)
-      - "gemini" — Google Imagen / Gemini image model (legacy path)
+      - "gemini" — Google Imagen / Gemini image model (default)
+      - "falai"  — fal.ai FLUX Dev fallback
     """
-    provider = (provider or "falai").strip().lower()
+    provider = (provider or "gemini").strip().lower()
     if provider == "gemini":
         return generate_imagen_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
     if provider == "falai":
         return generate_falai_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
-    # Unknown → default to falai
-    return generate_falai_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
+    # Unknown provider names use the primary Gemini path.
+    return generate_imagen_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
 
 
 def generate_imagen_images(
@@ -444,52 +411,30 @@ def generate_imagen_images(
     number_of_images: int = 1,
     aspect_ratio: str = "16:9",
 ) -> List[bytes]:
-    from google import genai  # noqa: PLC0415 — lazy import to avoid top-level ImportError
-
-    api_key = validate_gemini_api_key()
-
-    client = genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
     model = _resolve_model()
-
-    config = {
-        "number_of_images": max(1, int(number_of_images)),
-        "output_mime_type": "image/png",
-        "aspect_ratio": aspect_ratio,
-    }
 
     last_error: Optional[Exception] = None
     for candidate_model in _candidate_models(model):
         try:
-            result = _generate_images_with_model(
-                client=client,
+            return _gemini_generate_images(
+                prompt,
                 model=candidate_model,
-                prompt=prompt,
-                config=config,
+                number_of_images=number_of_images,
+                aspect_ratio=aspect_ratio,
             )
         except Exception as exc:  # noqa: BLE001 - bubble non-model errors after fallback attempts
             last_error = exc
-            if _is_invalid_api_key_error(exc):
+            if isinstance(exc, GeminiMissingKeyError) or _is_invalid_api_key_error(exc):
                 raise RuntimeError(
                     "invalid google_ai_studio_api_key: API key not valid for generativelanguage.googleapis.com"
                 ) from exc
-            if _model_not_found_error(exc):
+            if isinstance(exc, GeminiModelError) or _model_not_found_error(exc):
                 continue
+            if isinstance(exc, GeminiEmptyResponseError):
+                return []
+            if isinstance(exc, GeminiQuotaError):
+                raise RuntimeError(str(exc)) from exc
             raise
-
-        images = _extract_images(result)
-        if images:
-            return images
-
-        if _is_likely_filtered_or_empty(result):
-            # Return an empty list so callers can handle prompt-level filtering
-            # gracefully without treating it as a transport/parsing exception.
-            return []
-
-        raise RuntimeError(
-            "No images returned from image generation response. This can happen when the prompt "
-            "is blocked by safety filters or when the SDK response payload shape changes. "
-            f"{_describe_empty_result(result)}"
-        )
 
     if last_error is not None:
         raise RuntimeError(

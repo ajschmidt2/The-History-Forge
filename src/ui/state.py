@@ -313,7 +313,7 @@ def save_project_state(project_id: str) -> None:
         "run_retention_pass": bool(st.session_state.get("run_retention_pass", True)),
         "run_safety_pass": bool(st.session_state.get("run_safety_pass", True)),
         "visual_style": str(st.session_state.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic"),
-        "aspect_ratio": str(st.session_state.get("aspect_ratio", "16:9") or "16:9"),
+        "aspect_ratio": str(st.session_state.get("aspect_ratio", "9:16") or "9:16"),
         "variations_per_scene": int(st.session_state.get("variations_per_scene", 1) or 1),
         "num_images": int(st.session_state.get("num_images", st.session_state.get("max_scenes", 8)) or 8),
         "max_scenes": int(st.session_state.get("max_scenes", 8) or 8),
@@ -423,7 +423,7 @@ def load_project_state(project_id: str) -> None:
     st.session_state.run_retention_pass = bool(raw.get("run_retention_pass", True))
     st.session_state.run_safety_pass = bool(raw.get("run_safety_pass", True))
     st.session_state.visual_style = str(raw.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic")
-    st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "16:9") or "16:9")
+    st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "9:16") or "9:16")
     st.session_state.variations_per_scene = int(raw.get("variations_per_scene", 1) or 1)
     st.session_state.num_images = int(raw.get("num_images", raw.get("max_scenes", 8)) or 8)
     st.session_state.max_scenes = int(raw.get("max_scenes", 8) or 8)
@@ -480,8 +480,10 @@ def delete_project(project_id_or_name: str) -> tuple[int, list[str]]:
     except Exception as exc:
         errors.append(f"Failed to delete project records for {normalized}: {exc}")
 
-    if not _sb_store.delete_project(normalized):
-        errors.append(f"Failed to delete Supabase project records for {normalized}")
+    try:
+        _sb_store.delete_project(normalized)
+    except Exception as exc:
+        errors.append(f"Failed to delete Supabase project records for {normalized}: {exc}")
 
     return removed_local_dirs, errors
 
@@ -553,7 +555,7 @@ def init_state() -> None:
     st.session_state.setdefault("run_safety_pass", True)
 
     st.session_state.setdefault("visual_style", "Photorealistic cinematic")
-    st.session_state.setdefault("aspect_ratio", "16:9")
+    st.session_state.setdefault("aspect_ratio", "9:16")
     st.session_state.setdefault("variations_per_scene", 1)
 
     st.session_state.setdefault("max_scenes", 8)

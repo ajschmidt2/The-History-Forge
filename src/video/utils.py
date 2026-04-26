@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -49,9 +50,10 @@ def resolve_ffprobe_exe() -> str:
 
     try:
         ffmpeg_exe = Path(resolve_ffmpeg_exe())
-        sibling = ffmpeg_exe.with_name("ffprobe")
-        if sibling.exists():
-            return str(sibling)
+        for name in ("ffprobe.exe", "ffprobe"):
+            sibling = ffmpeg_exe.with_name(name)
+            if sibling.exists():
+                return str(sibling)
     except Exception:
         pass
 
@@ -217,22 +219,48 @@ def get_media_duration(path: str | Path) -> float:
     try:
         ffprobe_exe = resolve_ffprobe_exe()
     except FileNotFoundError:
-        return 0.0
-    cmd = [
-        ffprobe_exe,
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(media_path),
-    ]
-    result = run_ffmpeg(cmd)
-    if not result["ok"]:
-        return 0.0
+        return _get_media_duration_with_ffmpeg(media_path)
+    else:
+        cmd = [
+            ffprobe_exe,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(media_path),
+        ]
+        result = run_ffmpeg(cmd)
+        if result["ok"]:
+            try:
+                return float(result["stdout"].strip())
+            except (TypeError, ValueError):
+                pass
+    return _get_media_duration_with_ffmpeg(media_path)
+
+
+def _get_media_duration_with_ffmpeg(media_path: Path) -> float:
+    """Fallback duration probe for local installs that bundle ffmpeg without ffprobe."""
     try:
-        return float(result["stdout"].strip())
+        ffmpeg_exe = resolve_ffmpeg_exe()
+        result = subprocess.run(
+            [ffmpeg_exe, "-hide_banner", "-i", str(media_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return 0.0
+
+    text = f"{result.stderr or ''}\n{result.stdout or ''}"
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", text)
+    if not match:
+        return 0.0
+    hours, minutes, seconds = match.groups()
+    try:
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
     except (TypeError, ValueError):
         return 0.0
 

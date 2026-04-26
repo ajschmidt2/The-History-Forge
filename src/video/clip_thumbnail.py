@@ -17,20 +17,22 @@ from pathlib import Path
 from typing import Optional
 from urllib.request import urlopen
 
+from src.video.utils import resolve_ffmpeg_exe
+
 log = logging.getLogger(__name__)
 
 
 def _run_ffmpeg_extract(input_path: str, output_path: str, seek_sec: float = 0.5) -> bool:
     """Extract a single frame from *input_path* at *seek_sec* seconds."""
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", f"{seek_sec:.2f}",
-        "-i", input_path,
-        "-frames:v", "1",
-        "-q:v", "2",
-        output_path,
-    ]
     try:
+        cmd = [
+            resolve_ffmpeg_exe(), "-y",
+            "-ss", f"{seek_sec:.2f}",
+            "-i", input_path,
+            "-frames:v", "1",
+            "-q:v", "2",
+            output_path,
+        ]
         result = subprocess.run(
             cmd,
             check=False,

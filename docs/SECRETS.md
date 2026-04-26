@@ -28,6 +28,15 @@ For local development, you can export the same keys as env vars (aliases are sup
 ## Video provider keys
 
 - `FAL_API_KEY` (or `FAL_KEY`) for fal.ai Wan image-to-video.
-- `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) for Google Gemini Veo 3.1 Lite preview.
+- `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) for Gemini Developer API calls from Google AI Studio.
 - Optional `HF_VIDEO_PROVIDER` default provider override (e.g. `falai`, `google_veo_lite`, `auto`).
-- Optional `HF_GOOGLE_VIDEO_MODEL` default model override (defaults to `veo-3.1-lite-generate-preview`).
+- Optional `GEMINI_MODEL_TEXT` text model override (defaults to `gemini-2.5-flash`).
+- Optional `GEMINI_MODEL_FAST` fast text model override (defaults to `gemini-2.5-flash`).
+- Optional `GEMINI_IMAGE_MODEL` image model override (defaults to `gemini-2.5-flash-image`).
+- Optional `GEMINI_VIDEO_MODEL` video model override (defaults to `veo-3.1-lite-generate-preview`).
+
+Google Cloud project-based generative settings are no longer used by History Forge:
+
+- `GOOGLE_APPLICATION_CREDENTIALS`
+- Google service-account JSON for Veo
+- Google Cloud project/location settings for model calls

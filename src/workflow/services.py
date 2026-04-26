@@ -25,7 +25,7 @@ from src.video.render_settings import normalize_aspect_ratio, normalize_video_ef
 from src.video.timeline_builder import compute_scene_durations
 from src.video.timeline_schema import Timeline
 from src.video.utils import FFmpegNotFoundError, ensure_ffmpeg_exists, get_media_duration
-from src.workflow.assets import preflight_report, resolve_music_track_for_project, sync_scene_asset_metadata
+from src.workflow.assets import canonical_scene_image_path, preflight_report, resolve_music_track_for_project, sync_scene_asset_metadata
 from src.workflow.models import StepStatus
 from src.workflow.project_io import (
     ensure_project_files,
@@ -52,9 +52,9 @@ class PipelineOptions:
     use_web_research: bool = False
     tone: str = "Documentary"
     audience: str = "General audience"
-    number_of_scenes: int = 8
+    number_of_scenes: int = 14
     variations_per_scene: int = 1
-    aspect_ratio: str = "16:9"
+    aspect_ratio: str = "9:16"
     include_voiceover: bool = True
     include_music: bool = False
     visual_style: str = "Photorealistic cinematic"
@@ -78,8 +78,8 @@ class PipelineOptions:
     topic: str = ""
     topic_direction: str = ""
     script_profile: str = "youtube_short_60s"
-    ai_video_provider: str = "falai"
-    image_provider: str = "falai"
+    ai_video_provider: str = "google_veo_lite"
+    image_provider: str = "gemini"
     force_render_rebuild: bool = False
 
 
@@ -97,8 +97,8 @@ class FullWorkflowOptions:
     enable_ai_video: bool = False
     ai_video_scene_indexes: list[int] = field(default_factory=list)
     hero_scene_indexes: list[int] = field(default_factory=list)
-    ai_video_provider: str = "falai"
-    ai_video_seconds: int = 8
+    ai_video_provider: str = "google_veo_lite"
+    ai_video_seconds: int = 5
     pipeline: PipelineOptions = field(default_factory=PipelineOptions)
     progress_callback: Any | None = field(default=None, repr=False, compare=False)
 
@@ -111,6 +111,39 @@ class FullWorkflowResult:
     failed_step: str = ""
     final_output_path: str = ""
     warnings: list[str] = field(default_factory=list)
+
+
+YOUTUBE_SHORT_BASE_WORDS = 150
+YOUTUBE_SHORT_BASE_SCENES = 14
+YOUTUBE_SHORT_MIN_SCENES = 6
+YOUTUBE_SHORT_MAX_SCENES = 40
+
+
+def count_script_words(script_text: str) -> int:
+    import re
+
+    return len(re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", script_text or ""))
+
+
+def estimate_youtube_short_scene_count(script_text: str, *, fallback: int = YOUTUBE_SHORT_BASE_SCENES) -> int:
+    """Choose a Shorts scene count from the actual narration length.
+
+    The baseline is 14 scenes for a typical 150-word short. Shorter scripts get
+    fewer scenes, and longer scripts get more, while staying within a practical
+    range for image/video generation costs.
+    """
+    word_count = count_script_words(script_text)
+    if word_count <= 0:
+        return max(YOUTUBE_SHORT_MIN_SCENES, min(YOUTUBE_SHORT_MAX_SCENES, int(fallback or YOUTUBE_SHORT_BASE_SCENES)))
+    words_per_scene = YOUTUBE_SHORT_BASE_WORDS / YOUTUBE_SHORT_BASE_SCENES
+    estimated = int(round(word_count / words_per_scene))
+    return max(YOUTUBE_SHORT_MIN_SCENES, min(YOUTUBE_SHORT_MAX_SCENES, estimated))
+
+
+def should_auto_size_youtube_short_scenes(cfg: PipelineOptions, payload: dict[str, Any]) -> bool:
+    profile = str(cfg.script_profile or payload.get("script_profile", "") or "").strip().lower()
+    mode = str(cfg.automation_mode or payload.get("automation_mode", "") or "").strip().lower()
+    return profile == "youtube_short_60s" or mode == "topic_to_short_video"
 
 
 def _workflow_logger(project_id: str) -> logging.Logger:
@@ -237,6 +270,7 @@ def _run_ai_video_step(project_id: str, options: FullWorkflowOptions) -> StepRes
                 aspect_ratio=options.pipeline.aspect_ratio,
                 save_dir=videos_dir,
                 seconds=options.ai_video_seconds,
+                image_source=canonical_scene_image_path(project_id, int(scene.index)),
             )
             if local_path and Path(local_path).exists():
                 scene.video_path = str(Path(local_path))
@@ -280,6 +314,10 @@ def _step_outputs_exist(project_id: str, step: str) -> bool:
         payload = load_project_payload(project_id)
         return "enable_video_effects" in payload
     if step == "ai_video_clips":
+        videos_dir = project_path / "assets" / "videos"
+        persisted_names = ("ai_opening_clip.mp4", "ai_q2_clip.mp4", "ai_q3_clip.mp4", "ai_q4_clip.mp4")
+        if all((videos_dir / name).exists() and (videos_dir / name).stat().st_size > 0 for name in persisted_names):
+            return True
         import tempfile
         tmp_clip_dir = Path(tempfile.gettempdir()) / f"ai_clips_{project_id}"
         return all((tmp_clip_dir / n).exists() for n in ("ai_clip_opening.mp4", "ai_clip_q2.mp4", "ai_clip_q3.mp4", "ai_clip_q4.mp4"))
@@ -301,11 +339,13 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
     """Generate opening and midpoint AI video clips and persist paths to project payload."""
     import shutil
     import tempfile
-    from src.video.ai_video_clips import generate_ai_video_clips
+    from src.video.ai_video_clips import generate_ai_video_clips, normalize_ai_video_provider
 
     _logger = _workflow_logger(project_id)
     aspect_ratio = (options.aspect_ratio if options else None) or "9:16"
-    provider = (options.ai_video_provider if options else None) or str(get_secret("HF_VIDEO_PROVIDER", "falai") or "falai")
+    provider = normalize_ai_video_provider(
+        (options.ai_video_provider if options else None) or get_secret("HF_VIDEO_PROVIDER", "google_veo_lite")
+    )
 
     # Allow session_state overrides from the Automation tab per-run settings.
     # In headless mode st.session_state exists but is inert; detect via ScriptRunContext.
@@ -321,7 +361,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             import streamlit as st
             ss_provider = st.session_state.get("automation_run_provider", "")
             if ss_provider:
-                provider = ss_provider
+                provider = normalize_ai_video_provider(ss_provider)
             aspect_ratio = st.session_state.get("automation_clip_aspect_ratio", aspect_ratio)
             duration_seconds = st.session_state.get("automation_clip_duration", 5)
         except Exception:  # noqa: BLE001
@@ -334,15 +374,26 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             _settings = load_daily_automation_settings()
             _preset_provider = str(_settings.get("preset", {}).get("ai_video_provider", "") or "")
             if _preset_provider:
-                provider = _preset_provider
+                provider = normalize_ai_video_provider(_preset_provider)
             else:
-                provider = str(get_secret("HF_VIDEO_PROVIDER", "falai") or "falai")
+                provider = normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "google_veo_lite"))
         except Exception:  # noqa: BLE001
             pass
 
+    requested_duration_seconds = int(round(float(duration_seconds)))
+    if provider == "google_veo_lite":
+        try:
+            from src.providers.gemini_provider import normalize_veo_duration_seconds
+            duration_seconds = normalize_veo_duration_seconds(
+                requested_duration_seconds,
+                str(get_secret("HF_GOOGLE_VIDEO_MODEL", "veo-3.1-lite-generate-preview") or "veo-3.1-lite-generate-preview"),
+            )
+        except Exception:  # noqa: BLE001
+            duration_seconds = requested_duration_seconds
+
     _logger.info(
-        "ai_video_clips project=%s provider=%s aspect=%s duration=%ss",
-        project_id, provider, aspect_ratio, duration_seconds,
+        "ai_video_clips project=%s provider=%s aspect=%s duration=%ss requested_duration=%ss",
+        project_id, provider, aspect_ratio, duration_seconds, requested_duration_seconds,
     )
 
     def _clip_done(label: str, success: bool, done: int, total: int) -> None:
@@ -364,6 +415,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
 
     tmp_clip_dir = Path(tempfile.gettempdir()) / f"ai_clips_{project_id}"
     tmp_clip_dir.mkdir(exist_ok=True)
+    update_step_status(project_id, "ai_video_clips", StepStatus.IN_PROGRESS)
 
     try:
         opening_clip, q2_clip, q3_clip, q4_clip = generate_ai_video_clips(
@@ -431,17 +483,26 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
         _try_set_session_state("auto_ai_q4_clip",      str(q4_persisted)      if q4_persisted      else None)
 
         generated = sum(1 for c in all_clips if c)
+        outputs = {
+            "opening_clip": str(opening_persisted) if opening_persisted else "",
+            "q2_clip": str(q2_persisted) if q2_persisted else "",
+            "q3_clip": str(q3_persisted) if q3_persisted else "",
+            "q4_clip": str(q4_persisted) if q4_persisted else "",
+            "generated": generated,
+        }
+        if generated != 4:
+            msg = f"Generated {generated}/4 AI video clips via {provider}; all 4 clips are required."
+            _logger.warning("ai_video_clips incomplete provider=%s generated=%d expected=4", provider, generated)
+            update_step_status(project_id, "ai_video_clips", StepStatus.FAILED, error=msg)
+            return StepResult(project_id, "ai_video_clips", StepStatus.FAILED, message=msg, outputs=outputs)
+
+        update_step_status(project_id, "ai_video_clips", StepStatus.COMPLETED)
         return StepResult(
             project_id,
             "ai_video_clips",
             StepStatus.COMPLETED,
             message=f"Generated {generated}/4 AI video clips via {provider}",
-            outputs={
-                "opening_clip": str(opening_persisted) if opening_persisted else "",
-                "q2_clip": str(q2_persisted) if q2_persisted else "",
-                "q3_clip": str(q3_persisted) if q3_persisted else "",
-                "q4_clip": str(q4_persisted) if q4_persisted else "",
-            },
+            outputs=outputs,
         )
     except Exception as exc:  # noqa: BLE001
         _logger.warning("ai_video_clips project=%s failed: %s", project_id, exc)
@@ -449,6 +510,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
         _try_set_session_state("auto_ai_q2_clip", None)
         _try_set_session_state("auto_ai_q3_clip", None)
         _try_set_session_state("auto_ai_q4_clip", None)
+        update_step_status(project_id, "ai_video_clips", StepStatus.FAILED, error=str(exc))
         return StepResult(project_id, "ai_video_clips", StepStatus.FAILED, message=str(exc))
 
 
@@ -492,7 +554,7 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
             ("prompts", cfg.overwrite_prompts, lambda: run_generate_prompts(project_id, cfg.pipeline)),
             ("images", cfg.overwrite_images, lambda: run_generate_images(project_id, cfg.pipeline)),
             ("effects", cfg.overwrite_timeline, lambda: run_apply_video_effects(project_id, cfg.pipeline)),
-            ("ai_video_clips", False, lambda: run_ai_video_clips(project_id, cfg.pipeline)),
+            ("ai_video_clips", cfg.overwrite_ai_video, lambda: run_ai_video_clips(project_id, cfg.pipeline)),
             ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
         ])
 
@@ -528,6 +590,13 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
                 progress({"step": step_name, "status": StepStatus.SKIPPED, "index": idx, "total": total, "message": "disabled"})
             continue
 
+        if step_name == "ai_video_clips" and not cfg.enable_ai_video:
+            result.skipped_steps.append(step_name)
+            logger.info("step=%s status=skipped reason=disabled", step_name)
+            if progress:
+                progress({"step": step_name, "status": StepStatus.SKIPPED, "index": idx, "total": total, "message": "disabled"})
+            continue
+
         render_force_rebuild = step_name == "render" and bool(cfg.pipeline.force_render_rebuild)
         should_resume_existing = mode == "resume_missing" and not overwrite and not render_force_rebuild and _step_outputs_exist(project_id, step_name)
         if should_resume_existing:
@@ -552,7 +621,7 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
         step_result = handler()
         if step_result.status == StepStatus.FAILED:
             # ai_video_clips is non-fatal — log and continue without clips
-            if step_name == "ai_video_clips":
+            if step_name == "ai_video_clips" and not cfg.enable_ai_video:
                 result.warnings.append(f"ai_video_clips skipped (non-fatal): {step_result.message}")
                 result.skipped_steps.append(step_name)
                 logger.warning("step=ai_video_clips status=failed reason=%s continuing_without_clips=True", step_result.message)
@@ -746,7 +815,7 @@ def _load_options(project_id: str, options: PipelineOptions | None) -> tuple[dic
     # When options_provided=False (no caller-supplied options), fall back to the payload as before.
     merged.aspect_ratio = _safe_aspect_ratio(
         merged.aspect_ratio if options_provided else payload.get("aspect_ratio", merged.aspect_ratio),
-        merged.aspect_ratio,
+        merged.aspect_ratio if options_provided else "16:9",
     )
     merged.visual_style = payload.get("visual_style", merged.visual_style) or merged.visual_style
     merged.reading_level = payload.get("reading_level", merged.reading_level) or merged.reading_level
@@ -911,12 +980,19 @@ def run_split_scenes(project_id: str, options: PipelineOptions | None = None) ->
         return StepResult(project_id, "scenes", StepStatus.FAILED, message="Script text is missing.")
 
     update_step_status(project_id, "scenes", StepStatus.IN_PROGRESS)
-    requested_scene_count = max(1, min(int(cfg.number_of_scenes or 8), 75))
+    requested_scene_count = max(1, min(int(cfg.number_of_scenes or YOUTUBE_SHORT_BASE_SCENES), 75))
+    if should_auto_size_youtube_short_scenes(cfg, payload) and requested_scene_count == YOUTUBE_SHORT_BASE_SCENES:
+        requested_scene_count = estimate_youtube_short_scene_count(script_text, fallback=YOUTUBE_SHORT_BASE_SCENES)
     try:
         scenes = split_script_into_scenes(script_text, max_scenes=requested_scene_count, wpm=int(payload.get("scene_wpm", 160) or 160))
         if len(scenes) != requested_scene_count:
             raise ValueError(f"Scene splitter returned {len(scenes)} scenes; expected {requested_scene_count}.")
         save_scenes(project_id, scenes)
+        payload["scene_count"] = requested_scene_count
+        payload["max_scenes"] = requested_scene_count
+        payload["resolved_scene_count"] = requested_scene_count
+        payload["script_word_count"] = count_script_words(script_text)
+        save_project_payload(project_id, payload)
 
         sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001
@@ -924,7 +1000,7 @@ def run_split_scenes(project_id: str, options: PipelineOptions | None = None) ->
         return StepResult(project_id, "scenes", StepStatus.FAILED, message=str(exc))
 
     update_step_status(project_id, "scenes", StepStatus.COMPLETED)
-    return StepResult(project_id, "scenes", StepStatus.COMPLETED, outputs={"scene_count": len(scenes)})
+    return StepResult(project_id, "scenes", StepStatus.COMPLETED, outputs={"scene_count": len(scenes), "script_word_count": count_script_words(script_text)})
 
 
 
@@ -1006,14 +1082,7 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
             narration_text = str(getattr(scene, "narration_text", "") or scene_excerpt).strip()
             base_prompt = str(getattr(scene, "image_prompt", "") or "").strip()
             if base_prompt:
-                scene.image_prompt = (
-                    f"{base_prompt}\n"
-                    f"Scene title: {scene_title}\n"
-                    f"Script anchor excerpt: {scene_excerpt}\n"
-                    f"Narration context: {narration_text}\n"
-                    f"Visual intent: {scene_visual_intent}\n"
-                    f"Aspect ratio: {cfg.aspect_ratio}."
-                ).strip()
+                scene.image_prompt = base_prompt
             scene.video_prompt = str(getattr(scene, "video_prompt", "") or "").strip()
             scene.prompt_spec = dict(getattr(scene, "prompt_spec", {}) or {})
             scene.prompt_spec["final_output"] = {
@@ -1023,6 +1092,11 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
                 "negative_prompt": str(getattr(scene, "negative_prompt", "") or ""),
                 "scene_summary": str(getattr(scene, "scene_summary", "") or ""),
                 "continuity_notes": str(getattr(scene, "continuity_notes", "") or ""),
+                "scene_title": scene_title,
+                "script_anchor_excerpt": scene_excerpt,
+                "narration_context": narration_text,
+                "visual_intent": scene_visual_intent,
+                "aspect_ratio": cfg.aspect_ratio,
                 "scores": dict(getattr(scene, "prompt_scores", {}) or {}),
             }
         save_scenes(project_id, scenes)
@@ -1050,7 +1124,7 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
     images_dir = project_dir(project_id) / "assets/images"
     generated = 0
     logger = _workflow_logger(project_id)
-    scenes_to_generate = scenes[: cfg.number_of_scenes]
+    scenes_to_generate = scenes
     # Build a cross-scene visual anchor from project metadata so all images share
     # the same era, palette, and cinematic treatment.
     payload = load_project_payload(project_id)
@@ -1066,7 +1140,7 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
                 aspect_ratio=cfg.aspect_ratio,
                 visual_style=cfg.visual_style,
                 visual_anchor=visual_anchor,
-                provider=getattr(cfg, "image_provider", "falai") or "falai",
+                provider=getattr(cfg, "image_provider", "gemini") or "gemini",
             )
             if updated.image_bytes:
                 out = images_dir / f"s{updated.index:02d}.png"
@@ -1601,6 +1675,9 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     else:
         timeline.meta.music = None
 
+    if cfg.force_render_rebuild:
+        _invalidate_render_derivatives(project_id, include_render_artifacts=True, include_timeline=False)
+
     timeline_path = project_dir(project_id) / "renders" / "timeline.resolved.json"
     timeline_path.parent.mkdir(parents=True, exist_ok=True)
     timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
@@ -1626,8 +1703,6 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     report_path = project_dir(project_id) / "renders" / "render_report.json"
     try:
         ensure_ffmpeg_exists()
-        if cfg.force_render_rebuild:
-            _invalidate_render_derivatives(project_id, include_render_artifacts=True)
         render_video_from_timeline(
             timeline_path,
             output_path,
@@ -1685,10 +1760,17 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     return StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": str(output_path), "warnings": warnings, "preflight": preflight})
 
 
-def _invalidate_render_derivatives(project_id: str, include_render_artifacts: bool = False) -> None:
+def _invalidate_render_derivatives(
+    project_id: str,
+    include_render_artifacts: bool = False,
+    include_timeline: bool = True,
+) -> None:
     pdir = project_dir(project_id)
     renders_dir = pdir / "renders"
-    for candidate in [pdir / "timeline.json", renders_dir / "final.mp4"]:
+    candidates = [renders_dir / "final.mp4"]
+    if include_timeline:
+        candidates.append(pdir / "timeline.json")
+    for candidate in candidates:
         if candidate.exists():
             candidate.unlink()
     if include_render_artifacts:
@@ -1699,9 +1781,10 @@ def _invalidate_render_derivatives(project_id: str, include_render_artifacts: bo
         ]:
             if candidate.exists():
                 candidate.unlink()
-    for timeline_artifact in renders_dir.glob("timeline*.json"):
-        if timeline_artifact.exists():
-            timeline_artifact.unlink()
+    if include_timeline:
+        for timeline_artifact in renders_dir.glob("timeline*.json"):
+            if timeline_artifact.exists():
+                timeline_artifact.unlink()
 
 
 def _rebuild_timeline_from_disk(project_id: str, cfg: PipelineOptions, resolved_settings: Any) -> StepResult:

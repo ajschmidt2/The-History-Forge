@@ -87,3 +87,34 @@ def test_run_full_workflow_topic_mode_includes_script_step(tmp_path, monkeypatch
     result = run_full_workflow(project_id, FullWorkflowOptions(mode="full_auto", pipeline=PipelineOptions(automation_mode="topic_to_short_video", topic="Roman roads")))
     assert result.failed_step == ""
     assert execution_order == ["script", "voiceover", "scenes", "narrative", "prompts", "images", "effects", "render"]
+
+
+def test_run_full_workflow_fails_ai_video_clips_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "wf-strict-ai-clips"
+
+    payload = load_project_payload(project_id)
+    payload["topic"] = "Roman roads"
+    save_project_payload(project_id, payload)
+
+    monkeypatch.setattr("src.workflow.services.run_generate_short_script", lambda project_id, options=None: StepResult(project_id, "script", StepStatus.COMPLETED, outputs={"word_count": 150}))
+    monkeypatch.setattr("src.workflow.services.run_generate_voiceover", lambda project_id, options=None: StepResult(project_id, "voiceover", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_split_scenes", lambda project_id, options=None: StepResult(project_id, "scenes", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_apply_scene_narrative", lambda project_id, options=None: StepResult(project_id, "narrative", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_generate_prompts", lambda project_id, options=None: StepResult(project_id, "prompts", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_generate_images", lambda project_id, options=None: StepResult(project_id, "images", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_apply_video_effects", lambda project_id, options=None: StepResult(project_id, "effects", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_ai_video_clips", lambda project_id, options=None: StepResult(project_id, "ai_video_clips", StepStatus.FAILED, message="Generated 0/4 AI video clips via google_veo_lite; all 4 clips are required."))
+    monkeypatch.setattr("src.workflow.services.run_render_video", lambda project_id, options=None: StepResult(project_id, "render", StepStatus.COMPLETED))
+
+    result = run_full_workflow(
+        project_id,
+        FullWorkflowOptions(
+            mode="full_auto",
+            enable_ai_video=True,
+            pipeline=PipelineOptions(automation_mode="topic_to_short_video", topic="Roman roads"),
+        ),
+    )
+
+    assert result.failed_step == "ai_video_clips"
+    assert "0/4" in " ".join(result.warnings)

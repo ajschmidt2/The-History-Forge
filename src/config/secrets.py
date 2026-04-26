@@ -16,6 +16,10 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "SUPABASE_SERVICE_ROLE_KEY": ["SUPABASE_SERVICE_ROLE_KEY", "supabase_service_role_key"],
     "OPENAI_API_KEY": ["OPENAI_API_KEY", "openai_api_key"],
     "GEMINI_API_KEY": ["GEMINI_API_KEY", "google_api_key", "GOOGLE_API_KEY", "google_ai_studio_api_key"],
+    "GEMINI_MODEL_TEXT": ["GEMINI_MODEL_TEXT", "gemini_model_text"],
+    "GEMINI_MODEL_FAST": ["GEMINI_MODEL_FAST", "gemini_model_fast"],
+    "GEMINI_IMAGE_MODEL": ["GEMINI_IMAGE_MODEL", "gemini_image_model", "GOOGLE_AI_STUDIO_IMAGE_MODEL", "IMAGEN_MODEL", "imagen_model"],
+    "GEMINI_VIDEO_MODEL": ["GEMINI_VIDEO_MODEL", "gemini_video_model", "HF_GOOGLE_VIDEO_MODEL", "hf_google_video_model"],
     "HF_VIDEO_PROVIDER": ["HF_VIDEO_PROVIDER", "hf_video_provider"],
     "HF_GOOGLE_VIDEO_MODEL": ["HF_GOOGLE_VIDEO_MODEL", "hf_google_video_model"],
     "IMAGES_BUCKET": ["IMAGES_BUCKET", "images_bucket"],
@@ -149,16 +153,20 @@ def _mapping_path_get(mapping: Any, path: tuple[str, ...]) -> str:
     return _normalize(current)
 
 
-def _read_streamlit_secret(key: str) -> str | None:
+def _read_streamlit_secret(key: str) -> Any | None:
     secrets = _safe_streamlit_secrets()
     if secrets is None:
         return None
 
     try:
         found, raw_value = _read_key(secrets, key)
-        value = _normalize(raw_value) if found else ""
-        if value:
-            return value
+        if found:
+            if isinstance(raw_value, str):
+                value = _normalize(raw_value)
+            else:
+                value = raw_value
+            if value:
+                return value
 
         if key in _NESTED_STREAMLIT_PATHS:
             for path in _NESTED_STREAMLIT_PATHS[key]:
@@ -260,7 +268,7 @@ def get_fal_key() -> str:
 def bootstrap_api_keys() -> None:
     try:
         get_fal_key()
-    except RuntimeError:
+    except Exception:
         # fal.ai is optional in some flows; fail only when the provider is used.
         pass
 
@@ -269,7 +277,11 @@ def fal_key_debug_snapshot() -> dict[str, Any]:
     secrets = _safe_streamlit_secrets()
     secrets_presence: dict[str, bool] = {}
     env_presence: dict[str, bool] = {}
-    nodes = _flatten_secret_nodes(secrets) if secrets is not None else []
+    try:
+        nodes = _flatten_secret_nodes(secrets) if secrets is not None else []
+    except Exception:
+        nodes = []
+        secrets = None
 
     for name in _FAL_KEY_CANDIDATES:
         in_secrets = False
@@ -285,7 +297,7 @@ def fal_key_debug_snapshot() -> dict[str, Any]:
     resolved = ""
     try:
         resolved = get_fal_key()
-    except RuntimeError:
+    except Exception:
         resolved = ""
 
     return {
@@ -349,9 +361,13 @@ def get_secret(key: str, default=None):
         if secrets is not None:
             for alias in aliases:
                 found, raw = _read_key(secrets, alias)
-                value = _normalize(raw) if found else ""
-                if value:
-                    return value
+                if found:
+                    if isinstance(raw, str):
+                        value = _normalize(raw)
+                    else:
+                        value = raw
+                    if value:
+                        return value
             for path in _NESTED_STREAMLIT_PATHS.get(canonical, ()):
                 nested = _mapping_path_get(secrets, path)
                 if nested:
@@ -368,9 +384,14 @@ def get_secret(key: str, default=None):
     # 3) Direct TOML fallback (headless/cron mode)
     toml_data = _load_toml_secrets()
     for alias in aliases:
-        value = _normalize(toml_data.get(alias, ""))
-        if value:
-            return value
+        raw = toml_data.get(alias)
+        if raw is not None:
+            if isinstance(raw, str):
+                value = _normalize(raw)
+            else:
+                value = raw
+            if value:
+                return value
     for path in _NESTED_STREAMLIT_PATHS.get(canonical, ()):
         nested = _mapping_path_get(toml_data, path)
         if nested:
@@ -430,7 +451,7 @@ def fal_configured() -> bool:
     """Return True if a fal.ai API key is present."""
     try:
         return bool(get_fal_key())
-    except RuntimeError:
+    except Exception:
         return False
 
 

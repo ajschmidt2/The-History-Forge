@@ -24,13 +24,13 @@ class DailyShortPreset:
     burn_subtitles: bool = False
     generate_srt: bool = False
     music_enabled: bool = True
-    music_relative_level: float = 0.10
+    music_relative_level: float = 0.15
     target_word_count: int = 150
     target_duration_seconds: int = 60
     require_last_scene_cta: bool = True
     last_scene_cta_text: str = "Subscribe to History Crossroads for more 60-second history stories."
-    ai_video_provider: str = "falai"
-    image_provider: str = "falai"
+    ai_video_provider: str = "google_veo_lite"
+    image_provider: str = "gemini"
 
     def to_pipeline_options(self, *, topic: str = "", selected_music_track: str = "") -> PipelineOptions:
         return PipelineOptions(
@@ -59,4 +59,3 @@ class DailyShortPreset:
 
 
 DAILY_SHORT_PRESET = DailyShortPreset()
-

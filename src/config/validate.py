@@ -13,8 +13,8 @@ def validate_runtime_config() -> dict[str, dict[str, bool]]:
         "OPENAI_API_KEY": bool(openai["api_key"]),
     }
 
-    optional_veo = bool(get_secret("GOOGLE_VEO_API_KEY") or get_secret("VEO_API_KEY"))
-    optional_sora = bool(openai["api_key"])
+    optional_gemini_video = bool(get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY"))
+    optional_fal = bool(get_secret("FAL_KEY") or get_secret("FAL_API_KEY") or get_secret("fal_api_key"))
 
     missing = [name for name, ok in required_checks.items() if not ok]
     if missing:
@@ -27,15 +27,15 @@ def validate_runtime_config() -> dict[str, dict[str, bool]]:
             "- Supabase key: SUPABASE_ANON_KEY / SUPABASE_KEY / supabase_anon_key / supabase_key\n"
             "- Optional Supabase service key: SUPABASE_SERVICE_ROLE_KEY / supabase_service_role_key\n"
             "- OpenAI key: OPENAI_API_KEY / openai_api_key\n"
-            "- Optional Veo keys: GOOGLE_VEO_API_KEY / VEO_API_KEY\n"
-            "- Optional Sora: requires OPENAI_API_KEY."
+            "- Optional Gemini media key: GEMINI_API_KEY / GOOGLE_API_KEY\n"
+            "- Optional fal.ai fallback key: FAL_KEY / FAL_API_KEY / fal_api_key."
         )
 
     return {
         "required": required_checks,
         "features": {
-            "veo_enabled": optional_veo,
-            "sora_enabled": optional_sora,
+            "gemini_video_enabled": optional_gemini_video,
+            "fal_fallback_enabled": optional_fal,
         },
         "buckets": {
             "images_bucket": str(supabase["images_bucket"] or ""),

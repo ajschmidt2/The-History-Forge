@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.providers.gemini_provider import normalize_veo_duration_seconds
 from src.services import google_veo_video as mod
 from src.video import ai_video_clips
 
@@ -60,3 +61,10 @@ def test_generate_scene_video_supports_google_provider(monkeypatch, tmp_path: Pa
 
     assert result["ok"] is True
     assert result["provider"] == "google_veo_lite"
+
+
+def test_normalize_veo_duration_seconds_matches_model_limits() -> None:
+    assert normalize_veo_duration_seconds(5, "veo-3.1-lite-generate-preview") == 6
+    assert normalize_veo_duration_seconds(9, "veo-3.1-generate-preview") == 8
+    assert normalize_veo_duration_seconds(4, "veo-3.0-fast-generate-001") == 4
+    assert normalize_veo_duration_seconds(4, "veo-2.0-generate-001") == 5

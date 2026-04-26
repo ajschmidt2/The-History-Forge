@@ -13,6 +13,11 @@ from src.workflow.project_io import load_scenes, project_dir, save_scenes
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".mkv"}
 AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".aac"}
+MUSIC_LIBRARY_DIRS = (Path("data/music_library"), Path("data/music library"))
+
+
+def _path_string(path: Path) -> str:
+    return path.as_posix()
 
 
 def resolve_music_track_for_project(project_id: str, selected_track: str) -> dict[str, Any]:
@@ -48,7 +53,7 @@ def resolve_music_track_for_project(project_id: str, selected_track: str) -> dic
             candidates.extend(
                 [
                     music_dir / raw.name,
-                    repo_root / "data/music_library" / raw.name,
+                    *(repo_root / library / raw.name for library in MUSIC_LIBRARY_DIRS),
                 ]
             )
 
@@ -57,14 +62,14 @@ def resolve_music_track_for_project(project_id: str, selected_track: str) -> dic
         return result
 
     canonical = source
-    shared_library = (repo_root / "data/music_library").resolve()
-    if shared_library in source.parents:
+    shared_libraries = [(repo_root / library).resolve() for library in MUSIC_LIBRARY_DIRS]
+    if any(shared_library in source.parents for shared_library in shared_libraries):
         canonical = (music_dir / source.name).resolve()
         if not canonical.exists() or canonical.stat().st_size != source.stat().st_size:
             shutil.copy2(source, canonical)
             result["copied_to_project"] = True
 
-    result["resolved_path"] = str(canonical)
+    result["resolved_path"] = _path_string(canonical)
     result["file_exists"] = canonical.exists()
     return result
 
@@ -233,7 +238,7 @@ def repair_timeline_media_references(project_id: str, timeline: Timeline, scenes
             if isinstance(image_bytes, (bytes, bytearray)) and image_bytes and expected_media is not None:
                 expected_media.parent.mkdir(parents=True, exist_ok=True)
                 expected_media.write_bytes(bytes(image_bytes))
-                tscene.image_path = str(expected_media)
+                tscene.image_path = _path_string(expected_media)
                 changed = True
                 repaired.append(idx)
                 continue
@@ -258,7 +263,7 @@ def repair_timeline_media_references(project_id: str, timeline: Timeline, scenes
         target.parent.mkdir(parents=True, exist_ok=True)
         if usable.resolve() != target.resolve():
             shutil.copy2(usable, target)
-        tscene.image_path = str(target)
+        tscene.image_path = _path_string(target)
         changed = True
         repaired.append(idx)
 

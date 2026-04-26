@@ -91,3 +91,33 @@ def test_upload_video_resolves_non_local_video_and_thumbnail(monkeypatch: pytest
     ]
     assert not resolved_video.exists()
     assert not resolved_thumb.exists()
+
+
+def test_validate_youtube_credentials_recognizes_web_oauth(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(mod, "_web_oauth_configured", lambda: True)
+
+    ok, msg = mod.validate_youtube_credentials(
+        client_secrets_file=tmp_path / "missing-client-secrets.json",
+        token_file=tmp_path / "missing-token.json",
+    )
+
+    assert ok is False
+    assert "connect youtube in the app" in msg.lower()
+
+
+def test_run_local_oauth_sign_in_uses_resolved_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client_file = tmp_path / "client_secrets.json"
+    token_file = tmp_path / "token.json"
+    calls = []
+
+    monkeypatch.setattr(
+        mod,
+        "_resolve_auth_config",
+        lambda **_kwargs: mod.YouTubeAuthConfig(client_secrets_file=client_file, token_file=token_file),
+    )
+    monkeypatch.setattr(mod, "_run_oauth_flow", lambda client, token: calls.append((client, token)))
+
+    resolved = mod.run_local_oauth_sign_in()
+
+    assert resolved == token_file
+    assert calls == [(client_file, token_file)]

@@ -98,11 +98,11 @@ def tab_create_images() -> None:
         "You can generate images with AI, upload your own image for each scene, or bulk upload scene images."
     )
 
-    aspect_ratio_options = ["16:9", "9:16", "1:1"]
+    aspect_ratio_options = ["9:16", "16:9", "1:1"]
     current_aspect_ratio = (
         st.session_state.aspect_ratio
         if st.session_state.aspect_ratio in aspect_ratio_options
-        else aspect_ratio_options[0]
+        else "9:16"
     )
     st.session_state.aspect_ratio = st.selectbox(
         "Aspect ratio",
@@ -178,7 +178,7 @@ def tab_create_images() -> None:
                     aspect_ratio=st.session_state.aspect_ratio,
                     visual_style=st.session_state.visual_style,
                     tone=st.session_state.tone,
-                    image_provider=str(st.session_state.get("image_provider", "falai") or "falai"),
+                    image_provider=str(st.session_state.get("image_provider", "gemini") or "gemini"),
                 ),
             )
         if result.status != StepStatus.COMPLETED:
@@ -259,7 +259,7 @@ def tab_create_images() -> None:
                             aspect_ratio=st.session_state.aspect_ratio,
                             visual_style=st.session_state.visual_style,
                             visual_anchor=_visual_anchor,
-                            provider=str(st.session_state.get("image_provider", "falai") or "falai"),
+                            provider=str(st.session_state.get("image_provider", "gemini") or "gemini"),
                         )
                         s.image_bytes = updated.image_bytes
                         if s.image_variations:

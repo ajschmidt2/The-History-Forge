@@ -127,7 +127,7 @@ def test_preflight_reports_scene_count_and_metadata_mismatch(tmp_path, monkeypat
 def test_resolve_music_track_copies_shared_library_track_into_project(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     project_id = "music-resolve"
-    shared = Path("data/music_library")
+    shared = Path("data/music library")
     shared.mkdir(parents=True, exist_ok=True)
     src_track = shared / "track.mp3"
     src_track.write_bytes(b"mp3")

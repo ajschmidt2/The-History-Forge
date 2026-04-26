@@ -1,4 +1,4 @@
-# Supabase Setup Guide
+﻿# Supabase Setup Guide
 
 This guide walks you through creating the Supabase project, database tables, and
 storage buckets required by The History Forge.
@@ -10,7 +10,7 @@ storage buckets required by The History Forge.
 1. Go to [https://supabase.com](https://supabase.com) and sign in.
 2. Click **New project** and fill in a name (e.g. `history-forge`).
 3. Note your **Project URL** and **anon public key** from
-   **Project Settings → API**.
+   **Project Settings â†’ API**.
 
 ---
 
@@ -99,7 +99,7 @@ In the Supabase dashboard go to **Storage** and create these buckets:
 | `history-forge-audio`    | Yes     | Voiceover & music files             |
 | `history-forge-videos`   | Yes     | Rendered video exports              |
 | `history-forge-scripts`  | Yes     | Generated script text files         |
-| `generated-videos`       | Yes     | AI-generated videos (Veo / Sora)    |
+| `generated-videos`       | Yes     | AI-generated videos (Gemini/Veo or fal.ai) |
 
 For each bucket you also need a storage policy that allows the anon key to
 upload.  In the **Policies** tab of each bucket add:
@@ -128,52 +128,24 @@ Replace `<bucket-name>` with the actual bucket name for each policy.
 
 The **AI Video Generator** tab supports two providers.
 
-### 6a) Google Veo via Supabase Edge Function (recommended)
+### 6a) Gemini Veo via Gemini Developer API (recommended)
 
-Veo must run server-side so the frontend does **not** hold a short-lived Google
-access token. This repository includes an Edge Function at
-`supabase/functions/veo-generate/index.ts`.
-
-Deploy it with JWT verification disabled (required so the Python backend can
-call the function without triggering a 401 from Supabase's API gateway):
-
-```bash
-supabase functions deploy veo-generate --no-verify-jwt
-```
-
-> **Why `--no-verify-jwt`?**  By default Supabase Edge Functions verify the
-> caller's JWT before forwarding the request.  This app calls the function
-> from server-side Python using the project's anon key, which should pass
-> that check — but subtle mismatches (key regeneration, placeholder values,
-> etc.) produce a cryptic **401 Unauthorized**.  Passing `--no-verify-jwt`
-> removes the gateway-level check; security is still maintained because
-> all Google Cloud API calls inside the function use a service-account key
-> that you set via `supabase secrets set`.
->
-> The repository also includes `supabase/config.toml` which persists this
-> setting, so re-deployments without the flag will still work correctly.
-
-Set function secrets (never commit these to `.env`):
-
-```bash
-supabase secrets set GOOGLE_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
-supabase secrets set GOOGLE_CLOUD_PROJECT_ID='my-project-123'
-supabase secrets set GOOGLE_CLOUD_LOCATION='us-central1'
-```
-
-Then add only Supabase invocation secrets to `.streamlit/secrets.toml`:
+Create a Gemini API key in Google AI Studio and add it to Streamlit secrets or
+your local environment. The app calls the Google GenAI SDK directly using
+`GEMINI_API_KEY`; Google Cloud project/location settings and service-account JSON
+are no longer used for generative media.
 
 ```toml
-SUPABASE_URL = "https://<your-ref>.supabase.co"
-SUPABASE_KEY = "<your-anon-public-key>"
-# Or use this key name if your existing setup already uses it:
-# SUPABASE_ANON_KEY = "<your-anon-public-key>"
-# Optional if you rename the function:
-SUPABASE_VEO_FUNCTION_NAME = "veo-generate"
-
-# --- OpenAI Sora ---
-openai_api_key = "sk-..."
+GEMINI_API_KEY = "AIza..."
+GEMINI_MODEL_TEXT = "gemini-2.5-flash"
+GEMINI_MODEL_FAST = "gemini-2.5-flash"
+GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image"
+GEMINI_VIDEO_MODEL = "veo-3.1-lite-generate-preview"
 ```
+
+### 6b) fal.ai fallback
+
+Add `FAL_API_KEY` or `fal_api_key` if you want the optional fallback provider.
 
 If a provider's credentials are missing the app shows a friendly warning and
 disables that option in the provider selector.
@@ -191,8 +163,10 @@ sidebar.  All five checks should pass.
 
 | Symptom | Likely cause |
 |---------|-------------|
-| "Read failed" on the diagnostics page | Tables don't exist — re-run step 3 |
-| "Write test failed" with 403 | RLS policy missing — run step 4 |
-| Storage buckets not found | Buckets not created — complete step 5 |
-| Client creation fails | Wrong URL or key — double-check step 2 |
-| Veo generation: **401 Unauthorized** | Re-deploy the function with `--no-verify-jwt` (step 6a). Also confirm `SUPABASE_KEY` in `secrets.toml` is the real anon key, not a placeholder. |
+| "Read failed" on the diagnostics page | Tables don't exist â€” re-run step 3 |
+| "Write test failed" with 403 | RLS policy missing â€” run step 4 |
+| Storage buckets not found | Buckets not created â€” complete step 5 |
+| Client creation fails | Wrong URL or key â€” double-check step 2 |
+| Gemini generation says missing key | Add `GEMINI_API_KEY` to Streamlit secrets, Vercel env vars, or your local environment |
+| Gemini generation says invalid model | Check `GEMINI_IMAGE_MODEL` / `GEMINI_VIDEO_MODEL` and use a model available to your API key |
+

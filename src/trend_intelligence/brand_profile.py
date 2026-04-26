@@ -106,11 +106,11 @@ HISTORY_CROSSROADS_BRAND_PROFILE = BrandProfile(
         ),
     ),
     overall_score_weights={
-        "trend_momentum": 0.18,
-        "watch_time_potential": 0.22,
-        "clickability": 0.16,
-        "competition_gap": 0.14,
-        "brand_alignment": 0.30,
+        "trend_momentum": 0.25,
+        "watch_time_potential": 0.25,
+        "clickability": 0.20,
+        "competition_gap": 0.15,
+        "brand_alignment": 0.15,
     },
 )
 

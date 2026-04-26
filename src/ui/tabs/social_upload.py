@@ -30,10 +30,11 @@ from src.services.tiktok_upload import (
     validate_tiktok_credentials,
     PRIVACY_OPTIONS as _TT_PRIVACY,
 )
-from src.services.youtube_oauth import build_youtube_auth_url
+from src.services.youtube_oauth import build_youtube_auth_url, resolve_youtube_redirect_uri
 from src.services.youtube_upload import (
     YouTubeUploadError,
     exchange_code_for_token,
+    run_local_oauth_sign_in,
     upload_video as yt_upload_video,
     validate_youtube_credentials,
 )
@@ -157,37 +158,31 @@ def _render_youtube_tab(video_path: str, thumbnail_path: str, meta: dict) -> Non
     yt_client_secrets = get_secret("YOUTUBE_CLIENT_SECRETS_FILE", "client_secrets.json")
     yt_token_file = get_secret("YOUTUBE_TOKEN_FILE", "token.json")
 
-    # Handle OAuth callback
     query_params = st.query_params
     oauth_code = query_params.get("code")
     oauth_state = query_params.get("state")
     if oauth_code:
         expected = st.session_state.get("yt_oauth_state")
-        if expected and oauth_state == expected:
-            st.session_state["yt_oauth_pending_code"] = oauth_code
-            st.session_state["yt_oauth_redirect_uri"] = st.session_state.get(
-                "yt_oauth_redirect_uri", ""
+        if expected and oauth_state and oauth_state != expected:
+            st.error("YouTube OAuth state mismatch ??? please try connecting again.")
+            query_params.clear()
+            st.session_state.pop("yt_oauth_state", None)
+            st.rerun()
+        try:
+            exchange_code_for_token(
+                oauth_code,
+                redirect_uri=resolve_youtube_redirect_uri(),
+                token_file=yt_token_file or None,
             )
-        else:
-            st.error("YouTube OAuth state mismatch — please try connecting again.")
-        query_params.clear()
-        st.rerun()
-
-    if st.session_state.get("yt_oauth_pending_code"):
-        st.warning("OAuth authorization received — click **Exchange Token** to finish.")
-        if st.button("Exchange Token", type="primary", key="yt_exchange_btn"):
-            _code = st.session_state.pop("yt_oauth_pending_code", "")
-            _redir = st.session_state.pop("yt_oauth_redirect_uri", "")
-            try:
-                exchange_code_for_token(
-                    _code, redirect_uri=_redir,
-                    token_file=yt_token_file or None,
-                )
-                st.success("YouTube account connected.")
-                st.rerun()
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Token exchange failed: {exc}")
-        st.divider()
+            query_params.clear()
+            st.session_state.pop("yt_oauth_state", None)
+            st.success("YouTube account connected.")
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Token exchange failed: {exc}")
+            query_params.clear()
+            st.session_state.pop("yt_oauth_state", None)
+            st.rerun()
 
     is_authed, auth_msg = validate_youtube_credentials()
     if is_authed:
@@ -203,16 +198,23 @@ def _render_youtube_tab(video_path: str, thumbnail_path: str, meta: dict) -> Non
                 try:
                     auth_url, state = build_youtube_auth_url()
                     st.session_state["yt_oauth_state"] = state
-                    try:
-                        import streamlit as _st
-                        redir = str(_st.secrets["google_oauth"]["redirect_uri"])
-                    except Exception:  # noqa: BLE001
-                        redir = ""
-                    st.session_state["yt_oauth_redirect_uri"] = redir
                     st.markdown(f"[Open Google authorization page]({auth_url})")
                     st.info("After approving, you'll be redirected back automatically.")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Could not build authorization URL: {exc}")
+            st.caption("If you're running locally in the desktop app, use the desktop sign-in button instead.")
+            if st.button("Connect YouTube (Desktop)", key="yt_connect_desktop_btn"):
+                try:
+                    st.info("A browser window should open for Google sign-in. After approval, Google will return to a localhost page and then back here.")
+                    with st.spinner("Opening local YouTube sign-in in your browser..."):
+                        token_path = run_local_oauth_sign_in(
+                            client_secrets_file=yt_client_secrets or None,
+                            token_file=yt_token_file or None,
+                        )
+                    st.success(f"YouTube desktop sign-in completed. Token saved to {token_path}.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Desktop YouTube sign-in failed: {exc}")
 
     st.divider()
 

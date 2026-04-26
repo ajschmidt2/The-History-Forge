@@ -57,11 +57,13 @@ def compute_ai_scene_clip_mapping(num_scenes: int) -> dict[str, str]:
     clip in the sequence wins, so the opening clip is always preserved.
     """
     safe_scene_count = max(int(num_scenes), 1)
+    if safe_scene_count == 1:
+        return {"s01": "ai_opening_clip_path"}
     targets = (
-        (0,                                            "ai_opening_clip_path"),
-        (max(1, round(safe_scene_count * 0.25)),       "ai_q2_clip_path"),
-        (max(2, round(safe_scene_count * 0.65)),       "ai_q3_clip_path"),
-        (safe_scene_count - 1,                         "ai_q4_clip_path"),
+        (0,                                      "ai_opening_clip_path"),
+        (safe_scene_count // 4,                  "ai_q2_clip_path"),
+        (safe_scene_count // 2,                  "ai_q3_clip_path"),
+        ((safe_scene_count * 3) // 4,            "ai_q4_clip_path"),
     )
     mapping: dict[str, str] = {}
     for idx, payload_key in targets:
@@ -2278,7 +2280,7 @@ def render_video_from_timeline(
             if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
                 expected_voiceover_duration = get_media_duration(timeline.meta.voiceover.path)
                 rendered_duration = get_media_duration(output_path)
-                if rendered_duration + 0.05 < expected_voiceover_duration:
+                if rendered_duration + 0.25 < expected_voiceover_duration:
                     raise RuntimeError(
                         "Rendered video is shorter than the voiceover "
                         f"({rendered_duration:.3f}s < {expected_voiceover_duration:.3f}s)."

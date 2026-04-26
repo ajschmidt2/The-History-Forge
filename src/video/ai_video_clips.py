@@ -1,38 +1,29 @@
-"""
+﻿"""
 src/video/ai_video_clips.py
 
 Animates the first and middle generated scene images into true AI video clips.
-Supports two providers:
-  - veo:  Google Veo 2 image-to-video via the veo-image-to-video Supabase Edge Function
-  - sora: OpenAI Sora text-to-video (with optional image reference fallback)
+Supports three providers:
+  - google_veo_lite: Gemini/Veo Fast image-to-video
+  - falai: fal.ai Wan image-to-video fallback
 
 Provider is selected at call time via the `provider` argument.
 """
 
-import base64
 import json
 import logging
 import re
 import subprocess
 import time
-import requests
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from src.config import get_openai_config, get_secret
-from src.ai_video_generation import (
-    sora_configured,
-    veo_configured,
-    _SORA_SIZE_MAP,
-    create_video,
-    poll_video,
-    get_video_content,
-    _MAX_POLLS,
-    _POLL_INTERVAL_S,
-)
+import requests
+
+from src.config import get_secret
 from src.services.fal_video_test import (
     DEFAULT_FAL_VIDEO_MODEL,
     WORKING_TEST_MODEL_SLUG,
+    extract_video_url as _extract_video_url,
     generate_fal_video_from_image,
     validate_fal_model_slug,
 )
@@ -40,12 +31,90 @@ from src.services.google_veo_video import (
     DEFAULT_GOOGLE_VIDEO_MODEL,
     generate_google_veo_lite_video,
 )
+from src.video.utils import resolve_ffmpeg_exe
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDERS = ("falai", "google_veo_lite", "veo", "sora", "auto")
+SUPPORTED_PROVIDERS = ("google_veo_lite", "falai", "auto")
 SUPPORTED_ASPECT_RATIOS = {"16:9", "9:16", "1:1"}
 MIN_VIDEO_BYTES = 1024
+_VIDEO_SAFETY_SANITIZATIONS: list[tuple[str, str]] = [
+    (r"\bchildren\b", "family members"),
+    (r"\bchild\b", "family member"),
+    (r"\bkids?\b", "family members"),
+    (r"\bbab(?:y|ies)\b", "small figures"),
+    (r"\binfant(?:s)?\b", "small figures"),
+    (r"\bflames?\b", "firelight"),
+    (r"\bburning\b", "glowing"),
+    (r"\bfire\b", "lamplight"),
+    (r"\bdead(?:ly)?\b", "lost"),
+    (r"\bdeath(?:s)?\b", "loss"),
+    (r"\bkill(?:ing|ings|ed|s)?\b", "tragedy"),
+    (r"\bmurder(?:ed|er|ers|ing|s)?\b", "tragedy"),
+    (r"\bviolen(?:ce|t)\b", "conflict"),
+    (r"\bbrutal(?:ity|ly)?\b", "harsh"),
+    (r"\bterror\b", "fear"),
+    (r"\bpanic\b", "alarm"),
+]
+
+
+def extract_video_url(obj: Any) -> str | None:
+    """Recursively extract a likely video URL from a provider response."""
+    return _extract_video_url(obj)
+
+
+def is_valid_video_file(path: str | Path) -> bool:
+    candidate = Path(path)
+    return candidate.exists() and candidate.is_file() and candidate.stat().st_size >= MIN_VIDEO_BYTES
+
+
+def write_video_artifact(artifact: Any, output_path: str | Path) -> tuple[bool, str]:
+    """Persist a provider video artifact to disk.
+
+    Supports raw bytes and structured responses containing a video URL.
+    """
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(artifact, (bytes, bytearray)):
+        output.write_bytes(bytes(artifact))
+        return (True, "") if is_valid_video_file(output) else (False, "video artifact was empty or too small")
+
+    if isinstance(artifact, dict):
+        video_url = extract_video_url(artifact)
+        if not video_url:
+            return False, "provider returned dict without video artifact"
+        try:
+            with requests.get(video_url, timeout=180, stream=True) as response:
+                response.raise_for_status()
+                with output.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 128):
+                        if chunk:
+                            handle.write(chunk)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"video artifact download failed: {exc}"
+        return (True, "") if is_valid_video_file(output) else (False, "downloaded video artifact was empty or too small")
+
+    return False, f"unsupported video artifact type: {type(artifact).__name__}"
+
+
+def _clip_target_indexes(scene_count: int) -> tuple[int, int, int, int]:
+    safe_scene_count = max(int(scene_count), 1)
+    if safe_scene_count == 1:
+        return (0, 0, 0, 0)
+    return (
+        0,
+        safe_scene_count // 4,
+        safe_scene_count // 2,
+        (safe_scene_count * 3) // 4,
+    )
+
+
+def normalize_ai_video_provider(provider: object, fallback: str = "google_veo_lite") -> str:
+    """Normalize provider settings and migrate removed legacy choices."""
+    value = (str(provider or fallback).strip().lower() or fallback)
+    if value == "sora":
+        return fallback
+    return value if value in SUPPORTED_PROVIDERS else fallback
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +140,7 @@ def _extract_prompt_str(raw: object) -> str:
     - A dict: ``raw["prompt"]`` returned
     - A stringified dict with trailing metadata, e.g.
       ``"{'scene': 1, 'prompt': 'Wide shot of...'}\n\nVisual intent: ..."``
-      → the 'prompt' value is extracted via regex
+      â†’ the 'prompt' value is extracted via regex
     """
     if not raw:
         return ""
@@ -94,15 +163,21 @@ def _find_scene_prompts(project_id: str) -> list[dict[str, str]]:
         return []
     try:
         scenes = json.loads(scenes_path.read_text())
-        return [
-            {
+        rows = []
+        for s in scenes:
+            row = {
+                "title": _extract_prompt_str(s.get("title") or ""),
+                "script_excerpt": _extract_prompt_str(s.get("script_excerpt") or ""),
+                "scene_summary": _extract_prompt_str(s.get("scene_summary") or ""),
                 "image_prompt": _extract_prompt_str(s.get("image_prompt") or s.get("prompt") or ""),
                 "video_prompt": _extract_prompt_str(s.get("video_prompt") or ""),
                 "negative_prompt": _extract_prompt_str(s.get("negative_prompt") or ""),
-                "visual_context": s.get("visual_context") if isinstance(s.get("visual_context"), dict) else {},
             }
-            for s in scenes
-        ]
+            visual_context = s.get("visual_context") if isinstance(s.get("visual_context"), dict) else {}
+            if visual_context:
+                row["visual_context"] = visual_context
+            rows.append(row)
+        return rows
     except Exception:
         return []
 
@@ -110,111 +185,103 @@ def _find_scene_prompts(project_id: str) -> list[dict[str, str]]:
 def _build_motion_prompt(image_prompt: str) -> str:
     base = image_prompt.strip().rstrip(".")
     return (
-        f"{base}. Animate with natural cinematic motion — elements move realistically, "
+        f"{base}. Animate with natural cinematic motion â€” elements move realistically, "
         "atmosphere shifts, light and shadow animate across the scene. "
         "Dramatic documentary style, historically immersive, slow deliberate movement."
     )
 
 
-# ---------------------------------------------------------------------------
-# Veo: image-to-video via Supabase Edge Function
-# ---------------------------------------------------------------------------
+def _sanitize_video_prompt(text: object) -> str:
+    result = re.sub(r"\s+", " ", str(text or "")).strip()
+    for pattern, replacement in _VIDEO_SAFETY_SANITIZATIONS:
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+    result = re.sub(r"\bno text overlays?\b", "no text", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bno captions?\b", "no text", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bno logos?\b", "no modern branding", result, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", result).strip(" ,.;")
 
-def _call_veo_image_to_video(
-    image_path: Path,
-    prompt: str,
-    aspect_ratio: str = "9:16",
-    duration_seconds: int = 5,
-) -> bytes | None:
-    """
-    Send an image to the veo-image-to-video Edge Function.
-    Returns raw video bytes on success, None on non-critical failure.
-    Raises RuntimeError on configuration or deployment errors.
-    """
-    supabase_url = get_secret("SUPABASE_URL")
-    supabase_key = get_secret("SUPABASE_KEY") or get_secret("SUPABASE_ANON_KEY")
 
-    if not supabase_url or not supabase_key:
-        raise RuntimeError(
-            "ai_video_clips: SUPABASE_URL and SUPABASE_KEY are required but not configured."
-        )
+def _trim_sentence(text: object, limit: int) -> str:
+    cleaned = _sanitize_video_prompt(text)
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rsplit(" ", 1)[0].rstrip(" ,.;") + "..."
 
-    if not image_path.exists():
-        logger.warning(f"ai_video_clips: image not found at {image_path}, skipping clip")
-        return None
 
-    image_bytes = image_path.read_bytes()
-    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-    mime_type = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
+def _build_prompt_variants(
+    *,
+    base_prompt: str,
+    label: str,
+    packed: dict[str, object] | None,
+    aspect_ratio: str,
+) -> list[str]:
+    packed = packed if isinstance(packed, dict) else {}
+    prompt_spec = packed.get("prompt_spec", {}) if isinstance(packed.get("prompt_spec"), dict) else {}
+    video_spec = packed.get("video_spec", {}) if isinstance(packed.get("video_spec"), dict) else {}
+    visual_context = packed.get("visual_context", {}) if isinstance(packed.get("visual_context"), dict) else {}
 
-    endpoint = f"{supabase_url.rstrip('/')}/functions/v1/veo-image-to-video"
-    headers = {
-        "Authorization": f"Bearer {supabase_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "prompt": prompt,
-        "image_base64": image_b64,
-        "image_mime_type": mime_type,
-        "aspect_ratio": aspect_ratio,
-        "duration_seconds": duration_seconds,
-    }
-
-    logger.info(
-        f"ai_video_clips [veo]: calling {endpoint} "
-        f"(image={image_path.name}, {len(image_bytes):,} bytes)"
+    subject = _trim_sentence(
+        prompt_spec.get("primary_subject")
+        or visual_context.get("character_name")
+        or packed.get("title")
+        or "historical subject",
+        80,
     )
+    setting = _trim_sentence(
+        prompt_spec.get("setting/location")
+        or visual_context.get("location")
+        or packed.get("scene_summary")
+        or "historical setting",
+        90,
+    )
+    period = _trim_sentence(
+        prompt_spec.get("time_period")
+        or visual_context.get("time_period")
+        or "historical period",
+        60,
+    )
+    atmosphere = _trim_sentence(
+        visual_context.get("visual_atmosphere")
+        or prompt_spec.get("emotional_tone")
+        or "tense documentary atmosphere",
+        70,
+    )
+    opening = _trim_sentence(video_spec.get("opening frame description") or packed.get("scene_summary") or "", 120)
+    motion = _trim_sentence(video_spec.get("subject motion") or prompt_spec.get("visible_action") or "subtle natural movement", 120)
+    camera = {
+        "opening": "slow push in",
+        "q2": "gentle lateral move",
+        "q3": "controlled low-angle drift",
+        "q4": "slow reveal pull back",
+    }.get(label, "slow cinematic drift")
 
-    try:
-        resp = requests.post(endpoint, json=payload, headers=headers, timeout=360)
-    except requests.exceptions.Timeout:
-        logger.error("ai_video_clips [veo]: request timed out after 360s")
-        return None
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"ai_video_clips [veo]: connection error — {e}")
-        return None
-
-    if resp.status_code == 401:
-        raise RuntimeError(
-            "ai_video_clips [veo]: Edge Function returned 401. "
-            "Redeploy with: supabase functions deploy veo-image-to-video --no-verify-jwt"
+    concise = (
+        f"Cinematic historical documentary shot. Subject: {subject}. Setting: {setting}, {period}. "
+        f"Action: {motion}. Camera: {camera}. Atmosphere: {atmosphere}. "
+        f"Keep identity stable, motion subtle, and the result safe, non-graphic, and realistic. "
+        f"No text, no logos, no explicit injury, no visible harm. Compose for {aspect_ratio}."
+    )
+    minimal = (
+        f"Animate this historical image into a safe cinematic documentary clip. Subject: {subject}. "
+        f"Setting: {setting}. Camera: {camera}. Subtle realistic motion only. "
+        f"No text, no explicit harm, no gore, no chaos. Aspect ratio {aspect_ratio}."
+    )
+    variants = [base_prompt, concise, minimal]
+    if opening:
+        variants.insert(
+            1,
+            f"{opening}. Camera: {camera}. Keep the scene historically grounded, safe, non-graphic, and visually distinct from neighboring stills. No text. Aspect ratio {aspect_ratio}.",
         )
-    if resp.status_code == 404:
-        raise RuntimeError(
-            "ai_video_clips [veo]: Edge Function returned 404. "
-            "Deploy veo-image-to-video first — see the video fix implementation brief."
-        )
-    if not resp.ok:
-        logger.error(
-            f"ai_video_clips [veo]: HTTP {resp.status_code}: {resp.text[:500]}"
-        )
-        return None
-
-    try:
-        data = resp.json()
-    except Exception:
-        logger.error(f"ai_video_clips [veo]: could not parse JSON: {resp.text[:200]}")
-        return None
-
-    if "error" in data:
-        logger.error(f"ai_video_clips [veo]: Veo error: {data['error']}")
-        return None
-
-    video_b64 = data.get("video_base64")
-    if not video_b64:
-        logger.error(
-            f"ai_video_clips [veo]: missing video_base64. Keys: {list(data.keys())}"
-        )
-        return None
-
-    try:
-        video_bytes = base64.b64decode(video_b64)
-    except Exception as e:
-        logger.error(f"ai_video_clips [veo]: failed to decode video_base64: {e}")
-        return None
-
-    logger.info(f"ai_video_clips [veo]: received {len(video_bytes):,} bytes")
-    return video_bytes
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for variant in variants:
+        cleaned = _sanitize_video_prompt(variant)
+        if len(cleaned) > 700:
+            cleaned = _trim_sentence(cleaned, 700)
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            deduped.append(cleaned)
+    return deduped
 
 
 def _write_automation_debug(path: Path, payload: dict[str, object]) -> None:
@@ -343,9 +410,9 @@ def generate_scene_video(
     debug_dir=None,
 ):
     """Provider abstraction for scene clip generation."""
-    provider_name = (str(provider or "falai").strip().lower() or "falai")
+    provider_name = normalize_ai_video_provider(provider)
     if provider_name == "auto":
-        provider_name = str(get_secret("HF_VIDEO_PROVIDER", "falai") or "falai").strip().lower() or "falai"
+        provider_name = normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "google_veo_lite"))
     output = Path(output_path)
 
     if provider_name == "falai":
@@ -404,244 +471,6 @@ def generate_scene_video(
     }
 
 
-# ---------------------------------------------------------------------------
-# Sora: moderation-safe prompt sanitization
-# ---------------------------------------------------------------------------
-
-# Pairs of (regex_pattern, replacement) applied when Sora blocks a prompt.
-# Primary target: real person names and phrases that trigger moderation.
-_SORA_SANITIZATIONS: list[tuple[str, str]] = [
-    # Real person name patterns — replace mid-sentence Title Case name pairs
-    # with generic historical descriptions.
-    (r'\b([A-Z][a-z]{1,12})\s+([A-Z][a-z]{1,12})\b', 'a historical figure'),
-    # Sensitive descriptors that can trigger moderation on people
-    (r'\bglamorous\b', 'distinguished'),
-    (r'\bseductive\b', 'compelling'),
-    (r'\bsensual\b', 'graceful'),
-    (r'\bnaked\b', 'unadorned'),
-    (r'\bnude\b', 'unadorned'),
-    # Violence / dark content
-    (r'\bkill(?:ing|ed|s)?\b', 'historical event'),
-    (r'\bmurder(?:ing|ed|s)?\b', 'historical event'),
-    (r'\bdeath\b', 'loss'),
-    (r'\bblood(?:y|ied)?\b', 'aftermath'),
-    (r'\bwar\b', 'conflict era'),
-    (r'\bbattle\b', 'historical confrontation'),
-    (r'\bweapon(?:s)?\b', 'period equipment'),
-    (r'\bgun(?:s|fire)?\b', 'period implement'),
-    (r'\bexplosion(?:s)?\b', 'dramatic event'),
-]
-
-
-def _sanitize_prompt_for_sora(prompt: str) -> str:
-    """Apply moderation-safe substitutions to a Sora prompt.
-
-    Called when a job returns ``moderation_blocked``.  Removes real person
-    names (Title Case pairs) and other known trigger phrases.
-
-    The name-detection pattern (first entry) is case-SENSITIVE so it only
-    matches actual Title Case names like "Hedy Lamarr", not lowercase phrases.
-    All other patterns are applied case-insensitively.
-    """
-    result = prompt
-    name_pattern, name_replacement = _SORA_SANITIZATIONS[0]
-    result = re.sub(name_pattern, name_replacement, result)  # case-sensitive
-    for pattern, replacement in _SORA_SANITIZATIONS[1:]:
-        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Sora: text-to-video using proven create_video() + poll_video() path
-# ---------------------------------------------------------------------------
-
-def _call_sora(
-    prompt: str,
-    aspect_ratio: str = "9:16",
-    duration_seconds: int = 5,
-    wlog: logging.Logger | None = None,
-) -> bytes | None:
-    """
-    Generate a video from a text prompt using OpenAI Sora via create_video().
-    Uses the same proven path as the manual Sora UI flow.
-    Returns raw MP4 bytes on success, None on non-fatal failure.
-    Raises RuntimeError on configuration errors (missing key, 401, 403).
-    """
-    _log = wlog or logger
-
-    if not sora_configured():
-        raise RuntimeError(
-            "ai_video_clips [sora]: OpenAI API key is not configured. "
-            "Set openai_api_key in .streamlit/secrets.toml."
-        )
-
-    # Snap to nearest supported Sora duration (4, 8, 12)
-    seconds = min([4, 8, 12], key=lambda x: abs(x - duration_seconds))
-    size = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
-
-    _log.info(
-        "ai_video_clips [sora]: submitting text-to-video job size=%s seconds=%d prompt_len=%d",
-        size, seconds, len(prompt),
-    )
-
-    try:
-        job = create_video(prompt, model="sora-2", seconds=seconds, size=size)
-    except (RuntimeError, PermissionError, ValueError) as exc:
-        raise RuntimeError(f"ai_video_clips [sora]: job creation failed — {exc}") from exc
-    except Exception as exc:  # noqa: BLE001
-        _log.error("ai_video_clips [sora]: unexpected error creating job — %s", exc)
-        return None
-
-    job_id = str(job.get("id") or "").strip()
-    if not job_id:
-        _log.error("ai_video_clips [sora]: no job ID in response: %s", str(job)[:300])
-        return None
-
-    _log.info("ai_video_clips [sora]: job submitted id=%s polling...", job_id)
-
-    try:
-        final_job = poll_video(job_id, timeout_s=_MAX_POLLS * _POLL_INTERVAL_S)
-    except TimeoutError:
-        _log.error("ai_video_clips [sora]: job %s timed out after %ds", job_id, _MAX_POLLS * _POLL_INTERVAL_S)
-        return None
-    except RuntimeError as exc:
-        err_str = str(exc)
-        if "moderation_blocked" in err_str:
-            # Sora blocked the prompt — sanitize and retry once
-            sanitized = _sanitize_prompt_for_sora(prompt)
-            if sanitized != prompt:
-                _log.warning(
-                    "ai_video_clips [sora]: moderation_blocked — retrying with sanitized prompt"
-                )
-                try:
-                    retry_job = create_video(sanitized, model="sora-2", seconds=seconds, size=size)
-                    retry_id = str(retry_job.get("id") or "").strip()
-                    if retry_id:
-                        _log.info("ai_video_clips [sora]: sanitized retry job id=%s", retry_id)
-                        retry_final = poll_video(retry_id, timeout_s=_MAX_POLLS * _POLL_INTERVAL_S)
-                        if str(retry_final.get("status", "")).lower() == "completed":
-                            video_bytes = get_video_content(retry_id)
-                            _log.info("ai_video_clips [sora]: sanitized retry succeeded bytes=%d", len(video_bytes))
-                            return video_bytes
-                except Exception as retry_exc:  # noqa: BLE001
-                    _log.error("ai_video_clips [sora]: sanitized retry failed — %s", retry_exc)
-            else:
-                _log.warning("ai_video_clips [sora]: moderation_blocked but sanitization had no effect")
-        else:
-            _log.error("ai_video_clips [sora]: job %s failed — %s", job_id, exc)
-        return None
-
-    status = str(final_job.get("status", "")).lower().strip()
-    if status != "completed":
-        _log.error("ai_video_clips [sora]: job %s ended with status=%s", job_id, status)
-        return None
-
-    _log.info("ai_video_clips [sora]: job %s complete, downloading...", job_id)
-
-    try:
-        video_bytes = get_video_content(job_id)
-    except Exception as exc:  # noqa: BLE001
-        _log.error("ai_video_clips [sora]: failed to download content for %s — %s", job_id, exc)
-        return None
-
-    _log.info("ai_video_clips [sora]: received %d bytes for job %s", len(video_bytes), job_id)
-    return video_bytes
-
-
-# ---------------------------------------------------------------------------
-# Sora: image-to-video with text-to-video fallback
-# ---------------------------------------------------------------------------
-
-def _call_sora_image_to_video(
-    image_path: Path,
-    prompt: str,
-    aspect_ratio: str = "9:16",
-    duration_seconds: int = 5,
-) -> bytes | None:
-    """
-    Attempt Sora image-to-video using input_reference.
-    Falls back to text-to-video if the image reference is rejected or fails.
-    Returns raw MP4 bytes on success, None on failure.
-    """
-    if not sora_configured():
-        raise RuntimeError(
-            "ai_video_clips [sora]: OpenAI API key is not configured."
-        )
-
-    supported = [4, 8, 12]
-    seconds = min(supported, key=lambda x: abs(x - duration_seconds))
-    size = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["16:9"])
-
-    # Try with image reference first
-    if image_path.exists():
-        logger.info(
-            f"ai_video_clips [sora]: attempting image-to-video with {image_path.name}"
-        )
-        image_bytes = image_path.read_bytes()
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        mime_type = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
-        image_data_url = f"data:{mime_type};base64,{image_b64}"
-
-        payload = {
-            "model": "sora-2",
-            "prompt": prompt.strip(),
-            "seconds": str(seconds),
-            "size": size,
-            "input_reference": image_data_url,
-        }
-
-        try:
-            resp = requests.post(
-                _SORA_CREATE_URL, json=payload, headers=_sora_headers(), timeout=60
-            )
-            if resp.ok:
-                job = resp.json()
-                job_id = str(job.get("id") or "").strip()
-                if job_id:
-                    logger.info(
-                        f"ai_video_clips [sora]: image-to-video job submitted — id={job_id}"
-                    )
-                    try:
-                        final_job = poll_video(
-                            job_id, timeout_s=_MAX_POLLS * _POLL_INTERVAL_S
-                        )
-                        if str(final_job.get("status", "")).lower() == "completed":
-                            video_bytes = get_video_content(job_id)
-                            logger.info(
-                                f"ai_video_clips [sora]: image-to-video succeeded "
-                                f"({len(video_bytes):,} bytes)"
-                            )
-                            return video_bytes
-                    except (TimeoutError, RuntimeError) as e:
-                        logger.warning(
-                            f"ai_video_clips [sora]: image-to-video job failed ({e}), "
-                            "falling back to text-to-video"
-                        )
-                else:
-                    logger.warning(
-                        "ai_video_clips [sora]: image-to-video returned no job ID, "
-                        "falling back to text-to-video"
-                    )
-            else:
-                logger.warning(
-                    f"ai_video_clips [sora]: image-to-video submit returned "
-                    f"HTTP {resp.status_code}, falling back to text-to-video"
-                )
-        except Exception as e:
-            logger.warning(
-                f"ai_video_clips [sora]: image-to-video attempt raised {e}, "
-                "falling back to text-to-video"
-            )
-    else:
-        logger.info(
-            f"ai_video_clips [sora]: image not found at {image_path}, "
-            "using text-to-video directly"
-        )
-
-    # Fallback: text-to-video
-    logger.info("ai_video_clips [sora]: running text-to-video fallback")
-    return _call_sora(prompt, aspect_ratio, duration_seconds)
-
 
 # ---------------------------------------------------------------------------
 # Orientation normalization
@@ -650,7 +479,7 @@ def _call_sora_image_to_video(
 def _normalize_clip_orientation(src: Path, width: int, height: int) -> None:
     """Re-encode clip in-place to exact dimensions, stripping rotation metadata.
 
-    Sora (and some other generators) occasionally embed a rotation tag that
+    Some generators occasionally embed a rotation tag that
     causes the clip to appear sideways when composited. ffmpeg auto-rotates on
     read by default, so applying scale+crop after decoding always produces the
     correct pixel layout. We strip all container metadata on write so the tag
@@ -658,7 +487,7 @@ def _normalize_clip_orientation(src: Path, width: int, height: int) -> None:
     """
     tmp = src.with_suffix(".norm.mp4")
     cmd = [
-        "ffmpeg", "-y",
+        resolve_ffmpeg_exe(), "-y",
         "-i", str(src),
         "-vf", (
             f"scale={width}:{height}:force_original_aspect_ratio=increase,"
@@ -675,7 +504,7 @@ def _normalize_clip_orientation(src: Path, width: int, height: int) -> None:
         tmp.replace(src)
     except subprocess.CalledProcessError as exc:
         logger.warning(
-            f"ai_video_clips: orientation normalization failed for {src.name} — "
+            f"ai_video_clips: orientation normalization failed for {src.name} â€” "
             f"{exc.stderr.decode(errors='replace')[-300:]}"
         )
         if tmp.exists():
@@ -695,7 +524,7 @@ def generate_ai_video_clips(
     tmp_dir: Path,
     aspect_ratio: str = "9:16",
     duration_seconds: int = 5,
-    provider: str = "falai",
+    provider: str = "google_veo_lite",
     workflow_logger=None,
     clip_done_callback=None,
 ) -> tuple:
@@ -706,8 +535,8 @@ def generate_ai_video_clips(
         project_id:       Active History Forge project ID.
         tmp_dir:          Directory to write output MP4 files.
         aspect_ratio:     "9:16", "16:9", or "1:1".
-        duration_seconds: Clip length (Sora snaps to 4/8/12; Veo uses as-is).
-        provider:         "veo" or "sora". Defaults to "veo".
+        duration_seconds: Clip length for image-to-video providers.
+        provider:         "google_veo_lite", "falai", or "auto".
 
     Returns:
         (opening_clip_path | None, mid_clip_path | None)
@@ -717,9 +546,9 @@ def generate_ai_video_clips(
                       not deployed. Surfaces to the automation UI.
         ValueError:   If an unknown provider is specified.
     """
-    provider = (provider or "falai").strip().lower()
+    provider = normalize_ai_video_provider(provider)
     if provider == "auto":
-        provider = str(get_secret("HF_VIDEO_PROVIDER", "falai") or "falai").strip().lower() or "falai"
+        provider = normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "google_veo_lite"))
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(
             f"ai_video_clips: unknown provider '{provider}'. "
@@ -731,11 +560,7 @@ def generate_ai_video_clips(
     images = _find_scene_images(project_id)
     prompts = _find_scene_prompts(project_id)
 
-    if not images and provider == "veo":
-        _wlog.warning("ai_video_clips [veo]: no scene images found for project %s, skipping", project_id)
-        return None, None, None, None
-
-    if not prompts and provider in ("sora", "falai", "google_veo_lite"):
+    if not prompts and provider in ("falai", "google_veo_lite"):
         _wlog.warning(
             "ai_video_clips [%s]: no scene prompts found for project %s, skipping",
             provider, project_id,
@@ -744,10 +569,10 @@ def generate_ai_video_clips(
 
     tmp_dir.mkdir(parents=True, exist_ok=True)
     _wlog.info("ai_video_clips project=%s provider=%s images=%d prompts=%d", project_id, provider, len(images), len(prompts))
-    size_str = _SORA_SIZE_MAP.get(aspect_ratio, _SORA_SIZE_MAP["9:16"])
+    size_str = {"16:9": "1280x720", "9:16": "720x1280", "1:1": "1080x1080"}.get(aspect_ratio, "720x1280")
     _clip_w, _clip_h = (int(v) for v in size_str.split("x"))
 
-    # Camera motion instruction per clip position — reinforces narrative pacing
+    # Camera motion instruction per clip position â€” reinforces narrative pacing
     # and gives each clip a distinct cinematic feel.
     _CLIP_CAMERA_MOTIONS = {
         "opening": "slow dramatic push-in establishing shot",
@@ -756,11 +581,58 @@ def generate_ai_video_clips(
         "q4":      "slow pull-out revealing shot",
     }
 
+    def _compact_prompt_text(value: object, limit: int = 260) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rsplit(" ", 1)[0].rstrip(" ,.;") + "..."
+
+    def _condense_style_guidance(value: object, limit: int = 8) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        items: list[str] = []
+        seen: set[str] = set()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("-"):
+                continue
+            bullet = stripped.lstrip("-").strip().strip(".")
+            if not bullet:
+                continue
+            lowered = bullet.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            items.append(bullet)
+            if len(items) >= limit:
+                break
+        return ", ".join(items[:limit])
+
+    def _trim_video_prompt(value: str) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        for marker in ("Global visual style control:", "Visual style guidance:"):
+            if marker in text:
+                text = text.split(marker, 1)[0].strip()
+        return text
+
+    def _neighbor_brief(idx: int) -> str:
+        if idx < 0 or idx >= len(prompts):
+            return ""
+        packed = prompts[idx] if isinstance(prompts[idx], dict) else {}
+        for key in ("scene_summary", "title", "script_excerpt", "image_prompt"):
+            value = _compact_prompt_text(packed.get(key, ""), limit=220)
+            if value:
+                return value
+        return ""
+
     def _get_prompt(idx: int, label: str = "") -> str:
         packed = prompts[idx] if idx < len(prompts) else {}
         raw_video = str(packed.get("video_prompt", "") or "").strip() if isinstance(packed, dict) else ""
         raw_image = str(packed.get("image_prompt", "") or "").strip() if isinstance(packed, dict) else str(packed or "").strip()
         negative = str(packed.get("negative_prompt", "") or "").strip() if isinstance(packed, dict) else ""
+        packed_spec = packed.get("prompt_spec", {}) if isinstance(packed, dict) else {}
+        packed_video_spec = packed.get("video_spec", {}) if isinstance(packed, dict) else {}
         # Build a rich visual context prefix from the enriched visual_context dict
         vc = packed.get("visual_context", {}) if isinstance(packed, dict) else {}
         vc_parts = []
@@ -776,29 +648,68 @@ def generate_ai_video_clips(
         vc_prefix = ", ".join(vc_parts) + ". " if vc_parts else ""
         # Per-clip camera motion appended to base prompt
         camera_motion = _CLIP_CAMERA_MOTIONS.get(label, "slow dolly-in with subtle lateral drift")
-        base = raw_video or _build_motion_prompt(raw_image) if raw_image else ""
+        opening = _compact_prompt_text(packed_video_spec.get("opening frame description", ""), limit=220)
+        subject_motion = _compact_prompt_text(packed_video_spec.get("subject motion", ""), limit=220)
+        ending = _compact_prompt_text(packed_video_spec.get("ending frame description", ""), limit=180)
+        uniqueness = _compact_prompt_text(packed_spec.get("scene_uniqueness_note", ""), limit=140)
+        keywords = ", ".join((packed_spec.get("anchor_keywords", []) or [])[:6]) if isinstance(packed_spec, dict) else ""
+        style_guidance = _condense_style_guidance(packed_spec.get("global_visual_style_control", ""), limit=8)
+
+        compact_base_parts = [
+            opening,
+            subject_motion,
+            f"Camera motion: {camera_motion}",
+            "Keep motion cinematic, subtle, and historically grounded.",
+            ending,
+        ]
+        if keywords:
+            compact_base_parts.append(f"Anchor keywords: {keywords}")
+        if uniqueness:
+            compact_base_parts.append(f"Distinct beat: {uniqueness}")
+        if style_guidance:
+            compact_base_parts.append(f"Style guidance: {style_guidance}")
+
+        compact_base = ". ".join(part.rstrip(". ") for part in compact_base_parts if part).strip()
+        raw_video_compact = _trim_video_prompt(raw_video)
+        raw_image_compact = _trim_video_prompt(raw_image)
+        base = compact_base or raw_video_compact or (_build_motion_prompt(raw_image_compact) if raw_image_compact else "")
+        neighbor_notes = []
+        previous_brief = _neighbor_brief(idx - 1)
+        next_brief = _neighbor_brief(idx + 1)
+        if previous_brief:
+            neighbor_notes.append(f"avoid repeating the previous still scene ({previous_brief})")
+        if next_brief:
+            neighbor_notes.append(f"avoid repeating the next still scene ({next_brief})")
+        differentiation = (
+            "Distinct clip direction: start from the reference frame, then move into a clearly different animated beat, "
+            "camera angle, depth, or subject action from the adjacent still images. "
+            + ("; ".join(neighbor_notes) + ". " if neighbor_notes else "")
+            + "End on a new composition, not a static duplicate of the neighboring scene."
+        )
         if base:
-            full = f"{vc_prefix}{base}. Camera: {camera_motion}.".strip()
-            return f"{full} Avoid: {negative}." if negative else full
+            full = f"{vc_prefix}{base}. Camera: {camera_motion}. {differentiation}".strip()
+            prompt_out = f"{full} Avoid: {negative}." if negative else full
+            return _trim_sentence(prompt_out, 900)
         return (
             f"{vc_prefix}Animate this historical scene with natural cinematic motion, "
-            f"dramatic documentary atmosphere, {camera_motion}."
-        ).strip()
+            f"dramatic documentary atmosphere, {camera_motion}. {differentiation}"
+        ).strip()[:900]
 
     def _get_image(idx: int) -> Optional[Path]:
         return images[idx] if idx < len(images) else None
 
     # Define clips at narrative story beats rather than equal math splits.
-    # Beat placement: opening (scene 1), rising action (~25%), climax (~65%),
-    # closing (last scene).  Using max(images, prompts) as the reference so
-    # text-to-video providers (Sora) use the prompt count, not the image count.
+    # Beat placement: opening (scene 1), rising action (~25%), midpoint (~50%),
+    # late payoff (~75%). Using max(images, prompts) as the reference so
+    # providers can still align clip placement when prompts and images differ.
     num_images = max(len(images), 1)
     _n = max(len(images), len(prompts), 1)
+    opening_idx, q2_idx, q3_idx, q4_idx = _clip_target_indexes(_n)
     clip_targets = [
-        ("opening", 0,                              0,                              "ai_clip_opening.mp4"),
-        ("q2",      max(1, round(_n * 0.25)),       max(1, round(_n * 0.25)),       "ai_clip_q2.mp4"),
-        ("q3",      max(2, round(_n * 0.65)),       max(2, round(_n * 0.65)),       "ai_clip_q3.mp4"),
-        ("q4",      _n - 1,                         _n - 1,                         "ai_clip_q4.mp4"),
+        ("opening", opening_idx, opening_idx, "ai_clip_opening.mp4"),
+        ("q2", q2_idx, q2_idx, "ai_clip_q2.mp4"),
+        ("q3", q3_idx, q3_idx, "ai_clip_q3.mp4"),
+        ("q4", q4_idx, q4_idx, "ai_clip_q4.mp4"),
     ]
 
     results = []
@@ -814,6 +725,13 @@ def generate_ai_video_clips(
     for label, img_idx, prompt_idx, out_name in clip_targets:
         image = _get_image(img_idx)
         prompt = _get_prompt(prompt_idx, label=label)
+        packed_prompt = prompts[prompt_idx] if prompt_idx < len(prompts) and isinstance(prompts[prompt_idx], dict) else {}
+        prompt_variants = _build_prompt_variants(
+            base_prompt=prompt,
+            label=label,
+            packed=packed_prompt,
+            aspect_ratio=aspect_ratio,
+        )
         out_path = tmp_dir / out_name
 
         _wlog.info(
@@ -827,35 +745,41 @@ def generate_ai_video_clips(
 
         reason = ""
         start = time.monotonic()
+        scene_result: dict[str, object] = {}
+        video_bytes = None
         try:
             if provider in ("falai", "google_veo_lite"):
-                scene_result = generate_scene_video(
-                    provider=provider,
-                    prompt=prompt,
-                    image_path=str(image) if image else "",
-                    aspect_ratio=aspect_ratio,
-                    duration_seconds=duration_seconds,
-                    output_path=str(out_path),
-                    debug_dir=Path("data/projects") / project_id / "debug",
-                )
-                ok = bool(scene_result.get("ok"))
-                reason = str(scene_result.get("error") or "")
-                video_bytes = out_path.read_bytes() if ok and out_path.exists() else None
-            elif provider == "veo":
-                if image is None:
-                    _wlog.warning("ai_video_clips [veo]: no image for %s clip, skipping", label)
-                    results.append(None)
-                    failures.append(label)
-                    manifest["clips"].append({"label": label, "status": "failed", "reason": "missing source image"})
-                    continue
-                video_bytes = _call_veo_image_to_video(
-                    image, prompt, aspect_ratio, duration_seconds
-                )
-            else:  # sora
-                video_bytes = _call_sora(prompt, aspect_ratio, duration_seconds, wlog=_wlog)
+                for attempt_idx, prompt_candidate in enumerate(prompt_variants, start=1):
+                    scene_result = generate_scene_video(
+                        provider=provider,
+                        prompt=prompt_candidate,
+                        image_path=str(image) if image else "",
+                        aspect_ratio=aspect_ratio,
+                        duration_seconds=duration_seconds,
+                        output_path=str(out_path),
+                        debug_dir=Path("data/projects") / project_id / "debug",
+                    )
+                    ok = bool(scene_result.get("ok"))
+                    reason = str(scene_result.get("error") or "")
+                    video_bytes = out_path.read_bytes() if ok and out_path.exists() else None
+                    if video_bytes:
+                        break
+                    if provider == "google_veo_lite" and attempt_idx < len(prompt_variants):
+                        _wlog.warning(
+                            "ai_video_clips retry provider=%s clip=%s attempt=%d/%d reason=%s prompt_len=%d",
+                            provider,
+                            label,
+                            attempt_idx,
+                            len(prompt_variants),
+                            reason or "empty response",
+                            len(prompt_candidate),
+                        )
+                        time.sleep(1.0)
+            else:
+                raise ValueError(f"ai_video_clips: provider '{provider}' is no longer supported.")
 
         except RuntimeError:
-            # Config / deployment error — re-raise so the pipeline surfaces it
+            # Config / deployment error â€” re-raise so the pipeline surfaces it
             raise
 
         elapsed = time.monotonic() - start
@@ -897,7 +821,7 @@ def generate_ai_video_clips(
         )
     if all(r is None for r in results):
         _wlog.error(
-            "ai_video_clips [%s]: ALL clips failed for project %s — check fal video response parsing, payload shape, async polling, or model compatibility",
+            "ai_video_clips [%s]: ALL clips failed for project %s â€” check fal video response parsing, payload shape, async polling, or model compatibility",
             provider, project_id,
         )
     _clip_manifest_path(project_id).write_text(json.dumps(manifest, indent=2), encoding="utf-8")

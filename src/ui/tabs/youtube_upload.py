@@ -5,10 +5,11 @@ from pathlib import Path
 import streamlit as st
 
 from src.config.secrets import get_secret
-from src.services.youtube_oauth import build_youtube_auth_url
+from src.services.youtube_oauth import build_youtube_auth_url, resolve_youtube_redirect_uri
 from src.services.youtube_upload import (
     YouTubeUploadError,
     exchange_code_for_token,
+    run_local_oauth_sign_in,
     upload_video,
     validate_youtube_credentials,
 )
@@ -29,13 +30,11 @@ def _default_thumbnail_path() -> Path:
 
 
 def _auth_status() -> tuple[bool, str]:
-    """Returns (is_valid, status_message)."""
     ok, msg = validate_youtube_credentials()
     return ok, msg
 
 
 def _load_youtube_defaults() -> dict:
-    """Load pre-generated YouTube metadata from the active project payload."""
     try:
         payload = load_project_payload(active_project_id())
     except Exception:  # noqa: BLE001
@@ -52,7 +51,10 @@ def _load_youtube_defaults() -> dict:
         description = f"{topic}\n\nSubscribe to History Crossroads for more 60-second history stories!"
     if not raw_tags and topic:
         raw_tags = [w.lower() for w in topic.split() if w.isalpha()] + [
-            "history", "shorts", "historycrossroads", "historyfacts"
+            "history",
+            "shorts",
+            "historycrossroads",
+            "historyfacts",
         ]
 
     tags_str = ", ".join(raw_tags) if isinstance(raw_tags, list) else str(raw_tags)
@@ -69,42 +71,35 @@ def tab_youtube_upload() -> None:
     client_secrets_file = get_secret("YOUTUBE_CLIENT_SECRETS_FILE", "client_secrets.json")
     token_file = get_secret("YOUTUBE_TOKEN_FILE", "token.json")
 
-    # ── Handle OAuth callback (Google redirects back with ?code=&state=) ──────
     query_params = st.query_params
     oauth_code = query_params.get("code")
     oauth_returned_state = query_params.get("state")
 
     if oauth_code:
         expected_state = st.session_state.get("youtube_oauth_state")
-        if not expected_state or oauth_returned_state != expected_state:
+        if expected_state and oauth_returned_state and oauth_returned_state != expected_state:
             st.error("OAuth state mismatch — please click 'Connect YouTube Account' and try again.")
-        else:
-            st.session_state["youtube_oauth_pending_code"] = oauth_code
-            st.session_state["youtube_oauth_redirect_uri"] = st.session_state.get(
-                "youtube_oauth_redirect_uri", ""
+            query_params.clear()
+            st.session_state.pop("youtube_oauth_state", None)
+            st.rerun()
+
+        try:
+            exchange_code_for_token(
+                oauth_code,
+                redirect_uri=resolve_youtube_redirect_uri(),
+                token_file=token_file or None,
             )
-        query_params.clear()
-        st.rerun()
+            query_params.clear()
+            st.session_state.pop("youtube_oauth_state", None)
+            st.success("YouTube account connected successfully.")
+            st.rerun()
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Token exchange failed: {exc}")
+            query_params.clear()
+            st.session_state.pop("youtube_oauth_state", None)
+            st.rerun()
 
-    # ── Auth Status ────────────────────────────────────────────────────────────
     is_authed, auth_msg = _auth_status()
-
-    if st.session_state.get("youtube_oauth_pending_code"):
-        st.warning("OAuth authorization received — click **Exchange Token** to complete authentication.")
-        if st.button("Exchange Token", type="primary"):
-            _pending_code = st.session_state.pop("youtube_oauth_pending_code", "")
-            _redirect_uri = st.session_state.pop("youtube_oauth_redirect_uri", "")
-            try:
-                exchange_code_for_token(
-                    _pending_code,
-                    redirect_uri=_redirect_uri,
-                    token_file=token_file or None,
-                )
-                st.success("YouTube account connected successfully.")
-                st.rerun()
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Token exchange failed: {exc}")
-        st.divider()
 
     if is_authed:
         st.success(f"Google account connected — {auth_msg}")
@@ -119,26 +114,30 @@ def tab_youtube_upload() -> None:
                 try:
                     auth_url, state = build_youtube_auth_url()
                     st.session_state["youtube_oauth_state"] = state
-                    # Store the redirect_uri so we can use it during token exchange
-                    try:
-                        import streamlit as _st
-                        _redirect_uri = str(_st.secrets["google_oauth"]["redirect_uri"])
-                    except Exception:  # noqa: BLE001
-                        _redirect_uri = ""
-                    st.session_state["youtube_oauth_redirect_uri"] = _redirect_uri
                     st.markdown(f"[Open Google authorization page]({auth_url})", unsafe_allow_html=False)
                     st.info("After approving, you will be redirected back to this page automatically.")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Could not build authorization URL: {exc}")
+            st.caption("If you're using the desktop app, the local desktop sign-in is usually more reliable.")
+            if st.button("Connect YouTube (Desktop)", key="youtube_upload_connect_desktop"):
+                try:
+                    st.info("A browser window should open for Google sign-in. After approval, Google will return to a localhost page and then back here.")
+                    with st.spinner("Opening local YouTube sign-in in your browser..."):
+                        token_path = run_local_oauth_sign_in(
+                            client_secrets_file=client_secrets_file or None,
+                            token_file=token_file or None,
+                        )
+                    st.success(f"YouTube desktop sign-in completed. Token saved to {token_path}.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Desktop YouTube sign-in failed: {exc}")
 
     st.divider()
 
-    # ── File Paths ─────────────────────────────────────────────────────────────
     default_video = _default_video_path()
     default_thumb = _default_thumbnail_path()
 
-    video_exists = default_video.exists()
-    if video_exists:
+    if default_video.exists():
         st.success(f"Video ready: `{default_video}`")
     else:
         st.info(f"No rendered video found yet at `{default_video}` — run the full workflow first.")
@@ -150,16 +149,13 @@ def tab_youtube_upload() -> None:
         thumbnail_path = st.text_input("Thumbnail path (optional)", value=str(default_thumb))
 
     st.divider()
-
-    # ── Video Metadata (auto-filled from workflow) ─────────────────────────────
     st.markdown("#### Video Metadata")
 
     defaults = _load_youtube_defaults()
 
     if st.button("Refresh metadata from project"):
-        # Clear any overrides so fresh defaults load
-        for k in ["yt_title_override", "yt_desc_override", "yt_tags_override"]:
-            st.session_state.pop(k, None)
+        for key in ["yt_title_override", "yt_desc_override", "yt_tags_override"]:
+            st.session_state.pop(key, None)
         st.rerun()
 
     title = st.text_input(
@@ -180,8 +176,6 @@ def tab_youtube_upload() -> None:
     )
 
     st.divider()
-
-    # ── Publish Settings ───────────────────────────────────────────────────────
     st.markdown("#### Publish Settings")
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -201,7 +195,6 @@ def tab_youtube_upload() -> None:
         placeholder="e.g. 2026-03-20T18:00:00Z — requires Privacy = private",
     )
 
-    # ── Upload ─────────────────────────────────────────────────────────────────
     st.divider()
     if not is_authed:
         st.warning("Connect your YouTube account above before uploading.")
@@ -237,13 +230,13 @@ def tab_youtube_upload() -> None:
             if result.thumbnail_response:
                 st.info("Thumbnail uploaded successfully.")
 
-            # Persist the upload result to the project payload
             try:
                 from src.workflow.project_io import load_project_payload, save_project_payload
-                _payload = load_project_payload(active_project_id())
-                _payload["youtube_video_id"] = result.video_id
-                _payload["youtube_url"] = f"https://www.youtube.com/watch?v={result.video_id}"
-                save_project_payload(active_project_id(), _payload)
+
+                payload = load_project_payload(active_project_id())
+                payload["youtube_video_id"] = result.video_id
+                payload["youtube_url"] = f"https://www.youtube.com/watch?v={result.video_id}"
+                save_project_payload(active_project_id(), payload)
             except Exception:  # noqa: BLE001
                 pass
 

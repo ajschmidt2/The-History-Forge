@@ -12,10 +12,27 @@ from uuid import uuid4
 
 import requests
 from PIL import Image
+import numpy as np
 
 from image_gen import generate_imagen_images, generate_scene_image_bytes
 from src.config import get_secret as config_get_secret
 from src.lib.openai_config import DEFAULT_OPENAI_MODEL, resolve_openai_config
+
+try:
+    from control.control_loader import (
+        load_output_format,
+        load_script_style,
+        load_visual_style,
+    )
+except Exception:  # noqa: BLE001 - controls are optional during early bootstrap
+    def load_script_style() -> str:
+        return ""
+
+    def load_visual_style() -> str:
+        return ""
+
+    def load_output_format() -> str:
+        return ""
 
 # ----------------------------
 # Secrets
@@ -45,6 +62,42 @@ def get_openai_text_model(default: str = DEFAULT_OPENAI_MODEL) -> str:
     cfg = resolve_openai_config(get_secret=_get_secret)
     model = cfg.model.strip() or default
     return model
+
+
+def _control_block(title: str, content: str) -> str:
+    content = (content or "").strip()
+    if not content:
+        return ""
+    return f"\n\n{title}\n{content}"
+
+
+def _control_keywords_block(title: str, content: str, limit: int = 10) -> str:
+    text = str(content or "").strip()
+    if not text:
+        return ""
+
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("-"):
+            continue
+        item = stripped.lstrip("-").strip().strip(".")
+        if not item:
+            continue
+        lowered = item.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        keywords.append(item)
+        if len(keywords) >= limit:
+            break
+
+    if not keywords:
+        compact = re.sub(r"\s+", " ", text)
+        return f" {title} {compact[:180].rstrip(' ,.;')}."
+
+    return f" {title} " + ", ".join(keywords[:limit]) + "."
 
 
 # ----------------------------
@@ -175,41 +228,6 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
     audience_clean = (audience or "General audience").strip() or "General audience"
     angle_clean = (angle or "Balanced overview").strip() or "Balanced overview"
 
-    client = _openai_client()
-    if client is None:
-        return (
-            f"# Research Brief: {topic}\n\n"
-            "## Key Facts\n"
-            "- [Missing openai_api_key] Add `openai_api_key` to generate AI research briefs.\n"
-            "- Placeholder fact set is shown to preserve output format.\n"
-            f"- Topic focus: {topic}.\n"
-            f"- Tone target: {tone_clean}.\n"
-            f"- Audience target: {audience_clean}.\n"
-            f"- Story angle: {angle_clean}.\n"
-            "- Verify names, dates, and primary-source claims before publishing.\n"
-            "- Confirm modern historian consensus where interpretations differ.\n"
-            "- Mark disputed casualty numbers and uncertain statistics.\n"
-            "- Avoid unsourced quotes in final script.\n\n"
-            "## Timeline\n"
-            "- c. [date] — Early context event relevant to the topic.\n"
-            "- c. [date] — Key turning point.\n"
-            "- c. [date] — Consequence or expansion phase.\n"
-            "- c. [date] — Major conflict or transition.\n"
-            "- c. [date] — Legacy milestone.\n\n"
-            "## Key People and Places\n"
-            "- People: [Person 1], [Person 2], [Person 3].\n"
-            "- Places: [Place 1], [Place 2], [Place 3].\n\n"
-            "## Suggested Angles\n"
-            "1. The hidden turning point and why it mattered.\n"
-            "2. The human story behind policy and power.\n"
-            "3. What modern audiences misunderstand about this topic.\n\n"
-            "## Risky Claims / Uncertain Areas\n"
-            "- Claims with missing primary-source citations.\n"
-            "- Conflicting date ranges across references.\n"
-            "- National narratives that may introduce bias.\n"
-            "- Attribution of motives stated as fact without documentation."
-        )
-
     system = (
         "You are a meticulous history research assistant for documentary scripting. "
         "Return concise, factual notes and flag uncertainty clearly."
@@ -237,21 +255,15 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
     )
 
     try:
-        resp = openai_chat_completion(client, 
-            model=get_openai_text_model(),
-            temperature=0.2,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
+        from src.ai.provider_router import get_router
+        return get_router().generate_text(user, task_type="script", system=system, temperature=0.2, quality="high")
     except Exception as exc:
         _reraise_api_errors(exc)
         exc_detail = f"{type(exc).__name__}: {exc}"
         return (
             f"# Research Brief: {topic}\n\n"
             "## Key Facts\n"
-            f"- [OpenAI request failed — {exc_detail}] Unable to generate research brief.\n"
+            f"- [AI request failed — {exc_detail}] Unable to generate research brief.\n"
             f"- Topic focus: {topic}.\n\n"
             "## Timeline\n"
             "- [Request failed — no timeline available]\n\n"
@@ -262,7 +274,6 @@ def generate_research_brief(topic: str, tone: str, length: str, audience: str, a
             "## Risky Claims / Uncertain Areas\n"
             "- [Request failed — verify all claims before publishing]"
         )
-    return resp.choices[0].message.content.strip()
 
 
 
@@ -411,9 +422,13 @@ def generate_script_from_outline(outline: dict[str, Any], tone: str, reading_lev
             f"CTA: {normalized_outline['cta']}"
         )
 
+    script_style_control = load_script_style()
+    output_format_control = load_output_format()
     system = (
         "You are a YouTube history scriptwriter. Convert an outline into a smooth, engaging narration. "
         "Use natural transitions between beats and preserve factual caution."
+        f"{_control_block('Global script style control:', script_style_control)}"
+        f"{_control_block('Global output format control:', output_format_control)}"
     )
     user = (
         f"Tone: {(tone or 'Documentary').strip()}\n"
@@ -484,10 +499,14 @@ def generate_script(
         "20–30 minutes": 3500,
     }.get(length, 1300)
 
+    script_style_control = load_script_style()
+    output_format_control = load_output_format()
     system = (
         "You are a YouTube history scriptwriter. Write engaging, accurate narration. "
         "Use a strong hook, clear storytelling, and natural pacing. Avoid stage directions. "
         "End with a quick call-to-action to subscribe."
+        f"{_control_block('Global script style control:', script_style_control)}"
+        f"{_control_block('Global output format control:', output_format_control)}"
     )
 
     brief_text = (research_brief or "").strip()
@@ -554,9 +573,14 @@ def generate_short_script(
         )
 
     direction_block = f"Direction/angle: {direction.strip()}\n" if (direction or "").strip() else ""
+    script_style_control = load_script_style()
+    output_format_control = load_output_format()
     system = (
         "You are a YouTube history short-form narration writer. "
-        "Write compelling, historically grounded scripts that sound natural when spoken aloud."
+        "Write compelling, historically grounded scripts that sound natural when spoken aloud. "
+        "Optimize for high retention, strong openings, and memorable endings without sounding like cheap clickbait."
+        f"{_control_block('Global script style control:', script_style_control)}"
+        f"{_control_block('Global output format control:', output_format_control)}"
     )
     user = (
         "Write a 60-second YouTube history narration script.\n"
@@ -565,9 +589,16 @@ def generate_short_script(
         f"Reading level: {(reading_level or 'General').strip()}\n"
         f"{direction_block}"
         "Requirements:\n"
-        "- About 130 to 170 spoken words.\n"
-        "- Strong hook in the first 1-2 lines.\n"
-        "- Clear middle progression.\n"
+        "- Target about 145 to 150 spoken words.\n"
+        "- Keep the final script between 140 and 155 spoken words.\n"
+        "- Aim for roughly 55 to 65 seconds when read aloud.\n"
+        "- The first line must create immediate intrigue, tension, surprise, or contradiction.\n"
+        "- Front-load the central stakes within the first 2 to 3 sentences.\n"
+        "- Every 1 to 2 sentences should introduce a reveal, escalation, consequence, or vivid historical turn.\n"
+        "- Build a clear story arc with setup, escalation, payoff, and a final resonant line.\n"
+        "- Make it feel highly engaging and shareable without sounding manipulative, cheesy, or clickbait.\n"
+        "- Avoid weak openings like 'Today we're looking at' or 'Let's talk about'.\n"
+        "- Avoid generic filler like 'history would never be the same' unless the script proves it.\n"
         "- Strong memorable closing line.\n"
         "- Concise, vivid, engaging language with short-form retention pacing.\n"
         "- No markdown, no bullets, no scene labels, no production notes, no visual instructions.\n"
@@ -1393,6 +1424,8 @@ _DEFAULT_NEGATIVE_CUES = [
     "no modern clothing",
     "no modern weapons",
     "no text overlays",
+    "no readable text, letters, words, or numbers",
+    "no captions, subtitles, logos, watermarks, or signage",
     "no duplicated limbs",
     "no floating objects",
     "no futuristic architecture unless explicitly requested",
@@ -1405,26 +1438,199 @@ _FORBIDDEN_GENERIC_PHRASES = (
     "cinematic historical moment",
 )
 
+_STRICT_IMAGE_CLEANLINESS_RULE = (
+    "Full-bleed edge-to-edge image only. No white bars, blank bands, borders, frames, letterboxing, title cards, "
+    "posters, captions, subtitles, floating words, labels, watermarks, logos, or any readable writing."
+)
+
+_SCENE_SUBJECT_STOPWORDS = {
+    "the", "and", "for", "with", "that", "from", "this", "were", "their", "they", "into", "while", "over",
+    "have", "has", "had", "about", "during", "after", "before", "when", "where", "what", "which", "would",
+    "could", "should", "through", "across", "between", "there", "these", "those", "his", "her", "its", "our",
+    "your", "than", "then", "them", "been", "being", "also", "still", "very", "more", "most", "many",
+    "year", "years", "moment", "moments", "story", "stories", "history", "historic", "empire", "empires",
+    "fate", "legacy", "resilience", "symbol", "turning", "point", "points", "victory", "grasp", "massive",
+    "formidable", "determine", "resourceful", "desperate", "bold", "across", "toward", "within", "throughout",
+    "bce", "ce", "bc", "ad", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "most", "many", "much", "some", "such", "like", "made", "make", "into", "yet", "his", "her", "their",
+    "path", "paths", "stakes", "effort", "journey", "crossing", "storybeat", "scene", "scenes", "narration",
+    "thing", "things", "way", "ways", "days", "night", "nights", "day", "years", "century", "centuries",
+}
+
+_ROLE_CANDIDATES = [
+    "engineer", "official", "soldier", "queen", "king", "scribe", "merchant", "artisan", "commander", "priest",
+    "worker", "guard", "scholar", "leader", "ruler", "general", "emperor", "consul", "governor", "captain",
+    "chief", "envoy", "messenger", "monk", "bishop", "navigator", "explorer", "warrior", "horseman",
+    "soldiers", "scouts",
+]
+
+_OBJECT_CANDIDATES = [
+    "elephants", "elephant", "army", "armies", "harbor", "ships", "ship", "chain", "aqueduct", "scrolls",
+    "seals", "fortress", "bridge", "roads", "road", "coin", "map", "torch", "candle", "sword", "spears",
+    "banner", "gate", "walls", "cliffs", "snowstorms", "snow", "mountains", "mountain", "alps", "river",
+]
+
+_GEOGRAPHY_CONTEXT_NOUNS = {
+    "plains", "plain", "mountains", "mountain", "valley", "coast", "coastline", "sea", "river", "harbor",
+    "pass", "cliff", "cliffs", "desert", "forest", "road", "roads", "city", "fortress",
+}
+
+_VISUAL_ACTION_VERBS = [
+    "crosses", "cross", "climbs", "climb", "marches", "march", "pushes", "push", "struggles", "struggle",
+    "studies", "study", "inspects", "inspect", "lights", "light", "blocks", "block", "hesitates", "hesitate",
+    "fights", "fight", "leads", "lead", "drives", "drive", "hauls", "haul", "descends", "descend",
+    "advances", "advance", "waits", "wait", "watches", "watch", "faces", "face", "presses", "press",
+    "emerges", "emerge", "reveals", "reveal", "crowds", "crowd", "gathers", "gather",
+]
+
 
 def _scene_anchor_keywords(text: str, limit: int = 8) -> list[str]:
     words = re.findall(r"[A-Za-z][A-Za-z\-']{2,}", text or "")
-    stop_words = {
-        "the", "and", "for", "with", "that", "from", "this", "were", "their", "they", "into", "while", "over",
-        "have", "has", "had", "about", "during", "after", "before", "when", "where", "what", "which", "would",
-        "could", "should", "through", "across", "between", "there", "these", "those", "his", "her", "its", "our",
-        "your", "than", "then", "them", "been", "being", "also", "still", "very", "more", "most", "many",
-    }
     ranked: list[str] = []
     seen: set[str] = set()
     for word in words:
         token = word.lower()
-        if token in stop_words or token in seen:
+        if token in _SCENE_SUBJECT_STOPWORDS or token in seen:
             continue
         seen.add(token)
         ranked.append(word)
         if len(ranked) >= limit:
             break
     return ranked
+
+
+def _extract_named_entities(text: str) -> list[str]:
+    if not text:
+        return []
+    matches = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b", text)
+    lower_text = text.lower()
+    entities: list[str] = []
+    seen: set[str] = set()
+    for match in matches:
+        cleaned = match.strip()
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        if all(part.lower() in _SCENE_SUBJECT_STOPWORDS for part in cleaned.split()):
+            continue
+        if " " not in cleaned:
+            if any(f"{lowered} {noun}" in lower_text for noun in _GEOGRAPHY_CONTEXT_NOUNS):
+                continue
+        seen.add(lowered)
+        entities.append(cleaned)
+    return entities
+
+
+def _extract_role_subject(text: str) -> str:
+    lower = (text or "").lower()
+    for role in _ROLE_CANDIDATES:
+        if re.search(rf"\b{re.escape(role)}\b", lower):
+            return role
+    return ""
+
+
+def _extract_object_subject(text: str) -> str:
+    lower = (text or "").lower()
+    for obj in _OBJECT_CANDIDATES:
+        if re.search(rf"\b{re.escape(obj)}\b", lower):
+            return obj
+    return ""
+
+
+def _select_secondary_subjects(excerpt: str, primary_subject: str, anchor_keywords: list[str]) -> list[str]:
+    lower_excerpt = (excerpt or "").lower()
+    primary_parts = {part.lower() for part in re.findall(r"[A-Za-z][A-Za-z\-']+", primary_subject or "")}
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    for obj in _OBJECT_CANDIDATES:
+        if re.search(rf"\b{re.escape(obj)}\b", lower_excerpt):
+            label = "war elephants" if obj in {"elephant", "elephants"} else obj
+            lowered = label.lower()
+            if lowered not in primary_parts and lowered not in seen:
+                seen.add(lowered)
+                selected.append(label)
+            if len(selected) >= 3:
+                return selected
+
+    for keyword in anchor_keywords:
+        lowered = keyword.lower()
+        if lowered in primary_parts or lowered in seen or lowered in _SCENE_SUBJECT_STOPWORDS:
+            continue
+        if lowered in _VISUAL_ACTION_VERBS:
+            continue
+        seen.add(lowered)
+        selected.append(keyword)
+        if len(selected) >= 3:
+            break
+    return selected
+
+
+def _extract_scene_action(excerpt: str, primary_subject: str, anchor_keywords: list[str]) -> str:
+    text = re.sub(r"\s+", " ", excerpt or "").strip()
+    lower = text.lower()
+    verb_matches = [
+        (match.start(), item)
+        for item in _VISUAL_ACTION_VERBS
+        for match in [re.search(rf"\b{re.escape(item)}\b", lower)]
+        if match
+    ]
+    verb = min(verb_matches, key=lambda item: item[0])[1] if verb_matches else ""
+    if not verb:
+        if any(k in lower for k in ("snow", "storm", "cold", "blizzard", "cliff")):
+            verb = "endures"
+        elif any(k in lower for k in ("harbor", "city", "fortress", "plain", "valley")):
+            verb = "stands within"
+        else:
+            verb = "moves through"
+
+    details = _select_secondary_subjects(excerpt, primary_subject, anchor_keywords)
+    priority_details: list[str] = []
+    if any(k in lower for k in ("snow", "storm", "cold", "blizzard")):
+        priority_details.append("snowstorm")
+    if any(k in lower for k in ("cliff", "mountain", "alps")):
+        priority_details.append("mountain pass")
+    if any(k in lower for k in ("elephant", "elephants")):
+        priority_details.append("war elephants")
+
+    merged_details: list[str] = []
+    for item in priority_details + details:
+        lowered = item.lower()
+        if lowered not in {existing.lower() for existing in merged_details}:
+            merged_details.append(item)
+    details = merged_details[:3]
+    if details:
+        return _clean_generic_phrases(f"{primary_subject} {verb} beside " + ", ".join(details))
+    return _clean_generic_phrases(f"{primary_subject} {verb} through the scene")
+
+
+def _select_primary_subject(scene: Scene, anchor_keywords: list[str]) -> str:
+    title_text = str(scene.title or "")
+    excerpt = str(scene.script_excerpt or "")
+    combined = f"{title_text} {excerpt}".strip()
+
+    named_entities = _extract_named_entities(excerpt)
+    if named_entities:
+        return named_entities[0]
+
+    role_subject = _extract_role_subject(excerpt) or _extract_role_subject(combined)
+    if role_subject:
+        return role_subject
+
+    object_subject = _extract_object_subject(excerpt) or _extract_object_subject(combined)
+    if object_subject:
+        return object_subject
+
+    title_entities = _extract_named_entities(title_text)
+    if any(" " in item for item in title_entities):
+        return title_entities[0]
+
+    for keyword in anchor_keywords:
+        cleaned = keyword.strip()
+        if cleaned and cleaned.lower() not in _SCENE_SUBJECT_STOPWORDS:
+            return cleaned
+
+    return _clean_generic_phrases(title_text) or "historical subject"
 
 
 def _classify_scene_intent(excerpt: str) -> str:
@@ -1442,6 +1648,49 @@ def _classify_scene_intent(excerpt: str) -> str:
     if any(k in text for k in ("he", "she", "leader", "official", "queen", "king", "commander")):
         return "character portrait"
     return "mystery/speculation reconstruction"
+
+
+def _scene_visual_profile(scene_index: int, intent: str) -> tuple[str, str]:
+    variants = [
+        (
+            "wide establishing shot, 24mm lens equivalent",
+            "strong depth, broad environmental read, foreground-midground-background layering, clear focal subject",
+        ),
+        (
+            "medium shot, eye-level, 35mm lens equivalent",
+            "clear subject hierarchy, leading lines toward the focal subject, readable action and surrounding context",
+        ),
+        (
+            "close detail shot, 50mm lens equivalent",
+            "tight focus on meaningful material detail, shallow depth around the subject, uncluttered frame",
+        ),
+        (
+            "low-angle dramatic medium-wide shot, 28mm lens equivalent",
+            "architectural scale, strong silhouette, diagonal energy, controlled negative space",
+        ),
+    ]
+    framing, composition = variants[(max(int(scene_index), 1) - 1) % len(variants)]
+    if intent == "location establishing shot":
+        return (
+            "wide establishing shot, 24mm lens equivalent",
+            "broad environmental read, layered depth, architecture or landscape scale emphasized, clear geographic context",
+        )
+    if intent == "object/detail shot":
+        return (
+            "close detail shot, 50mm lens equivalent",
+            "tight tactile focus, shallow depth of field, isolated key object, minimal clutter",
+        )
+    if intent == "action moment":
+        return (
+            "dynamic medium-wide shot, 32mm lens equivalent",
+            "directional motion, readable action path, layered depth, controlled chaos around the focal event",
+        )
+    if intent == "aftermath":
+        return (
+            "somber medium-wide shot, 35mm lens equivalent",
+            "clear focal aftermath details, environmental silence, layered debris or smoke, restrained composition",
+        )
+    return framing, composition
 
 
 def _infer_time_period(excerpt: str, title: str) -> tuple[str, str]:
@@ -1466,7 +1715,7 @@ def _infer_location(excerpt: str) -> str:
     phrases = re.findall(r"\b(?:in|at|near|inside)\s+([A-Z][A-Za-z\-]*(?:\s+[A-Z][A-Za-z\-]*){0,3})", excerpt or "")
     if phrases:
         return phrases[0]
-    return "location inferred from the narration context"
+    return ""
 
 
 def _clean_generic_phrases(text: str) -> str:
@@ -1511,18 +1760,9 @@ def _build_scene_prompt_spec(scene: Scene, continuity_ctx: dict[str, str]) -> di
     intent = _classify_scene_intent(excerpt)
     time_period, confidence = _infer_time_period(excerpt, scene.title)
     location = _infer_location(excerpt) or continuity_ctx.get("location_family", "")
-    lower_excerpt = excerpt.lower()
-    role_candidates = [
-        "engineer", "official", "soldier", "queen", "king", "scribe", "merchant", "artisan", "commander", "priest",
-        "worker", "guard", "scholar", "leader", "ruler",
-    ]
-    primary_subject = next((r for r in role_candidates if r in lower_excerpt), "")
-    if not primary_subject:
-        primary_subject = anchor_keywords[0] if anchor_keywords else (scene.title or "historical subject")
-    secondary_subjects = anchor_keywords[1:4]
-    visible_action = _clean_generic_phrases(
-        f"{primary_subject} {('and ' + ', '.join(secondary_subjects)) if secondary_subjects else ''} during {anchor_keywords[0] if anchor_keywords else 'the narrated event'}."
-    )
+    primary_subject = _select_primary_subject(scene, anchor_keywords)
+    secondary_subjects = _select_secondary_subjects(excerpt, primary_subject, anchor_keywords)
+    visible_action = _extract_scene_action(excerpt, primary_subject, anchor_keywords)
     one_sentence_summary = _clean_generic_phrases(
         f"{scene.title or 'Scene'} shows {visible_action} in {location} during {time_period}."
     )
@@ -1530,14 +1770,10 @@ def _build_scene_prompt_spec(scene: Scene, continuity_ctx: dict[str, str]) -> di
         f"Ground visuals in {time_period}; avoid modern props and use plausible regional materials tied to {location}."
     )
     wardrobe = continuity_ctx.get("costume_family", "") or "period-appropriate clothing, tools, and architecture matching the era"
-    composition = "clear subject hierarchy, leading lines toward the primary subject, foreground-midground-background depth"
-    if intent == "location establishing shot":
-        composition = "wide depth, horizon-led composition, architecture scale emphasized, small human figures for scale"
-    elif intent == "object/detail shot":
-        composition = "tight framing, texture emphasis, shallow depth of field around key object"
+    camera_framing, composition = _scene_visual_profile(scene.index, intent)
 
     cinematic_moment = _clean_generic_phrases(
-        f"{primary_subject} {('interacting with ' + secondary_subjects[0]) if secondary_subjects else 'at a decisive story beat'} in {location}"
+        f"{primary_subject} {('interacting with ' + secondary_subjects[0]) if secondary_subjects else 'at a decisive story beat'} in {location or 'the historical setting'}"
     )
     spec = {
         "scene_id": scene.scene_id or f"scene-{scene.index}",
@@ -1550,7 +1786,7 @@ def _build_scene_prompt_spec(scene: Scene, continuity_ctx: dict[str, str]) -> di
         "historical_context": historical_context,
         "visible_action": visible_action,
         "emotional_tone": "somber and investigative" if "aftermath" in intent else "focused documentary tension",
-        "camera_framing": "medium shot, eye-level, 35mm lens equivalent",
+        "camera_framing": camera_framing,
         "composition_notes": composition,
         "lighting": continuity_ctx.get("lighting_direction", "directional natural light with era-appropriate practical sources"),
         "important_objects": anchor_keywords[2:7],
@@ -1565,6 +1801,10 @@ def _build_scene_prompt_spec(scene: Scene, continuity_ctx: dict[str, str]) -> di
         "scene_intent": intent,
         "moment_selection": cinematic_moment,
         "anchor_keywords": anchor_keywords,
+        "scene_uniqueness_note": (
+            "Depict a clearly different story beat than the adjacent scenes. "
+            "Do not reuse the same composition, pose, or exact visual setup from neighboring moments."
+        ),
     }
     return spec
 
@@ -1573,6 +1813,11 @@ def _build_image_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> s
     _style = spec.get("visual_style", "") or style_phrase
     _palette = spec.get("color_palette", "")
     _palette_clause = f"Color palette: {_palette}. " if _palette else ""
+    _visual_control = _control_keywords_block(
+        "Visual style guidance:",
+        str(spec.get("global_visual_style_control", "") or ""),
+        limit=8,
+    )
     return _clean_generic_phrases(
         f"{_style}; {tone}. "
         f"Frozen moment: {spec.get('moment_selection', '')}. "
@@ -1586,8 +1831,9 @@ def _build_image_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> s
         f"{_palette_clause}"
         f"Historical grounding: {spec.get('historical_context', '')}; {spec.get('wardrobe_or_architecture_details', '')}. "
         f"Important objects: {', '.join(spec.get('important_objects', [])) or 'none'}. "
-        f"Script anchor keywords: {', '.join(spec.get('anchor_keywords', []))}. "
-        "Photoreal detail, subject priority, no text overlays."
+        f"Scene uniqueness: {spec.get('scene_uniqueness_note', '')}. "
+        "Photoreal detail, subject priority. Absolutely no readable text, letters, words, numerals, subtitles, captions, logos, watermarks, or signage anywhere in frame."
+        f"{_visual_control}"
     )
 
 
@@ -1628,7 +1874,9 @@ def _build_video_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> t
         f"{_palette_clause}"
         f"{opening}. {subject_motion}. {camera_motion}. {environment_motion}. {ending}. "
         f"Keep subject stable and temporally continuous from first second to last second. "
-        f"Script anchor keywords: {', '.join(spec.get('anchor_keywords', []))}."
+        f"Scene uniqueness: {spec.get('scene_uniqueness_note', '')}."
+        " Absolutely no readable text, letters, words, numerals, subtitles, captions, logos, watermarks, or signage anywhere in frame."
+        f"{_control_keywords_block('Visual style guidance:', str(spec.get('global_visual_style_control', '') or ''), limit=8)}"
     )
     return _clean_generic_phrases(prompt), video_spec
 
@@ -1702,6 +1950,8 @@ def generate_prompts_for_scenes(
     if not scenes:
         return scenes
     style_phrase = style.strip() or "Photorealistic cinematic"
+    visual_style_control = load_visual_style()
+    output_format_control = load_output_format()
 
     # Build subject consistency block from defined characters and objects
     valid_chars = [
@@ -1726,8 +1976,8 @@ def generate_prompts_for_scenes(
     consistency_block = "\n".join(consistency_lines)
 
     continuity_ctx: dict[str, str] = {
-        "location_family": "",
-        "costume_family": "",
+        "location_family": str((visual_context or {}).get("location", "") or ""),
+        "costume_family": str((visual_context or {}).get("clothing_style", "") or ""),
         "time_logic": "preserve neighboring scene chronology",
         "lighting_direction": "key light from frame-left",
     }
@@ -1760,11 +2010,19 @@ def generate_prompts_for_scenes(
 
     for s in scenes:
         spec = _build_scene_prompt_spec(s, continuity_ctx)
+        if visual_style_control:
+            spec["global_visual_style_control"] = visual_style_control
+        if output_format_control:
+            spec["global_output_format_control"] = output_format_control
         # Inject global visual context into spec fields so prompts carry era DNA
         if _vc:
             if _vc.get("time_period") and not str(spec.get("time_period", "")).strip():
                 spec["time_period"] = _vc["time_period"]
+            if _vc.get("time_period") and str(spec.get("time_period", "")).strip().startswith("historical period unspecified"):
+                spec["time_period"] = _vc["time_period"]
             if _vc.get("location") and not str(spec.get("setting/location", "")).strip():
+                spec["setting/location"] = _vc["location"]
+            if _vc.get("location") and str(spec.get("setting/location", "")).strip().startswith("location inferred"):
                 spec["setting/location"] = _vc["location"]
             if _vc.get("clothing_style"):
                 existing = str(spec.get("wardrobe_or_architecture_details", "") or "")
@@ -1779,9 +2037,12 @@ def generate_prompts_for_scenes(
                     else _vc["visual_atmosphere"]
                 )
             # Inject new enriched fields
-            if _vc.get("character_name") and not str(spec.get("primary_subject", "")).strip():
+            _scene_text = f"{getattr(s, 'title', '')} {getattr(s, 'script_excerpt', '')}".lower()
+            _character_tokens = [part for part in re.findall(r"[A-Za-z][A-Za-z\-']+", str(_vc.get("character_name", "") or "").lower()) if len(part) >= 3]
+            _mentions_global_character = bool(_character_tokens) and any(token in _scene_text for token in _character_tokens)
+            if _vc.get("character_name") and (not str(spec.get("primary_subject", "")).strip() or _mentions_global_character):
                 spec["primary_subject"] = _vc["character_name"]
-            if _vc.get("character_appearance"):
+            if _vc.get("character_appearance") and _mentions_global_character:
                 existing_wardrobe = str(spec.get("wardrobe_or_architecture_details", "") or "")
                 appearance_note = f"appearance: {_vc['character_appearance']}"
                 if appearance_note not in existing_wardrobe:
@@ -1833,8 +2094,11 @@ def generate_prompts_for_scenes(
         s.video_prompt_spec = video_spec
         s.prompt_scores = scores
 
-        continuity_ctx["location_family"] = str(spec.get("setting/location", "") or continuity_ctx["location_family"])
-        continuity_ctx["costume_family"] = str(spec.get("wardrobe_or_architecture_details", "") or continuity_ctx["costume_family"])
+        location_value = str(spec.get("setting/location", "") or "").strip()
+        if location_value and not location_value.startswith("location inferred"):
+            continuity_ctx["location_family"] = location_value
+        if not continuity_ctx["costume_family"]:
+            continuity_ctx["costume_family"] = str(spec.get("wardrobe_or_architecture_details", "") or "").strip()
 
     return scenes
 
@@ -1917,6 +2181,102 @@ def _crop_to_aspect(img: Image.Image, aspect_ratio: str) -> Image.Image:
         return img.crop((0, top, w, top + new_h))
 
 
+def _detect_white_edge_bands(img: Image.Image) -> str:
+    arr = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    if arr.ndim != 3 or arr.shape[0] < 40 or arr.shape[1] < 40:
+        return ""
+
+    gray = arr.mean(axis=2)
+    row_mean = gray.mean(axis=1)
+    row_std = gray.std(axis=1)
+    bright_frac = (gray >= 244).mean(axis=1)
+    min_band_rows = max(8, arr.shape[0] // 70)
+
+    def _band_height(indices: np.ndarray) -> int:
+        height = 0
+        for idx in indices:
+            if row_mean[idx] >= 242 and row_std[idx] <= 10 and bright_frac[idx] >= 0.97:
+                height += 1
+            else:
+                break
+        return height
+
+    top_height = _band_height(np.arange(arr.shape[0]))
+    bottom_height = _band_height(np.arange(arr.shape[0] - 1, -1, -1))
+
+    findings: list[str] = []
+    if top_height >= min_band_rows:
+        findings.append(f"top white band ({top_height}px)")
+    if bottom_height >= min_band_rows:
+        findings.append(f"bottom white band ({bottom_height}px)")
+    return ", ".join(findings)
+
+
+def _detect_text_like_overlay(img: Image.Image) -> str:
+    arr = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    if arr.ndim != 3 or arr.shape[0] < 80 or arr.shape[1] < 80:
+        return ""
+
+    gray = arr.mean(axis=2)
+    top = max(0, arr.shape[0] // 20)
+    bottom = min(arr.shape[0], arr.shape[0] - arr.shape[0] // 20)
+    left = max(0, arr.shape[1] // 20)
+    right = min(arr.shape[1], arr.shape[1] - arr.shape[1] // 20)
+    inner = gray[top:bottom, left:right]
+    if inner.size == 0:
+        return ""
+
+    bright = inner >= 232
+    row_fill = bright.mean(axis=1)
+    row_transitions = np.count_nonzero(bright[:, 1:] != bright[:, :-1], axis=1)
+    transition_floor = max(6, inner.shape[1] // 64)
+    candidate_rows = (row_fill >= 0.0025) & (row_fill <= 0.16) & (row_transitions >= transition_floor)
+
+    clusters: list[tuple[int, int]] = []
+    start: int | None = None
+    for idx, is_candidate in enumerate(candidate_rows):
+        if is_candidate and start is None:
+            start = idx
+        elif not is_candidate and start is not None:
+            clusters.append((start, idx))
+            start = None
+    if start is not None:
+        clusters.append((start, len(candidate_rows)))
+
+    qualifying = 0
+    min_height = max(3, inner.shape[0] // 160)
+    max_height = max(16, inner.shape[0] // 6)
+    for start, end in clusters:
+        height = end - start
+        if height < min_height or height > max_height:
+            continue
+        band = bright[start:end, :]
+        band_fill = float(band.mean())
+        if band_fill < 0.007 or band_fill > 0.24:
+            continue
+        col_fill = band.mean(axis=0)
+        active_cols = np.where(col_fill >= 0.08)[0]
+        if active_cols.size == 0:
+            continue
+        span_frac = float(active_cols[-1] - active_cols[0] + 1) / float(inner.shape[1])
+        if 0.05 <= span_frac <= 0.9:
+            qualifying += 1
+            if qualifying >= 1:
+                return "likely text overlay artifacts"
+    return ""
+
+
+def inspect_generated_image_artifacts(img: Image.Image) -> list[str]:
+    findings: list[str] = []
+    white_bands = _detect_white_edge_bands(img)
+    if white_bands:
+        findings.append(white_bands)
+    text_overlay = _detect_text_like_overlay(img)
+    if text_overlay:
+        findings.append(text_overlay)
+    return findings
+
+
 def _sleep_backoff(attempt: int) -> None:
     time.sleep(min(20.0, (2 ** attempt)) + random.random())
 
@@ -1987,6 +2347,9 @@ _SAFETY_SANITIZATIONS: list[tuple[str, str]] = [
     (r'\bholocaust\b', 'wartime tragedy'),
     (r'\bghetto(?:s)?\b', 'wartime district'),
     (r'\bgenoci(?:de|dal)\b', 'historical tragedy'),
+    (r'\bpersecut(?:ion|ed|ing|e)\b', 'social unrest'),
+    (r'\bscapegoat(?:s|ed|ing)?\b', 'public blame'),
+    (r'\bhatred\b', 'fear'),
     (r'\bprisoner(?:s)?\b', 'captive figure'),
     (r'\bprison(?:s|er)?\b', 'wartime facility'),
     (r'\bsuspicion\b', 'uncertainty'),
@@ -2003,26 +2366,84 @@ def _sanitize_prompt_for_safety(prompt: str) -> str:
     return result
 
 
+def _build_safe_fallback_image_prompt(
+    scene: Scene,
+    *,
+    aspect_ratio: str,
+    visual_style: str,
+    visual_context_block: str = "",
+) -> str:
+    spec = getattr(scene, "prompt_spec", {}) or {}
+    subject = _sanitize_prompt_for_safety(str(spec.get("primary_subject", "") or getattr(scene, "title", "") or "historical figure"))
+    setting = _sanitize_prompt_for_safety(str(spec.get("setting/location", "") or "historical setting"))
+    time_period = _sanitize_prompt_for_safety(str(spec.get("time_period", "") or "historical period"))
+    framing = str(spec.get("camera_framing", "") or "medium shot, eye-level")
+    composition = str(spec.get("composition_notes", "") or "clear focal subject with readable depth")
+    lighting = _sanitize_prompt_for_safety(str(spec.get("lighting", "") or "naturalistic dramatic light"))
+    wardrobe = _sanitize_prompt_for_safety(str(spec.get("wardrobe_or_architecture_details", "") or "period-accurate clothing and architecture"))
+    secondary = [
+        _sanitize_prompt_for_safety(item)
+        for item in list(spec.get("secondary_subjects", []) or [])[:3]
+        if str(item).strip()
+    ]
+    secondary_clause = f"Supporting elements: {', '.join(secondary)}. " if secondary else ""
+    context_prefix = f"{visual_context_block}" if visual_context_block else ""
+    return (
+        f"Style: {visual_style}. Historically grounded documentary realism.\n"
+        f"{context_prefix}"
+        "Create a safe, non-graphic historical scene with no visible injury, no gore, no explicit harm, "
+        "and no active communal harm. Focus on atmosphere, tension, architecture, clothing, and human presence.\n"
+        f"Primary subject: {subject}. "
+        f"{secondary_clause}"
+        f"Setting: {setting}, {time_period}. "
+        f"Camera framing: {framing}. Composition: {composition}. Lighting: {lighting}. "
+        f"Period details: {wardrobe}. "
+        f"Compose for {aspect_ratio}. No text, no captions, no logos, no modern objects."
+    ).strip()
+
+
+def _image_prompt_variants(
+    *,
+    scene: Scene,
+    base_prompt: str,
+    aspect_ratio: str,
+    visual_style: str,
+    visual_context_block: str,
+) -> list[str]:
+    fallback = _build_safe_fallback_image_prompt(
+        scene,
+        aspect_ratio=aspect_ratio,
+        visual_style=visual_style,
+        visual_context_block=visual_context_block,
+    )
+    return [
+        base_prompt,
+        f"{base_prompt}\n{_STRICT_IMAGE_CLEANLINESS_RULE}",
+        fallback,
+        f"{fallback}\n{_STRICT_IMAGE_CLEANLINESS_RULE}",
+    ]
+
+
 # ----------------------------
 # Image generation (one scene)
 # ----------------------------
 def generate_image_for_scene(
     scene: Scene,
-    aspect_ratio: str = "16:9",
+    aspect_ratio: str = "9:16",
     visual_style: str = "Photorealistic cinematic",
     visual_anchor: str = "",
-    provider: str = "falai",
+    provider: str = "gemini",
 ) -> Scene:
     base = (scene.image_prompt or "").strip()
     if not base:
         base = "Create a cinematic historical visual."
 
-    context = (
-        f"Visual intent: {scene.visual_intent}\n"
-        f"Scene excerpt: {scene.script_excerpt}"
-    ).strip()
-
     _anchor_line = f"Visual setting anchor: {visual_anchor}\n" if visual_anchor else ""
+    _global_visual_style = _control_keywords_block(
+        "Visual style guidance:",
+        load_visual_style(),
+        limit=8,
+    )
 
     # Build global visual context block from scene.visual_context (FIX 2)
     _vc = getattr(scene, "visual_context", None) or {}
@@ -2043,19 +2464,28 @@ def generate_image_for_scene(
         f"STRICT RULE: Absolutely no text, letters, words, numbers, captions, subtitles, watermarks, logos, "
         f"labels, signs with readable text, or writing of any kind anywhere in the image.\n"
         f"{base}\n\n"
-        f"{context}\n"
+        "Use the visual scene description only. Do not render any words or metadata from narration, titles, or prompt instructions into the image.\n"
         f"Compose for {aspect_ratio}. Painterly, consistent tonal palette matching the historical era. "
-        f"No text or writing of any kind."
+        f"No text or writing of any kind.\n"
+        f"{_STRICT_IMAGE_CLEANLINESS_RULE}"
+        f"{_global_visual_style}"
+    )
+    prompt_variants = _image_prompt_variants(
+        scene=scene,
+        base_prompt=prompt,
+        aspect_ratio=aspect_ratio,
+        visual_style=visual_style,
+        visual_context_block=_context_block,
     )
 
     png_bytes: Optional[bytes] = None
     last_error: Optional[str] = None
     scene.image_error = ""
 
-    for attempt in range(4):
+    for attempt, prompt_variant in enumerate(prompt_variants, start=1):
         try:
             raw_images = generate_scene_image_bytes(
-                prompt,
+                prompt_variant,
                 number_of_images=1,
                 aspect_ratio=aspect_ratio,
                 provider=provider,
@@ -2068,6 +2498,10 @@ def generate_image_for_scene(
 
             img = Image.open(BytesIO(raw)).convert("RGB")
             img = _crop_to_aspect(img, aspect_ratio)
+            artifact_findings = inspect_generated_image_artifacts(img)
+            if artifact_findings:
+                last_error = "Rejected generated image: " + "; ".join(artifact_findings)
+                continue
 
             out = BytesIO()
             img.save(out, format="PNG")
@@ -2090,8 +2524,8 @@ def generate_image_for_scene(
                 )
             else:
                 last_error = f"{type(e).__name__}: {e}"
-            print(f"[Imagen image gen failed] attempt={attempt+1} {last_error}")
-            if _is_retryable(e) and attempt < 3:
+            print(f"[Imagen image gen failed] attempt={attempt} {last_error}")
+            if _is_retryable(e) and attempt < len(prompt_variants):
                 _sleep_backoff(attempt)
                 continue
             break
@@ -2114,16 +2548,51 @@ def generate_image_for_scene(
                 if raw:
                     img = Image.open(BytesIO(raw)).convert("RGB")
                     img = _crop_to_aspect(img, aspect_ratio)
-                    out = BytesIO()
-                    img.save(out, format="PNG")
-                    png_bytes = out.getvalue()
-                    last_error = None
-                    scene.image_error = ""
-                    print(f"[Imagen] Safety-filter retry succeeded (scene {scene.index})")
+                    artifact_findings = inspect_generated_image_artifacts(img)
+                    if artifact_findings:
+                        last_error = "Rejected generated image: " + "; ".join(artifact_findings)
+                        print(f"[Imagen] Safety-filter retry rejected (scene {scene.index}): {last_error}")
+                    else:
+                        out = BytesIO()
+                        img.save(out, format="PNG")
+                        png_bytes = out.getvalue()
+                        last_error = None
+                        scene.image_error = ""
+                        print(f"[Imagen] Safety-filter retry succeeded (scene {scene.index})")
                 else:
                     print(f"[Imagen] Safety-filter retry also blocked (scene {scene.index})")
             except Exception as e:
                 print(f"[Imagen] Safety-filter retry failed (scene {scene.index}): {e}")
+
+    if not png_bytes and last_error and "safety-filtered" in last_error.lower():
+        fallback_prompt = _build_safe_fallback_image_prompt(
+            scene,
+            aspect_ratio=aspect_ratio,
+            visual_style=visual_style,
+            visual_context_block=_context_block,
+        )
+        print(f"[Imagen] Using safe fallback prompt (scene {scene.index})")
+        try:
+            raw_images = generate_scene_image_bytes(
+                fallback_prompt,
+                number_of_images=1,
+                aspect_ratio=aspect_ratio,
+                provider=provider,
+            )
+            raw = raw_images[0] if raw_images else None
+            if raw:
+                img = Image.open(BytesIO(raw)).convert("RGB")
+                img = _crop_to_aspect(img, aspect_ratio)
+                out = BytesIO()
+                img.save(out, format="PNG")
+                png_bytes = out.getvalue()
+                last_error = None
+                scene.image_error = ""
+                print(f"[Imagen] Safe fallback succeeded (scene {scene.index})")
+            else:
+                print(f"[Imagen] Safe fallback still blocked (scene {scene.index})")
+        except Exception as e:
+            print(f"[Imagen] Safe fallback failed (scene {scene.index}): {e}")
 
     if not png_bytes and last_error:
         print(f"[Imagen image gen final] FAILED: {last_error}")

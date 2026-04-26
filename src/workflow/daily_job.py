@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import sys
 import os
+import re
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from src.config import get_openai_config
 from src.config.secrets import get_secret
 from src.constants import SUPABASE_VIDEO_BUCKET
 from src.services.instagram_upload import instagram_configured as _ig_configured
@@ -20,6 +21,7 @@ from src.services.instagram_upload import upload_reel as _ig_upload_reel
 from src.services.tiktok_upload import tiktok_configured as _tt_configured
 from src.services.tiktok_upload import upload_video as _tt_upload_video
 from src.services.youtube_upload import upload_video as _yt_upload_video
+from src.services.youtube_upload import validate_youtube_credentials as _validate_yt_credentials
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.topics.daily_topics import generate_daily_topic, load_used_topics, save_used_topic
@@ -29,6 +31,18 @@ from src.workflow.services import FullWorkflowOptions, run_full_workflow
 
 RUN_HISTORY_PATH = Path("data/daily_run_history.json")
 DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
+DEFAULT_DAILY_TIMEZONE = "America/Indianapolis"
+DAILY_WEEKDAY_OPTIONS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+_DAY_TO_CRON = {
+    "mon": "MON",
+    "tue": "TUE",
+    "wed": "WED",
+    "thu": "THU",
+    "fri": "FRI",
+    "sat": "SAT",
+    "sun": "SUN",
+}
+_CRON_TO_DAY = {value: key for key, value in _DAY_TO_CRON.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -140,8 +154,149 @@ def _default_daily_automation_settings() -> dict[str, Any]:
         "topic_override": "",
         "topic_direction": "",
         "selected_music_track": "",
+        "publishing": {
+            "youtube_enabled": False,
+            "youtube_privacy_status": "private",
+            "instagram_enabled": True,
+        },
+        "schedule": {
+            "enabled": False,
+            "mode": "daily",
+            "days": list(DAILY_WEEKDAY_OPTIONS),
+            "hour_local": 7,
+            "timezone": DEFAULT_DAILY_TIMEZONE,
+        },
         "preset": DAILY_SHORT_PRESET.as_dict(),
     }
+
+
+def _normalize_daily_publishing(raw_publishing: dict[str, Any] | None) -> dict[str, Any]:
+    publishing = raw_publishing if isinstance(raw_publishing, dict) else {}
+    youtube_privacy_status = str(publishing.get("youtube_privacy_status", "private") or "private").strip().lower()
+    if youtube_privacy_status not in {"private", "unlisted", "public"}:
+        youtube_privacy_status = "private"
+    return {
+        "youtube_enabled": bool(publishing.get("youtube_enabled", False)),
+        "youtube_privacy_status": youtube_privacy_status,
+        "instagram_enabled": bool(publishing.get("instagram_enabled", True)),
+    }
+
+
+def _normalize_daily_schedule(raw_schedule: dict[str, Any] | None) -> dict[str, Any]:
+    schedule = raw_schedule if isinstance(raw_schedule, dict) else {}
+    enabled = bool(schedule.get("enabled", False))
+    mode = str(schedule.get("mode", "daily") or "daily").strip().lower()
+    if mode not in {"daily", "selected_days"}:
+        mode = "daily"
+
+    raw_days = schedule.get("days", DAILY_WEEKDAY_OPTIONS)
+    if isinstance(raw_days, (list, tuple)):
+        days = [str(day).strip().lower() for day in raw_days if str(day).strip().lower() in DAILY_WEEKDAY_OPTIONS]
+    else:
+        days = list(DAILY_WEEKDAY_OPTIONS)
+    if mode == "daily" or not days:
+        days = list(DAILY_WEEKDAY_OPTIONS)
+
+    try:
+        hour_local = int(schedule.get("hour_local", 7))
+    except (TypeError, ValueError):
+        hour_local = 7
+    hour_local = max(0, min(23, hour_local))
+
+    timezone_name = str(schedule.get("timezone", DEFAULT_DAILY_TIMEZONE) or DEFAULT_DAILY_TIMEZONE).strip()
+    try:
+        ZoneInfo(timezone_name)
+    except Exception:
+        timezone_name = DEFAULT_DAILY_TIMEZONE
+
+    return {
+        "enabled": enabled,
+        "mode": mode,
+        "days": days,
+        "hour_local": hour_local,
+        "timezone": timezone_name,
+    }
+
+
+def build_daily_workflow_cron(schedule: dict[str, Any], *, reference_dt: datetime | None = None) -> str:
+    normalized = _normalize_daily_schedule(schedule)
+    if not normalized["enabled"]:
+        return ""
+
+    tz = ZoneInfo(normalized["timezone"])
+    reference = reference_dt or datetime.now(tz)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=tz)
+    else:
+        reference = reference.astimezone(tz)
+    local_dt = reference.replace(hour=int(normalized["hour_local"]), minute=0, second=0, microsecond=0)
+    utc_dt = local_dt.astimezone(timezone.utc)
+    utc_hour = utc_dt.hour
+
+    days = normalized["days"]
+    if normalized["mode"] == "daily" or len(days) == 7:
+        return f"0 {utc_hour} * * *"
+    cron_days = ",".join(_DAY_TO_CRON[day] for day in days)
+    return f"0 {utc_hour} * * {cron_days}"
+
+
+def parse_daily_workflow_cron(cron_expr: str, *, timezone_name: str = DEFAULT_DAILY_TIMEZONE, reference_dt: datetime | None = None) -> dict[str, Any]:
+    normalized = _normalize_daily_schedule({"enabled": False, "timezone": timezone_name})
+    cron = str(cron_expr or "").strip()
+    if not cron:
+        return normalized
+
+    parts = cron.split()
+    if len(parts) != 5:
+        return normalized
+    minute, hour, _dom, _month, dow = parts
+    if minute != "0":
+        return normalized
+    try:
+        utc_hour = int(hour)
+    except ValueError:
+        return normalized
+    utc_hour = max(0, min(23, utc_hour))
+
+    tz = ZoneInfo(normalized["timezone"])
+    reference = reference_dt or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    else:
+        reference = reference.astimezone(timezone.utc)
+    local_dt = reference.replace(hour=utc_hour, minute=0, second=0, microsecond=0).astimezone(tz)
+    normalized["hour_local"] = int(local_dt.hour)
+    normalized["enabled"] = True
+
+    if dow == "*":
+        normalized["mode"] = "daily"
+        normalized["days"] = list(DAILY_WEEKDAY_OPTIONS)
+        return normalized
+
+    parsed_days: list[str] = []
+    for token in dow.split(","):
+        label = token.strip().upper()
+        if label in _CRON_TO_DAY:
+            parsed_days.append(_CRON_TO_DAY[label])
+            continue
+        if label.isdigit():
+            idx = int(label) % 7
+            parsed_days.append(DAILY_WEEKDAY_OPTIONS[(idx - 1) % 7] if idx != 0 else "sun")
+    parsed_days = [day for day in DAILY_WEEKDAY_OPTIONS if day in parsed_days]
+    normalized["mode"] = "selected_days"
+    normalized["days"] = parsed_days or ["mon"]
+    return normalized
+
+
+def update_daily_workflow_schedule(workflow_text: str, schedule: dict[str, Any], *, reference_dt: datetime | None = None) -> str:
+    cron = build_daily_workflow_cron(schedule, reference_dt=reference_dt)
+    schedule_block = ""
+    if cron:
+        schedule_block = f"  schedule:\n    - cron: '{cron}'\n"
+
+    workflow_dispatch_block = "  workflow_dispatch:\n"
+    on_block = f"on:\n{workflow_dispatch_block}{schedule_block}"
+    return re.sub(r"(?ms)^on:\n.*?(?=^\w)", on_block, workflow_text, count=1)
 
 
 def load_daily_automation_settings(path: Path = DAILY_AUTOMATION_SETTINGS_PATH) -> dict[str, Any]:
@@ -159,6 +314,8 @@ def load_daily_automation_settings(path: Path = DAILY_AUTOMATION_SETTINGS_PATH) 
         "topic_override": str(payload.get("topic_override", "") or "").strip(),
         "topic_direction": str(payload.get("topic_direction", "") or "").strip(),
         "selected_music_track": str(payload.get("selected_music_track", "") or "").strip(),
+        "publishing": _normalize_daily_publishing(payload.get("publishing") if isinstance(payload.get("publishing"), dict) else defaults.get("publishing")),
+        "schedule": _normalize_daily_schedule(payload.get("schedule") if isinstance(payload.get("schedule"), dict) else defaults.get("schedule")),
         "preset": {**DAILY_SHORT_PRESET.as_dict(), **preset_payload},
     }
 
@@ -170,6 +327,8 @@ def save_daily_automation_settings(settings: dict[str, Any], path: Path = DAILY_
             "topic_override": str(settings.get("topic_override", payload.get("topic_override", "")) or "").strip(),
             "topic_direction": str(settings.get("topic_direction", payload.get("topic_direction", "")) or "").strip(),
             "selected_music_track": str(settings.get("selected_music_track", payload.get("selected_music_track", "")) or "").strip(),
+            "publishing": _normalize_daily_publishing(settings.get("publishing") if isinstance(settings.get("publishing"), dict) else payload.get("publishing")),
+            "schedule": _normalize_daily_schedule(settings.get("schedule") if isinstance(settings.get("schedule"), dict) else payload.get("schedule")),
         }
     )
     preset_updates = settings.get("preset") if isinstance(settings.get("preset"), dict) else {}
@@ -244,54 +403,44 @@ def _append_run_history(entry: dict[str, Any], path: Path = RUN_HISTORY_PATH) ->
 
 
 def _resolve_default_music_track() -> str:
-    library = Path("data/music_library")
-    if not library.exists():
-        return ""
-    candidates = sorted([p for p in library.glob("*.*") if p.suffix.lower() in {".mp3", ".wav", ".m4a"}], key=lambda p: p.name.lower())
+    suffixes = {".mp3", ".wav", ".m4a"}
+    candidates: list[Path] = []
+
+    for library in (Path("data/music_library"), Path("data/music library")):
+        if library.exists():
+            candidates.extend(p for p in library.glob("*.*") if p.suffix.lower() in suffixes)
+
+    project_root = Path("data/projects")
+    if project_root.exists():
+        candidates.extend(p for p in project_root.glob("*/assets/music/*.*") if p.suffix.lower() in suffixes)
+
+    candidates = sorted([p for p in candidates if p.exists() and p.stat().st_size > 0], key=lambda p: str(p).lower())
     return str(candidates[0]) if candidates else ""
 
 
 def generate_daily_short_script(topic: str, preset: DailyShortPreset = DAILY_SHORT_PRESET, channel_name: str = "History Crossroads") -> str:
-    api_key, api_key_source = _get_openai_api_key()
-
-    model = "gpt-4o-mini"
-    try:
-        config = get_openai_config()
-        model = str(config.get("model") or model).strip()
-    except Exception:
-        pass
-
-    if not api_key:
-        has_openai_env = bool((os.environ.get("openai_api_key") or "").strip())
-        has_lower_alias = bool((os.environ.get("openai_api_key") or "").strip())
-        raise RuntimeError(
-            "Missing OpenAI API key for daily short script generation. "
-            f"Resolution source={api_key_source}. "
-            f"Env OPENAI_API_KEY present={has_openai_env}; openai_api_key present={has_lower_alias}. "
-            "If running in GitHub Actions, confirm repository secret OPENAI_API_KEY exists and is mapped to job env.OPENAI_API_KEY. "
-            "For local/Streamlit runs, set OPENAI_API_KEY (or openai_api_key) in .streamlit/secrets.toml."
-        )
-
-    from openai import OpenAI
+    from src.ai.provider_router import get_router
 
     prompt = (
         f"Write a voiceover-only script for this topic: {topic}. "
         f"Target about {preset.target_word_count} words and about {preset.target_duration_seconds} seconds when narrated. "
+        "Keep the final script between 140 and 155 spoken words unless the preset explicitly changes that target. "
+        "Aim to land close to one minute, not significantly over it. "
         "No markdown. No bullets. No scene labels. No visual notes. "
-        "Use a strong hook, concise storytelling, and high retention pacing. "
+        "The first line must create immediate intrigue, tension, surprise, or contradiction. "
+        "Front-load the central stakes within the first 2 to 3 sentences. "
+        "Every 1 to 2 sentences should introduce a reveal, escalation, consequence, or vivid historical turn. "
+        "Use concise storytelling and high retention pacing without sounding clickbait, cheesy, or manipulative. "
+        "Avoid weak openings like 'Today we're looking at' or 'Let's talk about'. "
         f"End with a clear call to action: {preset.last_scene_cta_text}"
     )
-
-    client = OpenAI(api_key=api_key)
-    resp = client.chat.completions.create(
-        model=model,
+    return get_router().generate_text(
+        prompt,
+        task_type="narration",
+        system="You write engaging, accurate short-form voiceover scripts for YouTube Shorts with strong hooks, clean escalation, and factual restraint.",
         temperature=0.7,
-        messages=[
-            {"role": "system", "content": "You write engaging, accurate short-form voiceover scripts for YouTube Shorts."},
-            {"role": "user", "content": prompt},
-        ],
+        quality="high",
     )
-    return str(resp.choices[0].message.content or "").strip()
 
 
 def _upload_final_to_generated_bucket(project_id: str, final_path: Path, run_date: date) -> dict[str, str]:
@@ -318,6 +467,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
 
     settings = load_daily_automation_settings(path=profile.automation_settings_path)
     preset = _resolve_daily_short_preset(settings, extra_overrides=profile.preset_overrides or {})
+    publishing = _normalize_daily_publishing(settings.get("publishing") if isinstance(settings.get("publishing"), dict) else None)
     used_topics = load_used_topics(path=profile.topics_used_path)
 
     topic_override = str(settings.get("topic_override", "") or "").strip()
@@ -328,8 +478,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     script_text = generate_daily_short_script(topic, preset, channel_name=profile.channel_name)
     music_track = str(settings.get("selected_music_track", "") or "").strip() or _resolve_default_music_track()
     if preset.music_enabled and not music_track:
-        print(f"WARNING: music_enabled=True but no music track found in data/music_library — running without music.", file=sys.stderr)
-        preset = replace(preset, music_enabled=False)
+        raise RuntimeError("Background music is enabled but no track was found. Add an mp3/wav/m4a to data/music_library or select a project music track.")
 
     ensure_project_files(project_id)
     upsert_project(project_id, f"{profile.channel_name} — {target_date.isoformat()}")
@@ -393,8 +542,10 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
             overwrite_prompts=True,
             overwrite_images=True,
             overwrite_voiceover=True,
+            overwrite_ai_video=True,
             overwrite_timeline=True,
             overwrite_render=True,
+            enable_ai_video=True,
             pipeline=pipeline,
         ),
     )
@@ -434,25 +585,36 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     youtube_url = ""
     _yt_client_secrets = Path(get_secret(profile.youtube_client_secrets_secret, profile.youtube_client_secrets_file)).expanduser()
     _yt_token = Path(get_secret(profile.youtube_token_file_secret, profile.youtube_token_file)).expanduser()
-    if _yt_client_secrets.exists() and _yt_token.exists():
+    if publishing["youtube_enabled"]:
         try:
-            _yt_hashtags = " ".join(profile.youtube_hashtags)
-            _yt_title = f"{topic} {_yt_hashtags}"[:100]
-            _yt_description = f"{topic}\n\n{profile.youtube_subscribe_cta}"
-            _yt_tags = [w.lower() for w in topic.split() if w.isalpha()] + profile.youtube_extra_tags
-            _yt_result = _yt_upload_video(
-                video_path=final_path,
-                title=_yt_title,
-                description=_yt_description,
-                tags=_yt_tags,
-                category_id=profile.youtube_category_id,
-                privacy_status="public",
+            _yt_ready, _yt_status = _validate_yt_credentials(
                 client_secrets_file=_yt_client_secrets,
                 token_file=_yt_token,
             )
-            youtube_video_id = _yt_result.video_id
-            youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
-            print(f"[Checkpoint 6] YouTube upload complete. video_id={youtube_video_id} url={youtube_url}", file=sys.stderr)
+            if _yt_ready:
+                _yt_hashtags = " ".join(profile.youtube_hashtags)
+                _yt_title = f"{topic} {_yt_hashtags}"[:100]
+                _yt_description = f"{topic}\n\n{profile.youtube_subscribe_cta}"
+                _yt_tags = [w.lower() for w in topic.split() if w.isalpha()] + profile.youtube_extra_tags
+                _yt_result = _yt_upload_video(
+                    video_path=final_path,
+                    title=_yt_title,
+                    description=_yt_description,
+                    tags=_yt_tags,
+                    category_id=profile.youtube_category_id,
+                    privacy_status=publishing["youtube_privacy_status"],
+                    client_secrets_file=_yt_client_secrets,
+                    token_file=_yt_token,
+                )
+                youtube_video_id = _yt_result.video_id
+                youtube_url = f"https://www.youtube.com/watch?v={youtube_video_id}"
+                print(
+                    f"[Checkpoint 6] YouTube upload complete. privacy={publishing['youtube_privacy_status']} "
+                    f"video_id={youtube_video_id} url={youtube_url}",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"[Checkpoint 6] YouTube upload skipped: {_yt_status}", file=sys.stderr)
         except Exception as exc:
             print(f"[Checkpoint 6] YouTube upload failed (non-fatal): {exc}", file=sys.stderr)
     else:
@@ -461,7 +623,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     # Checkpoint 7: Instagram upload (non-fatal; only for enabled channels with credentials)
     instagram_media_id = ""
     instagram_permalink = ""
-    if profile.instagram_enabled:
+    if profile.instagram_enabled and publishing.get("instagram_enabled", True):
         if _ig_configured():
             try:
                 # Refresh token first (resets 60-day expiry; non-fatal if META creds missing)
@@ -545,6 +707,9 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
         "music_track": music_track if preset.music_enabled else "",
         "music_relative_level": preset.music_relative_level,
         "scene_count": preset.scene_count,
+        "youtube_enabled": publishing["youtube_enabled"],
+        "youtube_privacy_status": publishing["youtube_privacy_status"],
+        "instagram_enabled": publishing["instagram_enabled"],
         "youtube_video_id": youtube_video_id,
         "youtube_url": youtube_url,
         "instagram_media_id": instagram_media_id,

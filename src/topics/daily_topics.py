@@ -7,7 +7,6 @@ import random
 from datetime import date
 from pathlib import Path
 
-from src.config import get_openai_config
 
 USED_TOPICS_PATH = Path("data/daily_topics_used.json")
 
@@ -56,38 +55,30 @@ def save_used_topic(topic: str, *, run_date: date | None = None, path: Path = US
     path.write_text(json.dumps(rows[-1000:], indent=2), encoding="utf-8")
 
 
-def _generate_topic_with_openai(topic_direction: str = "") -> str:
-    config = get_openai_config()
-    api_key = str(config.get("api_key") or "").strip()
-    model = str(config.get("model") or "gpt-4o-mini").strip()
-    if not api_key:
-        return ""
+def _generate_topic_with_ai(topic_direction: str = "") -> str:
+    direction_hint = str(topic_direction or "").strip()
+    direction_text = f" Focus direction: {direction_hint}." if direction_hint else ""
+    prompt = (
+        "Give one unique topic for a 60-second history short. "
+        "Prefer unsung heroes, bizarre moments, strange inventions, battlefield turning points, "
+        "forgotten figures, or ancient mysteries. "
+        "Return only the topic phrase in one line."
+        f"{direction_text}"
+    )
     try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key)
-        direction_hint = str(topic_direction or "").strip()
-        direction_text = f" Focus direction: {direction_hint}." if direction_hint else ""
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=0.8,
-            messages=[
-                {"role": "system", "content": "You generate short-form, high-retention history video topic ideas."},
-                {
-                    "role": "user",
-                    "content": (
-                        "Give one unique topic for a 60-second history short. "
-                        "Prefer unsung heroes, bizarre moments, strange inventions, battlefield turning points, "
-                        "forgotten figures, or ancient mysteries. "
-                        "Return only the topic phrase in one line."
-                        f"{direction_text}"
-                    ),
-                },
-            ],
+        from src.ai.provider_router import get_router
+        return get_router().generate_text(
+            prompt,
+            task_type="topic",
+            system="You generate short-form, high-retention history video topic ideas.",
         )
-        return str(resp.choices[0].message.content or "").strip()
     except Exception:
         return ""
+
+
+def _generate_topic_with_openai(topic_direction: str = "") -> str:
+    """Backward-compatible hook for tests and scheduler integrations."""
+    return _generate_topic_with_ai(topic_direction=topic_direction)
 
 
 def generate_daily_topic(*, used_topics: set[str] | None = None, topic_direction: str = "") -> str:

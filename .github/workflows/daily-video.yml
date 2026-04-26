@@ -2,7 +2,8 @@ name: generate-daily-video
 
 on:
   workflow_dispatch:
-
+  schedule:
+    - cron: '0 11 * * MON,WED,SAT'
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -15,6 +16,13 @@ jobs:
       GOOGLE_AI_STUDIO_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      META_APP_ID: ${{ secrets.META_APP_ID }}
+      META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+      INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
+      INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+      YOUTUBE_CLIENT_SECRETS_FILE: client_secrets.json
+      YOUTUBE_TOKEN_FILE: token.json
 
     steps:
       - name: Checkout
@@ -53,6 +61,42 @@ jobs:
             missing=1
           fi
 
+          if [ -n "${{ secrets.YOUTUBE_CLIENT_SECRETS_JSON }}" ]; then
+            echo "YOUTUBE_CLIENT_SECRETS_JSON detected"
+          else
+            echo "YOUTUBE_CLIENT_SECRETS_JSON missing"
+          fi
+
+          if [ -n "${{ secrets.YOUTUBE_TOKEN_JSON }}" ]; then
+            echo "YOUTUBE_TOKEN_JSON detected"
+          else
+            echo "YOUTUBE_TOKEN_JSON missing"
+          fi
+
+          if [ -n "$META_APP_ID" ]; then
+            echo "META_APP_ID detected"
+          else
+            echo "META_APP_ID missing"
+          fi
+
+          if [ -n "$META_APP_SECRET" ]; then
+            echo "META_APP_SECRET detected"
+          else
+            echo "META_APP_SECRET missing"
+          fi
+
+          if [ -n "$INSTAGRAM_USER_ID" ]; then
+            echo "INSTAGRAM_USER_ID detected"
+          else
+            echo "INSTAGRAM_USER_ID missing"
+          fi
+
+          if [ -n "$INSTAGRAM_ACCESS_TOKEN" ]; then
+            echo "INSTAGRAM_ACCESS_TOKEN detected"
+          else
+            echo "INSTAGRAM_ACCESS_TOKEN missing"
+          fi
+
           if [ "$missing" -ne 0 ]; then
             echo "One or more required secrets are missing."
             exit 1
@@ -78,6 +122,48 @@ jobs:
             echo "openai_api_key missing"
           fi
 
+      - name: Write YouTube credential files
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.YOUTUBE_CLIENT_SECRETS_JSON }}" ]; then
+            cat > client_secrets.json <<'EOF'
+${{ secrets.YOUTUBE_CLIENT_SECRETS_JSON }}
+EOF
+            echo "client_secrets.json written"
+          else
+            echo "Skipping client_secrets.json write; secret not configured"
+          fi
+
+          if [ -n "${{ secrets.YOUTUBE_TOKEN_JSON }}" ]; then
+            cat > token.json <<'EOF'
+${{ secrets.YOUTUBE_TOKEN_JSON }}
+EOF
+            echo "token.json written"
+          else
+            echo "Skipping token.json write; secret not configured"
+          fi
+
+      - name: Verify social posting config
+        shell: bash
+        run: |
+          if [ -f client_secrets.json ]; then
+            echo "YouTube client secrets file present"
+          else
+            echo "YouTube client secrets file absent"
+          fi
+
+          if [ -f token.json ]; then
+            echo "YouTube token file present"
+          else
+            echo "YouTube token file absent"
+          fi
+
+          if [ -n "$INSTAGRAM_USER_ID" ] && [ -n "$INSTAGRAM_ACCESS_TOKEN" ]; then
+            echo "Instagram posting env vars present"
+          else
+            echo "Instagram posting env vars absent"
+          fi
+
       - name: Run daily video job
         env:
           HIST_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -85,4 +171,11 @@ jobs:
           GOOGLE_AI_STUDIO_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+          INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          YOUTUBE_CLIENT_SECRETS_FILE: client_secrets.json
+          YOUTUBE_TOKEN_FILE: token.json
         run: python -m src.workflow.daily_job

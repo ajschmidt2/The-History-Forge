@@ -11,7 +11,7 @@ Buckets expected in Supabase Storage
   history-forge-images   — generated scene images
   history-forge-audio    — voiceover / music files
   history-forge-videos   — rendered video exports
-  SUPABASE_VIDEO_BUCKET  — AI-generated videos (Veo / Sora)
+  SUPABASE_VIDEO_BUCKET  — AI-generated videos (Gemini/Veo or fal.ai)
 
 Tables expected in Supabase Database
 --------------------------------------
@@ -558,7 +558,7 @@ def pull_project_assets(project_id: str, project_dir: Path) -> dict[str, int]:
             except OSError:
                 continue
 
-    return results
+    return {key: value for key, value in results.items() if key in {"image", "audio", "video"} or value}
 
 
 def list_all_bucket_videos(bucket: str = SUPABASE_VIDEO_BUCKET, limit: int = 100) -> list[dict[str, str]]:
