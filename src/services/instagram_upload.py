@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -37,7 +38,8 @@ from typing import Any
 
 import requests
 
-from src.config.secrets import get_secret
+from src.config.secrets import get_secret, safe_secret, safe_str
+from src.video.utils import resolve_ffmpeg_exe
 
 log = logging.getLogger(__name__)
 
@@ -68,17 +70,20 @@ class InstagramUploadResult:
 # ---------------------------------------------------------------------------
 
 def _get_user_id() -> str:
-    return (
-        get_secret("INSTAGRAM_USER_ID")
-        or get_secret("instagram_user_id")
-    ).strip()
+    user_id = safe_secret("INSTAGRAM_USER_ID", "instagram_user_id", default="")
+    log.debug(
+        "instagram: resolved user id (exists=%s, length=%d)",
+        bool(user_id),
+        len(user_id),
+    )
+    return user_id
 
 
 def _load_cached_token() -> str:
     """Return a previously refreshed token if it hasn't expired yet."""
     try:
         data = json.loads(_TOKEN_CACHE_PATH.read_text())
-        token = str(data.get("access_token", "")).strip()
+        token = safe_str(data.get("access_token", ""))
         expires_at = datetime.fromisoformat(data.get("expires_at", ""))
         if token and expires_at > datetime.now(timezone.utc):
             return token
@@ -98,16 +103,38 @@ def save_cached_token(token: str, expires_in: int) -> None:
 def _get_access_token() -> str:
     cached = _load_cached_token()
     if cached:
+        log.debug(
+            "instagram: using cached access token (exists=%s, length=%d)",
+            True,
+            len(cached),
+        )
         return cached
-    return (
-        get_secret("INSTAGRAM_ACCESS_TOKEN")
-        or get_secret("instagram_access_token")
-    ).strip()
+    token = safe_secret("INSTAGRAM_ACCESS_TOKEN", "instagram_access_token", default="")
+    log.debug(
+        "instagram: resolved access token (exists=%s, length=%d)",
+        bool(token),
+        len(token),
+    )
+    return token
 
 
 def instagram_configured() -> bool:
     """Return True if Instagram credentials are present in secrets."""
-    return bool(_get_user_id() and _get_access_token())
+    try:
+        user_id = _get_user_id()
+        token = _get_access_token()
+        log.debug(
+            "instagram: configured check INSTAGRAM_USER_ID exists=%s len=%d; "
+            "INSTAGRAM_ACCESS_TOKEN exists=%s len=%d",
+            bool(user_id),
+            len(user_id),
+            bool(token),
+            len(token),
+        )
+        return bool(user_id and token)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("instagram: configuration check failed: %s", exc)
+        return False
 
 
 def validate_instagram_credentials() -> tuple[bool, str]:
@@ -125,17 +152,53 @@ def validate_instagram_credentials() -> tuple[bool, str]:
         )
 
     try:
-        resp = requests.get(
+        token_resp = requests.get(
             f"{GRAPH_BASE}/me",
             params={"fields": "id", "access_token": token},
             timeout=15,
         )
-        data = resp.json()
-        if not resp.ok or "error" in data:
-            err = data.get("error", {}).get("message", resp.text[:200])
+        token_data = token_resp.json()
+        if not token_resp.ok or "error" in token_data:
+            err = token_data.get("error", {}).get("message", token_resp.text[:200])
             return False, f"Instagram token validation failed: {err}"
 
-        return True, "Connected as @the_history_crossroads"
+        user_resp = requests.get(
+            f"{GRAPH_BASE}/{user_id}",
+            params={"fields": "id", "access_token": token},
+            timeout=15,
+        )
+        user_data = user_resp.json()
+        if not user_resp.ok or "error" in user_data:
+            return (
+                False,
+                "Instagram token is valid, but INSTAGRAM_USER_ID is not a publishable Instagram account ID. "
+                "Use the Instagram business account ID that can open the /media edge.",
+            )
+
+        media_resp = requests.get(
+            f"{GRAPH_BASE}/{user_id}/media",
+            params={"access_token": token},
+            timeout=15,
+        )
+        media_data = media_resp.json()
+        if media_resp.ok and "error" not in media_data and isinstance(media_data.get("data"), list):
+            return True, "Instagram token and publish target are configured."
+
+        accounts_resp = requests.get(
+            f"{GRAPH_BASE}/me/accounts",
+            params={"access_token": token},
+            timeout=15,
+        )
+        accounts_data = accounts_resp.json()
+        if accounts_resp.ok and isinstance(accounts_data.get("data"), list) and not accounts_data.get("data"):
+            return (
+                False,
+                "Instagram token is valid, but it does not currently expose any Facebook Pages and the media edge "
+                "check did not confirm the publish target.",
+            )
+
+        err = media_data.get("error", {}).get("message", media_resp.text[:200]) if isinstance(media_data, dict) else media_resp.text[:200]
+        return False, f"Instagram publish target validation failed: {err}"
     except Exception as exc:  # noqa: BLE001
         return False, f"Instagram validation error: {exc}"
 
@@ -183,6 +246,71 @@ def refresh_access_token(
 # ---------------------------------------------------------------------------
 # Public URL resolution
 # ---------------------------------------------------------------------------
+
+
+def _prepare_instagram_reel_video(
+    video_path: str | Path,
+    *,
+    project_id: str | None = None,
+) -> Path:
+    """Re-encode the source video to a conservative Instagram-safe MP4."""
+    source_path = Path(video_path).expanduser()
+    if not source_path.exists():
+        raise InstagramUploadError(f"Video file not found: {source_path}")
+
+    try:
+        ffmpeg_exe = resolve_ffmpeg_exe()
+    except Exception as exc:  # noqa: BLE001
+        raise InstagramUploadError(f"FFmpeg is required to prepare Instagram uploads: {exc}") from exc
+
+    temp_root = Path("data") / "instagram_uploads"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    slug = project_id or source_path.stem
+    prepared_path = temp_root / f"{slug}_instagram_safe.mp4"
+    tmp_output = prepared_path.with_name(f"{prepared_path.stem}_tmp.mp4")
+    if tmp_output.exists():
+        tmp_output.unlink()
+
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i",
+        str(source_path),
+        "-vf",
+        "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=30,format=yuv420p",
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "main",
+        "-level:v",
+        "4.0",
+        "-preset",
+        "medium",
+        "-crf",
+        "22",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+        str(tmp_output),
+    ]
+    log.info("instagram: preparing upload-safe reel from %s", source_path)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0 or not tmp_output.exists():
+        detail = (result.stderr or result.stdout or "").strip()[:500]
+        raise InstagramUploadError(f"Failed to prepare Instagram-safe video: {detail}")
+    if prepared_path.exists():
+        prepared_path.unlink()
+    tmp_output.replace(prepared_path)
+    return prepared_path
 
 def _ensure_public_url(
     video_path: str | Path,
@@ -287,8 +415,9 @@ def upload_reel(
     user_id = _get_user_id()
     token = _get_access_token()
 
-    # Step 1 — Resolve public URL
-    video_url = _ensure_public_url(video_path, project_id=project_id, payload=payload)
+    # Step 1 — Normalize to a conservative Instagram-safe MP4, then upload it
+    prepared_video_path = _prepare_instagram_reel_video(video_path, project_id=project_id)
+    video_url = _ensure_public_url(prepared_video_path, project_id=project_id, payload=None)
 
     # Step 2 — Create media container
     log.info("instagram: creating Reel container for user %s", user_id)

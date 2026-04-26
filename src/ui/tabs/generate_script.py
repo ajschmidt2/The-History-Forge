@@ -70,6 +70,8 @@ def _extract_narration_from_structured_script(text: str) -> str:
     """
     if not re.search(r"(?im)^NARRATION:", text):
         return text
+    if not re.search(r"(?im)^(?:SCENE\s+\d+\b|END\s+SCENE\s+\d+\b|VISUAL INTENT:|---SCENE_BREAK---)", text):
+        return text
 
     parts: list[str] = []
     current: list[str] = []

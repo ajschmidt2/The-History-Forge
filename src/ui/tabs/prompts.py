@@ -173,3 +173,21 @@ def tab_create_prompts() -> None:
             height=110,
             key=f"prompt_{s.index}",
         )
+        s.video_prompt = st.text_area(
+            f"{s.index:02d} — {s.title} video prompt",
+            value=str(getattr(s, "video_prompt", "") or ""),
+            height=120,
+            key=f"video_prompt_{s.index}",
+        )
+
+        with st.expander(f"Developer prompt debug — Scene {s.index:02d}", expanded=False):
+            st.markdown("**Script excerpt**")
+            st.code(str(getattr(s, "script_excerpt", "") or ""), language="text")
+            st.markdown("**Generated prompt spec**")
+            st.json(getattr(s, "prompt_spec", {}) or {})
+            st.markdown("**Final image prompt**")
+            st.code(str(getattr(s, "image_prompt", "") or ""), language="text")
+            st.markdown("**Final video prompt**")
+            st.code(str(getattr(s, "video_prompt", "") or ""), language="text")
+            st.markdown("**Relevance scores**")
+            st.json(getattr(s, "prompt_scores", {}) or {})

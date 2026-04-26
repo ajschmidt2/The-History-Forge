@@ -56,3 +56,10 @@ def test_get_secret_reads_non_mapping_streamlit_secret_container(monkeypatch):
     )
 
     assert config.get_secret("PIXABAY_API_KEY") == "pixabay-from-secret-node"
+
+
+def test_get_secret_falls_back_to_env_when_streamlit_secrets_unavailable(monkeypatch):
+    monkeypatch.setattr(secrets, "_safe_streamlit_secrets", lambda: (_ for _ in ()).throw(RuntimeError("no runtime")))
+    monkeypatch.setenv("YOUTUBE_API_KEY", "youtube-env-key")
+
+    assert config.get_secret("YOUTUBE_API_KEY") == "youtube-env-key"

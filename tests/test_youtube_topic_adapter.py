@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import src.trend_intelligence.adapters.youtube_topic_adapter as adapter_mod
 from src.trend_intelligence.adapters.schemas import VideoResult
 from src.trend_intelligence.adapters.youtube_topic_adapter import YouTubeTopicSourceAdapter
 
@@ -128,3 +129,29 @@ def test_youtube_topic_adapter_falls_back_when_api_errors(monkeypatch):
 
     assert len(results) == 1
     assert results[0].source == "fallback"
+
+
+def test_youtube_topic_adapter_init_with_valid_string_key():
+    adapter = YouTubeTopicSourceAdapter(api_key="  test-key  ", throttle_seconds=0)
+
+    assert adapter.api_key == "test-key"
+    assert adapter.enabled is True
+    assert adapter.status_message == ""
+
+
+def test_youtube_topic_adapter_init_with_none_key(monkeypatch):
+    monkeypatch.setattr(adapter_mod, "get_secret", lambda *_args, **_kwargs: None)
+
+    adapter = YouTubeTopicSourceAdapter(api_key=None, throttle_seconds=0)
+
+    assert adapter.api_key is None
+    assert adapter.enabled is False
+    assert "disabled" in adapter.status_message.lower()
+    assert adapter.search_topic_videos("rome", limit=3) == []
+
+
+def test_youtube_topic_adapter_init_with_empty_key():
+    adapter = YouTubeTopicSourceAdapter(api_key="   ", throttle_seconds=0)
+
+    assert adapter.api_key is None
+    assert adapter.enabled is False

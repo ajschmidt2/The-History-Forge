@@ -194,6 +194,15 @@ def _scene_to_serializable(scene: Scene) -> dict[str, object]:
         "visual_intent": str(scene.visual_intent or ""),
         "scene_id": str(getattr(scene, "scene_id", "") or ""),
         "image_prompt": str(scene.image_prompt or ""),
+        "video_prompt": str(getattr(scene, "video_prompt", "") or ""),
+        "negative_prompt": str(getattr(scene, "negative_prompt", "") or ""),
+        "scene_summary": str(getattr(scene, "scene_summary", "") or ""),
+        "continuity_notes": str(getattr(scene, "continuity_notes", "") or ""),
+        "scene_intent": str(getattr(scene, "scene_intent", "") or ""),
+        "source_confidence": str(getattr(scene, "source_confidence", "medium") or "medium"),
+        "prompt_spec": dict(getattr(scene, "prompt_spec", {}) or {}),
+        "video_prompt_spec": dict(getattr(scene, "video_prompt_spec", {}) or {}),
+        "prompt_scores": dict(getattr(scene, "prompt_scores", {}) or {}),
         "status": str(scene.status or "active"),
         "estimated_duration_sec": float(getattr(scene, "estimated_duration_sec", 0.0) or 0.0),
         "video_path": str(getattr(scene, "video_path", "") or ""),
@@ -222,6 +231,15 @@ def _scene_from_serializable(raw: object, project_id: str) -> Scene | None:
         scene_id=str(raw.get("scene_id", "") or "").strip() or uuid4().hex,
         image_prompt=str(raw.get("image_prompt", "") or ""),
     )
+    scene.video_prompt = str(raw.get("video_prompt", "") or "")
+    scene.negative_prompt = str(raw.get("negative_prompt", "") or "")
+    scene.scene_summary = str(raw.get("scene_summary", "") or "")
+    scene.continuity_notes = str(raw.get("continuity_notes", "") or "")
+    scene.scene_intent = str(raw.get("scene_intent", "") or "")
+    scene.source_confidence = str(raw.get("source_confidence", "medium") or "medium")
+    scene.prompt_spec = raw.get("prompt_spec", {}) if isinstance(raw.get("prompt_spec"), dict) else {}
+    scene.video_prompt_spec = raw.get("video_prompt_spec", {}) if isinstance(raw.get("video_prompt_spec"), dict) else {}
+    scene.prompt_scores = raw.get("prompt_scores", {}) if isinstance(raw.get("prompt_scores"), dict) else {}
     scene.status = str(raw.get("status", "active") or "active")
     try:
         scene.estimated_duration_sec = float(raw.get("estimated_duration_sec", 0.0) or 0.0)
@@ -295,7 +313,7 @@ def save_project_state(project_id: str) -> None:
         "run_retention_pass": bool(st.session_state.get("run_retention_pass", True)),
         "run_safety_pass": bool(st.session_state.get("run_safety_pass", True)),
         "visual_style": str(st.session_state.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic"),
-        "aspect_ratio": str(st.session_state.get("aspect_ratio", "16:9") or "16:9"),
+        "aspect_ratio": str(st.session_state.get("aspect_ratio", "9:16") or "9:16"),
         "variations_per_scene": int(st.session_state.get("variations_per_scene", 1) or 1),
         "num_images": int(st.session_state.get("num_images", st.session_state.get("max_scenes", 8)) or 8),
         "max_scenes": int(st.session_state.get("max_scenes", 8) or 8),
@@ -405,7 +423,7 @@ def load_project_state(project_id: str) -> None:
     st.session_state.run_retention_pass = bool(raw.get("run_retention_pass", True))
     st.session_state.run_safety_pass = bool(raw.get("run_safety_pass", True))
     st.session_state.visual_style = str(raw.get("visual_style", "Photorealistic cinematic") or "Photorealistic cinematic")
-    st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "16:9") or "16:9")
+    st.session_state.aspect_ratio = str(raw.get("aspect_ratio", "9:16") or "9:16")
     st.session_state.variations_per_scene = int(raw.get("variations_per_scene", 1) or 1)
     st.session_state.num_images = int(raw.get("num_images", raw.get("max_scenes", 8)) or 8)
     st.session_state.max_scenes = int(raw.get("max_scenes", 8) or 8)
@@ -462,8 +480,10 @@ def delete_project(project_id_or_name: str) -> tuple[int, list[str]]:
     except Exception as exc:
         errors.append(f"Failed to delete project records for {normalized}: {exc}")
 
-    if not _sb_store.delete_project(normalized):
-        errors.append(f"Failed to delete Supabase project records for {normalized}")
+    try:
+        _sb_store.delete_project(normalized)
+    except Exception as exc:
+        errors.append(f"Failed to delete Supabase project records for {normalized}: {exc}")
 
     return removed_local_dirs, errors
 
@@ -535,7 +555,7 @@ def init_state() -> None:
     st.session_state.setdefault("run_safety_pass", True)
 
     st.session_state.setdefault("visual_style", "Photorealistic cinematic")
-    st.session_state.setdefault("aspect_ratio", "16:9")
+    st.session_state.setdefault("aspect_ratio", "9:16")
     st.session_state.setdefault("variations_per_scene", 1)
 
     st.session_state.setdefault("max_scenes", 8)

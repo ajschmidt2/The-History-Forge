@@ -38,6 +38,6 @@ class TopicAnalysisAdapter(ABC):
     source_name: str
 
     @abstractmethod
-    def analyze_topic(self, topic: str, videos: list[VideoResult]) -> TopicAnalysis:
+    def analyze_topic(self, topic: str, videos: list[VideoResult], *, brand_focus: str = "all") -> TopicAnalysis:
         """Return normalized explanation, angles, hooks, and thumbnail ideas."""
         raise NotImplementedError

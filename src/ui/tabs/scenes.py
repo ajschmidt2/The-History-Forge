@@ -183,7 +183,7 @@ def _saved_video_choices(project_id: str) -> list[dict[str, str | None]]:
     choices: list[dict[str, str | None]] = []
 
     for path in _saved_videos_for_project(project_id):
-        path_str = str(path)
+        path_str = path.as_posix()
         choices.append(
             {
                 "label": f"{path.name} · local",

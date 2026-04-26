@@ -1127,13 +1127,13 @@ def tab_video_compile() -> None:
     except (TypeError, ValueError):
         fps_default = 30
     fps_default = min(60, max(24, fps_default))
-    st.session_state["video_fps"] = fps_default
+    if "video_fps" not in st.session_state:
+        st.session_state["video_fps"] = fps_default
     with settings_cols[2]:
         fps = st.number_input(
             "FPS",
             min_value=24,
             max_value=60,
-            value=fps_default,
             key="video_fps",
         )
 
@@ -1142,13 +1142,12 @@ def tab_video_compile() -> None:
         scene_duration_default = float(raw_scene_duration)
     except (TypeError, ValueError):
         scene_duration_default = 3.0
-    scene_duration_default = min(12.0, max(1.0, scene_duration_default))
+    scene_duration_default = round(min(12.0, max(1.0, scene_duration_default)) * 2) / 2
     st.session_state["video_scene_duration"] = scene_duration_default
     scene_duration = st.slider(
         "Seconds per image",
         min_value=1.0,
         max_value=12.0,
-        value=scene_duration_default,
         step=0.5,
         help="Used when building timelines. If voiceover is enabled, durations may drift from the audio length.",
         key="video_scene_duration",
@@ -1242,12 +1241,15 @@ def tab_video_compile() -> None:
             disabled=not burn_captions,
         )
         selected_caption_style = caption_presets[caption_style_name].model_copy(deep=True)
+        font_size_default = int(selected_caption_style.font_size)
+        font_size_default = min(96, max(24, font_size_default))
+        font_size_default = 24 + round((font_size_default - 24) / 2) * 2
+        st.session_state["video_caption_font_size"] = font_size_default
         selected_caption_style.font_size = int(
             st.slider(
                 "Caption size",
                 min_value=24,
                 max_value=96,
-                value=selected_caption_style.font_size,
                 step=2,
                 help="Font size in output pixels for burned-in captions.",
                 key="video_caption_font_size",

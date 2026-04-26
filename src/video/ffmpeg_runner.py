@@ -71,7 +71,9 @@ def run_ffmpeg_streaming(
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
-    env["FFREPORT"] = f"file={report_path}:level=32"
+    # We capture stdout/stderr directly below. Avoid FFREPORT here because
+    # Windows drive-letter paths are parsed by ffmpeg as option separators.
+    env.pop("FFREPORT", None)
 
     with stdout_path.open("a", encoding="utf-8") as stdout_file, stderr_path.open("a", encoding="utf-8") as stderr_file:
         process = subprocess.Popen(

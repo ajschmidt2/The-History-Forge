@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import gc
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,19 @@ def _resolve_auth_config(
 def _save_credentials(credentials: Credentials, token_file: Path) -> None:
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text(credentials.to_json(), encoding="utf-8")
+
+
+def _web_oauth_configured() -> bool:
+    try:
+        import streamlit as st
+
+        client_id = str(st.secrets["google_oauth"]["client_id"] or "").strip()
+        client_secret = str(st.secrets["google_oauth"]["client_secret"] or "").strip()
+        redirect_uri = str(st.secrets["google_oauth"]["redirect_uri"] or "").strip()
+    except Exception:  # noqa: BLE001
+        return False
+
+    return bool(client_id and client_secret and redirect_uri)
 
 
 
@@ -158,12 +172,24 @@ def _run_oauth_flow(client_secrets_file: Path, token_file: Path) -> Credentials:
     credentials = flow.run_local_server(
         host="localhost",
         port=0,
-        open_browser=False,
+        open_browser=True,
         access_type="offline",
         prompt="consent",
+        authorization_prompt_message="",
+        success_message="YouTube sign-in complete. You can close this tab and return to History Forge.",
     )
     _save_credentials(credentials, token_file)
     return credentials
+
+
+def run_local_oauth_sign_in(
+    *,
+    client_secrets_file: str | Path | None = None,
+    token_file: str | Path | None = None,
+) -> Path:
+    config = _resolve_auth_config(client_secrets_file=client_secrets_file, token_file=token_file)
+    _run_oauth_flow(config.client_secrets_file, config.token_file)
+    return config.token_file
 
 
 
@@ -209,10 +235,10 @@ def validate_youtube_credentials(
         except Exception as exc:  # noqa: BLE001
             return False, f"Token validation failed: {exc}"
 
-    if config.client_secrets_file.exists():
+    if config.client_secrets_file.exists() or _web_oauth_configured():
         return False, (
             f"Token file not found at {config.token_file}. "
-            "Client secrets are present; run OAuth to generate token.json."
+            "OAuth is configured; connect YouTube in the app or use the desktop sign-in button to generate token.json."
         )
 
     return False, (
@@ -356,6 +382,13 @@ def upload_video(
     except OSError as exc:
         raise YouTubeUploadError(f"File access error: {exc}") from exc
     finally:
+        try:
+            stream = media.stream()
+            if stream and hasattr(stream, "close"):
+                stream.close()
+        except Exception:
+            pass
+        gc.collect()
         for temp_path in temp_files:
             try:
                 Path(temp_path).unlink(missing_ok=True)

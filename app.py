@@ -8,8 +8,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.config.secrets import bootstrap_api_keys
+
+# Ensure canonical runtime API key env vars are populated before modules that may use fal.
+bootstrap_api_keys()
+
 from image_gen import validate_gemini_api_key
-from src.ai_video_generation import veo_configured, sora_configured
+from src.ai_video_generation import veo_configured
+from src.config.secrets import fal_configured, fal_key_debug_snapshot
+from src.services.google_veo_video import google_veo_lite_configured
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.config.validate import validate_runtime_config
@@ -84,52 +91,81 @@ def main() -> None:
         st.divider()
         st.markdown("**AI Video Provider**")
 
+        _fal_ok = fal_configured()
         _veo_ok = veo_configured()
-        _sora_ok = sora_configured()
+        _google_lite_ok = google_veo_lite_configured()
 
+        # Gemini video is the primary path; fal.ai remains available as a fallback.
         _provider_options = []
+        if _google_lite_ok:
+            _provider_options.append("google_veo_lite")
+        _provider_options.append("falai")
         if _veo_ok:
             _provider_options.append("veo")
-        if _sora_ok:
-            _provider_options.append("sora")
-        if not _provider_options:
-            _provider_options = ["veo"]  # show veo even if unconfigured so UI isn't empty
+        _provider_options.append("auto")
 
-        if len(_provider_options) == 1:
-            # Only one provider available — show it as static text with status
-            _only = _provider_options[0]
-            _configured = _veo_ok if _only == "veo" else _sora_ok
-            st.caption(
-                f"{'✅' if _configured else '⚠️'} {_only.upper()} "
-                f"({'configured' if _configured else 'not configured'})"
-            )
-            st.session_state["ai_video_provider"] = _only
-        else:
-            _current_provider = st.session_state.get("ai_video_provider", _provider_options[0])
-            if _current_provider not in _provider_options:
-                _current_provider = _provider_options[0]
+        _current_provider = st.session_state.get("ai_video_provider", _provider_options[0])
+        if _current_provider not in _provider_options:
+            _current_provider = _provider_options[0]
 
-            st.session_state["ai_video_provider"] = st.selectbox(
-                "Provider",
-                _provider_options,
-                index=_provider_options.index(_current_provider),
-                format_func=lambda p: f"{'🎬' if p == 'veo' else '🤖'} {p.upper()}",
-                help=(
-                    "Veo: Google image-to-video via Supabase Edge Function.\n"
-                    "Sora: OpenAI text-to-video with image reference fallback."
-                ),
-                key="ai_video_provider_select",
-            )
+        _provider_labels = {
+            "google_veo_lite": "🔷 Gemini Veo 3.1 Fast — Default",
+            "falai": "✨ fal.ai (Wan 2.2) — Fallback",
+            "veo": "🎬 Google Veo",
+            "auto": "🧠 Auto (HF_VIDEO_PROVIDER)",
+        }
+        st.session_state["ai_video_provider"] = st.selectbox(
+            "Provider",
+            _provider_options,
+            index=_provider_options.index(_current_provider),
+            format_func=lambda p: _provider_labels.get(p, p.upper()),
+            help=(
+                "Gemini Veo Fast: primary image-to-video path for short-form clips.\n"
+                "fal.ai: optional Wan 2.2 image-to-video fallback.\n"
+                "Veo: Google image-to-video via Supabase Edge Function.\n"
+            ),
+            key="ai_video_provider_select",
+        )
 
         # Status indicators
+        if _fal_ok:
+            st.caption("✅ fal.ai configured")
+        else:
+            st.caption("⚠️ fal.ai not configured (set fal_api_key in secrets)")
+        with st.expander("🔎 fal.ai key debug (temporary)", expanded=False):
+            _fal_diag = fal_key_debug_snapshot()
+            st.caption("Secret values are never shown.")
+            st.write("In Streamlit secrets:", _fal_diag["secrets_presence"])
+            st.write("In environment:", _fal_diag["env_presence"])
+            st.write("Resolved key has colon:", _fal_diag["resolved_has_colon"])
+            st.write("Resolved key length:", _fal_diag["resolved_length"])
         if _veo_ok:
             st.caption("✅ Veo configured")
         else:
             st.caption("⚠️ Veo not configured (check SUPABASE_URL + SUPABASE_KEY)")
-        if _sora_ok:
-            st.caption("✅ Sora configured")
+        if _google_lite_ok:
+            st.caption("✅ Gemini Veo Fast configured")
         else:
-            st.caption("⚠️ Sora not configured (check openai_api_key)")
+            st.caption("⚠️ Gemini Veo Fast not configured (check GEMINI_API_KEY)")
+
+        st.divider()
+        st.markdown("**Image Provider**")
+        _image_provider_options = ["falai", "gemini"]
+        _current_image_provider = st.session_state.get("image_provider", "gemini")
+        if _current_image_provider not in _image_provider_options:
+            _current_image_provider = "gemini"
+        _image_labels = {
+            "gemini": "🔷 Google Gemini / Imagen — Default",
+            "falai": "✨ fal.ai (FLUX Dev) — Fallback",
+        }
+        st.session_state["image_provider"] = st.selectbox(
+            "Image generator",
+            _image_provider_options,
+            index=_image_provider_options.index(_current_image_provider),
+            format_func=lambda p: _image_labels.get(p, p),
+            help="Gemini/Imagen is the default image path. fal.ai FLUX Dev remains available as a fallback.",
+            key="image_provider_select",
+        )
 
         st.divider()
         render_project_selector()

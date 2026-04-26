@@ -57,40 +57,60 @@ HISTORY_CROSSROADS_BRAND_PROFILE = BrandProfile(
         BrandPreference(
             key="ancient_mysteries",
             weight=0.24,
-            keywords=("ancient", "pharaoh", "lost city", "ruins", "mystery", "artifact"),
+            keywords=(
+                "ancient", "pharaoh", "lost city", "ruins", "mystery", "artifact",
+                "egypt", "rome", "greek", "babylon", "mesopotamia", "bronze age",
+                "iron age", "civilization", "empire", "dynasty", "pyramid", "tomb",
+            ),
             description="Ancient mysteries and unresolved historical puzzles.",
         ),
         BrandPreference(
             key="wartime_hero_stories",
             weight=0.22,
-            keywords=("war", "battle", "resistance", "hero", "medal", "veteran"),
+            keywords=(
+                "war", "battle", "resistance", "hero", "medal", "veteran",
+                "wwii", "world war", "civil war", "revolution", "siege", "invasion",
+                "military", "soldier", "general", "fleet", "campaign", "conflict",
+            ),
             description="Heroic wartime events and individuals under pressure.",
         ),
         BrandPreference(
             key="forgotten_individuals",
             weight=0.20,
-            keywords=("forgotten", "unknown", "unsung", "trailblazer", "figure", "biography"),
+            keywords=(
+                "forgotten", "unknown", "unsung", "trailblazer", "figure", "biography",
+                "untold story", "pioneer", "overlooked", "real story", "true story of",
+                "life of", "who was", "person behind",
+            ),
             description="Underrated historical figures and overlooked biographies.",
         ),
         BrandPreference(
             key="bizarre_true_stories",
             weight=0.18,
-            keywords=("bizarre", "unbelievable", "strange", "impossible", "hoax", "true story"),
+            keywords=(
+                "bizarre", "unbelievable", "strange", "impossible", "hoax",
+                "scandal", "conspiracy", "secret", "hidden", "suppressed",
+                "dark history", "untold", "shocking", "what really happened",
+            ),
             description="Real events that feel unbelievable yet verifiable.",
         ),
         BrandPreference(
             key="long_form_documentary",
             weight=0.16,
-            keywords=("documentary", "archive", "timeline", "investigation", "deep dive", "chronicle"),
+            keywords=(
+                "documentary", "archive", "timeline", "investigation", "deep dive", "chronicle",
+                "history of", "rise and fall", "collapse of", "origins of", "explained",
+                "complete history", "full story",
+            ),
             description="Topics that can sustain long-form documentary storytelling.",
         ),
     ),
     overall_score_weights={
-        "trend_momentum": 0.24,
-        "watch_time_potential": 0.24,
-        "clickability": 0.18,
-        "competition_gap": 0.14,
-        "brand_alignment": 0.20,
+        "trend_momentum": 0.25,
+        "watch_time_potential": 0.25,
+        "clickability": 0.20,
+        "competition_gap": 0.15,
+        "brand_alignment": 0.15,
     },
 )
 

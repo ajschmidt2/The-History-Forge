@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+import logging
 from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
@@ -14,6 +15,13 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "SUPABASE_ANON_KEY": ["SUPABASE_ANON_KEY", "SUPABASE_KEY", "supabase_anon_key", "supabase_key"],
     "SUPABASE_SERVICE_ROLE_KEY": ["SUPABASE_SERVICE_ROLE_KEY", "supabase_service_role_key"],
     "OPENAI_API_KEY": ["OPENAI_API_KEY", "openai_api_key"],
+    "GEMINI_API_KEY": ["GEMINI_API_KEY", "google_api_key", "GOOGLE_API_KEY", "google_ai_studio_api_key"],
+    "GEMINI_MODEL_TEXT": ["GEMINI_MODEL_TEXT", "gemini_model_text"],
+    "GEMINI_MODEL_FAST": ["GEMINI_MODEL_FAST", "gemini_model_fast"],
+    "GEMINI_IMAGE_MODEL": ["GEMINI_IMAGE_MODEL", "gemini_image_model", "GOOGLE_AI_STUDIO_IMAGE_MODEL", "IMAGEN_MODEL", "imagen_model"],
+    "GEMINI_VIDEO_MODEL": ["GEMINI_VIDEO_MODEL", "gemini_video_model", "HF_GOOGLE_VIDEO_MODEL", "hf_google_video_model"],
+    "HF_VIDEO_PROVIDER": ["HF_VIDEO_PROVIDER", "hf_video_provider"],
+    "HF_GOOGLE_VIDEO_MODEL": ["HF_GOOGLE_VIDEO_MODEL", "hf_google_video_model"],
     "IMAGES_BUCKET": ["IMAGES_BUCKET", "images_bucket"],
     "AUDIO_BUCKET": ["AUDIO_BUCKET", "audio_bucket"],
     "VIDEOS_BUCKET": ["VIDEOS_BUCKET", "videos_bucket"],
@@ -29,6 +37,7 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "INSTAGRAM_ACCESS_TOKEN": ["INSTAGRAM_ACCESS_TOKEN", "instagram_access_token"],
     "TIKTOK_ACCESS_TOKEN": ["TIKTOK_ACCESS_TOKEN", "tiktok_access_token"],
     "TIKTOK_OPEN_ID": ["TIKTOK_OPEN_ID", "tiktok_open_id"],
+    "FAL_API_KEY": ["FAL_API_KEY", "fal_api_key", "FAL_KEY", "fal_key"],
 }
 
 _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
@@ -36,6 +45,11 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
     "SUPABASE_ANON_KEY": (("supabase", "anon_key"), ("supabase", "key")),
     "SUPABASE_SERVICE_ROLE_KEY": (("supabase", "service_role_key"),),
     "OPENAI_API_KEY": (("openai", "api_key"),),
+    "GEMINI_API_KEY": (
+        ("google", "api_key"),
+        ("google_ai_studio", "api_key"),
+        ("api_keys", "gemini"),
+    ),
     "IMAGES_BUCKET": (("supabase", "images_bucket"), ("buckets", "images")),
     "AUDIO_BUCKET": (("supabase", "audio_bucket"), ("buckets", "audio")),
     "VIDEOS_BUCKET": (("supabase", "videos_bucket"), ("buckets", "videos")),
@@ -53,9 +67,17 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
     "YOUTUBE_CLIENT_SECRETS_FILE": (("youtube", "client_secrets_file"),),
     "YOUTUBE_TOKEN_FILE": (("youtube", "token_file"),),
+    "FAL_API_KEY": (
+        ("fal", "api_key"),
+        ("fal", "key"),
+        ("api_keys", "fal"),
+        ("api_keys", "fal_api_key"),
+    ),
 }
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
+_FAL_KEY_CANDIDATES: tuple[str, ...] = ("FAL_KEY", "fal_key", "FAL_API_KEY", "fal_api_key")
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=None)
@@ -80,6 +102,13 @@ def _normalize(value: Any) -> str:
     return cleaned
 
 
+def safe_str(value: Any) -> str:
+    """Normalize unknown input to a trimmed string, never returning None."""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 def _safe_streamlit_secrets() -> Any | None:
     try:
         import streamlit as st  # type: ignore
@@ -99,8 +128,11 @@ def streamlit_secrets_detected() -> bool:
 def _read_key(container: Any, key: str) -> tuple[bool, Any]:
     """Return (found, value) for dict-like and attrdict-like containers."""
     if isinstance(container, Mapping):
-        if key in container:
-            return True, container[key]
+        try:
+            if key in container:
+                return True, container[key]
+        except Exception:
+            return False, None
         return False, None
 
     # Streamlit's secrets object supports key access but may not implement Mapping.
@@ -121,16 +153,20 @@ def _mapping_path_get(mapping: Any, path: tuple[str, ...]) -> str:
     return _normalize(current)
 
 
-def _read_streamlit_secret(key: str) -> str | None:
+def _read_streamlit_secret(key: str) -> Any | None:
     secrets = _safe_streamlit_secrets()
     if secrets is None:
         return None
 
     try:
         found, raw_value = _read_key(secrets, key)
-        value = _normalize(raw_value) if found else ""
-        if value:
-            return value
+        if found:
+            if isinstance(raw_value, str):
+                value = _normalize(raw_value)
+            else:
+                value = raw_value
+            if value:
+                return value
 
         if key in _NESTED_STREAMLIT_PATHS:
             for path in _NESTED_STREAMLIT_PATHS[key]:
@@ -146,6 +182,130 @@ def _read_streamlit_secret(key: str) -> str | None:
 def _read_env(key: str) -> str | None:
     value = _normalize(os.environ.get(key, ""))
     return value or None
+
+
+def _flatten_secret_nodes(container: Any) -> list[Any]:
+    nodes: list[Any] = []
+    stack: list[Any] = [container]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        ident = id(current)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        nodes.append(current)
+
+        keys: list[str] = []
+        if isinstance(current, Mapping):
+            keys = [str(k) for k in current.keys()]
+        else:
+            try:
+                keys = [str(k) for k in current.keys()]  # type: ignore[attr-defined]
+            except Exception:
+                keys = []
+
+        for key in keys:
+            found, value = _read_key(current, key)
+            if not found:
+                continue
+            if isinstance(value, Mapping):
+                stack.append(value)
+                continue
+            try:
+                value_keys = value.keys()  # type: ignore[attr-defined]
+            except Exception:
+                value_keys = None
+            if value_keys is not None:
+                stack.append(value)
+    return nodes
+
+
+def validate_fal_key(value: Any) -> bool:
+    cleaned = _normalize(value)
+    if not cleaned:
+        return False
+    if ":" not in cleaned:
+        return False
+    return 12 <= len(cleaned) <= 512
+
+
+def get_fal_key() -> str:
+    secrets = _safe_streamlit_secrets()
+    if secrets is not None:
+        # 1) Root-level keys first.
+        for name in _FAL_KEY_CANDIDATES:
+            found, raw = _read_key(secrets, name)
+            candidate = _normalize(raw) if found else ""
+            if validate_fal_key(candidate):
+                os.environ["FAL_KEY"] = candidate
+                return candidate
+
+        # 2) Nested sections next (any depth).
+        for node in _flatten_secret_nodes(secrets):
+            if node is secrets:
+                continue
+            for name in _FAL_KEY_CANDIDATES:
+                found, raw = _read_key(node, name)
+                candidate = _normalize(raw) if found else ""
+                if validate_fal_key(candidate):
+                    os.environ["FAL_KEY"] = candidate
+                    return candidate
+
+    # 3) Environment variables in required priority order.
+    for name in _FAL_KEY_CANDIDATES:
+        candidate = _read_env(name) or ""
+        if validate_fal_key(candidate):
+            os.environ["FAL_KEY"] = candidate
+            return candidate
+
+    raise RuntimeError(
+        "fal.ai API key not found. Checked Streamlit secrets and environment variables for: "
+        "FAL_KEY, fal_key, FAL_API_KEY, fal_api_key."
+    )
+
+
+def bootstrap_api_keys() -> None:
+    try:
+        get_fal_key()
+    except Exception:
+        # fal.ai is optional in some flows; fail only when the provider is used.
+        pass
+
+
+def fal_key_debug_snapshot() -> dict[str, Any]:
+    secrets = _safe_streamlit_secrets()
+    secrets_presence: dict[str, bool] = {}
+    env_presence: dict[str, bool] = {}
+    try:
+        nodes = _flatten_secret_nodes(secrets) if secrets is not None else []
+    except Exception:
+        nodes = []
+        secrets = None
+
+    for name in _FAL_KEY_CANDIDATES:
+        in_secrets = False
+        if secrets is not None:
+            for node in nodes:
+                found, raw = _read_key(node, name)
+                if found and _normalize(raw):
+                    in_secrets = True
+                    break
+        secrets_presence[name] = in_secrets
+        env_presence[name] = bool(_read_env(name))
+
+    resolved = ""
+    try:
+        resolved = get_fal_key()
+    except Exception:
+        resolved = ""
+
+    return {
+        "secrets_presence": secrets_presence,
+        "env_presence": env_presence,
+        "resolved_has_colon": ":" in resolved if resolved else False,
+        "resolved_length": len(resolved),
+    }
 
 
 def _aliases(name: str) -> list[str]:
@@ -191,45 +351,66 @@ def resolve_openai_key() -> str:
         pass
     return ""
 
-def get_secret(name: str, default: str = "", required: bool = False) -> str:
-    """
-    Safe secret getter.
-    Always returns a string (never None) so calling code can safely do .strip().
-    Looks in:
-      1) environment variables – exact key, then all aliases
-      2) .streamlit/secrets.toml parsed directly (headless / CI / MCP-compatible)
-      3) st.secrets – only when running inside a live Streamlit runtime
-    Placeholder values (e.g. "paste_key_here") are treated as absent.
-    """
-    all_aliases = _aliases(name)
+def get_secret(key: str, default=None):
+    canonical = str(key).upper()
+    aliases = _aliases(str(key))
 
-    # 1. Environment variables – try every alias (works headless and in CI)
-    for alias in all_aliases:
-        value = _normalize(os.environ.get(alias, ""))
+    # 1) Streamlit secrets (root aliases first)
+    try:
+        secrets = _safe_streamlit_secrets()
+        if secrets is not None:
+            for alias in aliases:
+                found, raw = _read_key(secrets, alias)
+                if found:
+                    if isinstance(raw, str):
+                        value = _normalize(raw)
+                    else:
+                        value = raw
+                    if value:
+                        return value
+            for path in _NESTED_STREAMLIT_PATHS.get(canonical, ()):
+                nested = _mapping_path_get(secrets, path)
+                if nested:
+                    return nested
+    except Exception:
+        logger.exception("get_secret failed for key '%s'; using default.", key)
+
+    # 2) Environment variables by aliases
+    for alias in aliases:
+        value = _read_env(alias)
         if value:
             return value
 
-    # 2. .streamlit/secrets.toml parsed directly (headless / MCP-compatible fallback)
-    toml_secrets = _load_toml_secrets()
-    for alias in all_aliases:
-        val = toml_secrets.get(alias)
-        if val:
-            normalized = _normalize(val)
-            if normalized:
-                return normalized
+    # 3) Direct TOML fallback (headless/cron mode)
+    toml_data = _load_toml_secrets()
+    for alias in aliases:
+        raw = toml_data.get(alias)
+        if raw is not None:
+            if isinstance(raw, str):
+                value = _normalize(raw)
+            else:
+                value = raw
+            if value:
+                return value
+    for path in _NESTED_STREAMLIT_PATHS.get(canonical, ()):
+        nested = _mapping_path_get(toml_data, path)
+        if nested:
+            return nested
 
-    # 3. Streamlit secrets – only available when running inside a Streamlit runtime
-    for alias in all_aliases:
-        st_value = _read_streamlit_secret(alias)
-        if st_value:
-            return st_value
+    # 4) Default if not found or any error occurs
+    return default
 
-    if required:
-        raise RuntimeError(
-            f"Missing required secret '{name}'. Set it in Streamlit secrets or environment variables."
-        )
 
-    return str(default or "")
+def safe_secret(*names: str, default: str = "") -> str:
+    """Resolve the first available secret from candidate names, never raising."""
+    for name in names:
+        try:
+            value = safe_str(get_secret(name, ""))
+        except Exception:
+            value = ""
+        if value:
+            return value
+    return safe_str(default)
 
 
 def require_secrets(names: list[str]) -> dict[str, str]:
@@ -264,6 +445,14 @@ def get_supabase_config() -> dict[str, str | None]:
         "audio_bucket": get_secret("AUDIO_BUCKET", "history-forge-audio"),
         "videos_bucket": get_secret("VIDEOS_BUCKET", "generated-videos"),
     }
+
+
+def fal_configured() -> bool:
+    """Return True if a fal.ai API key is present."""
+    try:
+        return bool(get_fal_key())
+    except Exception:
+        return False
 
 
 def get_openai_config() -> dict[str, str | None]:

@@ -2,11 +2,12 @@ import json
 from pathlib import Path
 
 from src.workflow.models import StepStatus
-from src.workflow.project_io import load_scenes, save_project_payload
+from src.workflow.project_io import load_project_payload, load_scenes, save_project_payload
 from src.workflow.services import (
     FullWorkflowOptions,
     PipelineOptions,
     StepResult,
+    estimate_youtube_short_scene_count,
     run_full_workflow,
     run_generate_script,
     run_generate_short_script,
@@ -15,6 +16,12 @@ from src.workflow.services import (
     run_split_scenes,
     run_sync_timeline,
 )
+
+
+def test_estimate_youtube_short_scene_count_scales_around_default() -> None:
+    assert estimate_youtube_short_scene_count("word " * 150) == 14
+    assert estimate_youtube_short_scene_count("word " * 80) < 14
+    assert estimate_youtube_short_scene_count("word " * 220) > 14
 
 
 def test_run_split_scenes_persists_scene_json(tmp_path, monkeypatch):
@@ -31,12 +38,62 @@ def test_run_split_scenes_persists_scene_json(tmp_path, monkeypatch):
 
     result = run_split_scenes(project_id, PipelineOptions(number_of_scenes=3))
     assert result.status == StepStatus.COMPLETED
+    assert result.outputs["scene_count"] == 3
 
     scenes_file = Path("data/projects") / project_id / "scenes.json"
     assert scenes_file.exists()
     scenes = json.loads(scenes_file.read_text(encoding="utf-8"))
     assert isinstance(scenes, list)
-    assert len(scenes) >= 1
+    assert len(scenes) == 3
+
+
+def test_run_split_scenes_auto_sizes_default_youtube_short_count(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-short-scenes"
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "script_text": " ".join(f"word{i}" for i in range(150)),
+            "script_profile": "youtube_short_60s",
+            "automation_mode": "topic_to_short_video",
+            "max_scenes": 8,
+        },
+    )
+
+    result = run_split_scenes(
+        project_id,
+        PipelineOptions(
+            number_of_scenes=14,
+            script_profile="youtube_short_60s",
+            automation_mode="topic_to_short_video",
+        ),
+    )
+    assert result.status == StepStatus.COMPLETED
+    assert result.outputs["scene_count"] == 14
+    assert len(load_scenes(project_id)) == 14
+
+    payload = load_project_payload(project_id)
+    assert payload["resolved_scene_count"] == 14
+    assert payload["script_word_count"] == 150
+
+
+def test_run_split_scenes_auto_sizes_longer_short_script(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-long-short-scenes"
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "script_text": " ".join(f"word{i}" for i in range(220)),
+            "script_profile": "youtube_short_60s",
+            "automation_mode": "topic_to_short_video",
+        },
+    )
+
+    result = run_split_scenes(project_id, PipelineOptions(number_of_scenes=14))
+    assert result.status == StepStatus.COMPLETED
+    assert result.outputs["scene_count"] > 14
 
 
 def test_run_sync_timeline_fills_missing_durations(tmp_path, monkeypatch):

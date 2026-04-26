@@ -36,7 +36,7 @@ MCP_DEFAULT_PRESET: dict[str, Any] = {
     "music_enabled": True,
     "music_relative_level": 0.09,
     "cta_text": "Subscribe to History Crossroads",
-    "ai_video_provider": "sora",
+    "ai_video_provider": "google_veo_lite",
     "scene_transition_type": "random",
     "selected_music_track": "data/music_library/History Track 60 Seconds - String instruments - 4.mp3",
 }
