@@ -33,6 +33,7 @@ from src.workflow.services import FullWorkflowOptions, run_full_workflow
 RUN_HISTORY_PATH = Path("data/daily_run_history.json")
 DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
 DEFAULT_DAILY_TIMEZONE = "America/Indianapolis"
+REMOTE_AUTOMATION_STATE_BUCKET = "history-forge-scripts"
 DAILY_WEEKDAY_OPTIONS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 _DAY_TO_CRON = {
     "mon": "MON",
@@ -432,6 +433,51 @@ def _append_run_history(entry: dict[str, Any], path: Path = RUN_HISTORY_PATH) ->
     path.write_text(json.dumps(rows[-1000:], indent=2), encoding="utf-8")
 
 
+def _remote_topics_state_path(profile: ChannelProfile) -> str:
+    return f"automation-state/{profile.channel_id}_daily_topics_used.json"
+
+
+def _load_remote_used_topics(profile: ChannelProfile) -> set[str]:
+    payload = _sb_store.download_text(REMOTE_AUTOMATION_STATE_BUCKET, _remote_topics_state_path(profile))
+    if not payload:
+        return set()
+    try:
+        rows = json.loads(payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return set()
+    if not isinstance(rows, list):
+        return set()
+    return {
+        str(item.get("topic", "") if isinstance(item, dict) else item).strip().lower()
+        for item in rows
+        if str(item.get("topic", "") if isinstance(item, dict) else item).strip()
+    }
+
+
+def _save_remote_used_topic(topic: str, *, run_date: date, profile: ChannelProfile) -> None:
+    normalized = str(topic or "").strip()
+    if not normalized:
+        return
+
+    storage_path = _remote_topics_state_path(profile)
+    rows: list[dict[str, str]] = []
+    existing = _sb_store.download_text(REMOTE_AUTOMATION_STATE_BUCKET, storage_path)
+    if existing:
+        try:
+            loaded = json.loads(existing)
+            if isinstance(loaded, list):
+                rows = [row for row in loaded if isinstance(row, dict)]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            rows = []
+
+    rows.append({"topic": normalized, "date": run_date.isoformat()})
+    _sb_store.upload_text(
+        REMOTE_AUTOMATION_STATE_BUCKET,
+        storage_path,
+        json.dumps(rows[-1000:], indent=2),
+    )
+
+
 def _resolve_default_music_track() -> str:
     suffixes = {".mp3", ".wav", ".m4a"}
     candidates: list[Path] = []
@@ -502,6 +548,9 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
         _normalize_daily_publishing(settings.get("publishing") if isinstance(settings.get("publishing"), dict) else None)
     )
     used_topics = load_used_topics(path=profile.topics_used_path)
+    remote_used_topics = _load_remote_used_topics(profile)
+    if remote_used_topics:
+        used_topics |= remote_used_topics
 
     topic_override = str(settings.get("topic_override", "") or "").strip()
     # Profile topic_direction is the base; settings can further refine it
@@ -628,6 +677,10 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     # Checkpoint 5: upload to Supabase
     upload_result = _upload_final_to_generated_bucket(project_id, final_path, target_date)
     save_used_topic(topic, run_date=target_date, path=profile.topics_used_path)
+    try:
+        _save_remote_used_topic(topic, run_date=target_date, profile=profile)
+    except Exception as exc:
+        print(f"[Checkpoint 5] Remote topic-history save failed (non-fatal): {exc}", file=sys.stderr)
     print(f"[Checkpoint 5] Supabase upload complete. public_url={upload_result['public_url']}", file=sys.stderr)
 
     # Checkpoint 6: YouTube upload (non-fatal; skipped if credentials are absent)

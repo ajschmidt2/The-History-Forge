@@ -275,6 +275,17 @@ def _download_storage_object(bucket: str, storage_path: str) -> Optional[bytes]:
     return None
 
 
+def download_text(bucket: str, storage_path: str, *, encoding: str = "utf-8") -> Optional[str]:
+    """Download a text object from Supabase Storage and decode it."""
+    payload = _download_storage_object(bucket, storage_path)
+    if payload is None:
+        return None
+    try:
+        return payload.decode(encoding)
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Storage (file upload) operations
 # ---------------------------------------------------------------------------
@@ -313,6 +324,19 @@ def upload_script(project_id: str, script_text: str, filename: str = "script.txt
     if url:
         record_asset(project_id, "script", filename, url)
     return url
+
+
+def upload_text(
+    bucket: str,
+    storage_path: str,
+    text: str,
+    *,
+    content_type: str = "application/json",
+) -> Optional[str]:
+    """Upload text content to Supabase Storage and return the public URL."""
+    if text is None:
+        return None
+    return _upload_bytes(bucket, storage_path, text.encode("utf-8"), content_type)
 
 
 def upload_image(project_id: str, filename: str, image_path: Path) -> Optional[str]:
