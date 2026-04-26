@@ -23,6 +23,9 @@ jobs:
       INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
       YOUTUBE_CLIENT_SECRETS_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRETS_JSON }}
       YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+      DAILY_YOUTUBE_ENABLED: "true"
+      DAILY_YOUTUBE_PRIVACY_STATUS: "private"
+      DAILY_INSTAGRAM_ENABLED: "true"
       YOUTUBE_CLIENT_SECRETS_FILE: client_secrets.json
       YOUTUBE_TOKEN_FILE: token.json
 
@@ -174,6 +177,9 @@ jobs:
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
           INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          DAILY_YOUTUBE_ENABLED: "true"
+          DAILY_YOUTUBE_PRIVACY_STATUS: "private"
+          DAILY_INSTAGRAM_ENABLED: "true"
           YOUTUBE_CLIENT_SECRETS_FILE: client_secrets.json
           YOUTUBE_TOKEN_FILE: token.json
         run: python -m src.workflow.daily_job

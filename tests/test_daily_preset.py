@@ -80,6 +80,72 @@ def test_daily_automation_settings_defaults_include_youtube_publishing(tmp_path:
     assert saved["publishing"]["instagram_enabled"] is True
 
 
+def test_run_daily_job_honors_publishing_env_overrides(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_root = Path("data/projects/generated_project")
+    final_path = project_root / "renders/final.mp4"
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    final_path.write_bytes(b"x" * 200_000)
+
+    def fake_run_full_workflow(*_args, **_kwargs):
+        class Result:
+            failed_step = ""
+            warnings = []
+            final_output_path = str(final_path)
+        return Result()
+
+    class UploadResult:
+        video_id = "yt-env-123"
+
+    monkeypatch.setenv("DAILY_YOUTUBE_ENABLED", "true")
+    monkeypatch.setenv("DAILY_YOUTUBE_PRIVACY_STATUS", "public")
+    monkeypatch.setenv("DAILY_INSTAGRAM_ENABLED", "false")
+    monkeypatch.setattr("src.workflow.daily_job.generate_daily_topic", lambda **_kwargs: "Test Topic")
+    monkeypatch.setattr("src.workflow.daily_job.generate_daily_short_script", lambda *_args, **_kwargs: "A" * 160)
+    monkeypatch.setattr("src.workflow.daily_job.ensure_project_files", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job.upsert_project", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job.project_dir", lambda *_args, **_kwargs: project_root)
+    monkeypatch.setattr("src.workflow.daily_job.load_project_payload", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("src.workflow.daily_job.save_project_payload", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job.save_used_topic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job.run_full_workflow", fake_run_full_workflow)
+    monkeypatch.setattr("src.workflow.daily_job._upload_final_to_generated_bucket", lambda *_args, **_kwargs: {
+        "bucket": "generated-videos",
+        "object_path": "daily-renders/test.mp4",
+        "public_url": "https://example.com/final.mp4",
+    })
+    monkeypatch.setattr("src.workflow.daily_job._append_run_history", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job._ig_configured", lambda: True)
+    monkeypatch.setattr("src.workflow.daily_job._tt_configured", lambda: False)
+    monkeypatch.setattr("src.workflow.daily_job._sb_store.cleanup_project_intermediate_assets", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("src.workflow.daily_job._validate_yt_credentials", lambda **_kwargs: (True, "ok"))
+
+    upload_calls = []
+
+    def fake_upload(**kwargs):
+        upload_calls.append(kwargs)
+        return UploadResult()
+
+    monkeypatch.setattr("src.workflow.daily_job._yt_upload_video", fake_upload)
+    monkeypatch.setattr("src.workflow.daily_job._ig_upload_reel", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Instagram should be disabled by env override")))
+
+    save_daily_automation_settings(
+        {
+            "publishing": {"youtube_enabled": False, "youtube_privacy_status": "private", "instagram_enabled": True},
+            "preset": {"music_enabled": False},
+        },
+        path=Path(HISTORY_CHANNEL.automation_settings_path),
+    )
+
+    summary = run_daily_video_job(run_date=datetime(2026, 4, 24).date(), profile=HISTORY_CHANNEL)
+
+    assert summary["youtube_enabled"] is True
+    assert summary["youtube_privacy_status"] == "public"
+    assert summary["instagram_enabled"] is False
+    assert summary["youtube_video_id"] == "yt-env-123"
+    assert upload_calls[0]["privacy_status"] == "public"
+
+
 def test_resolve_default_music_track_prefers_library_then_project_music(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     project_music = Path("data/projects/demo/assets/music/history-bed.mp3")

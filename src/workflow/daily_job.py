@@ -183,6 +183,35 @@ def _normalize_daily_publishing(raw_publishing: dict[str, Any] | None) -> dict[s
     }
 
 
+def _env_bool(name: str) -> bool | None:
+    raw = str(os.getenv(name, "") or "").strip().lower()
+    if not raw:
+        return None
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _apply_publishing_env_overrides(publishing: dict[str, Any]) -> dict[str, Any]:
+    resolved = dict(publishing)
+
+    youtube_enabled = _env_bool("DAILY_YOUTUBE_ENABLED")
+    if youtube_enabled is not None:
+        resolved["youtube_enabled"] = youtube_enabled
+
+    instagram_enabled = _env_bool("DAILY_INSTAGRAM_ENABLED")
+    if instagram_enabled is not None:
+        resolved["instagram_enabled"] = instagram_enabled
+
+    youtube_privacy_status = str(os.getenv("DAILY_YOUTUBE_PRIVACY_STATUS", "") or "").strip().lower()
+    if youtube_privacy_status in {"private", "unlisted", "public"}:
+        resolved["youtube_privacy_status"] = youtube_privacy_status
+
+    return _normalize_daily_publishing(resolved)
+
+
 def _normalize_daily_schedule(raw_schedule: dict[str, Any] | None) -> dict[str, Any]:
     schedule = raw_schedule if isinstance(raw_schedule, dict) else {}
     enabled = bool(schedule.get("enabled", False))
@@ -469,7 +498,9 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
 
     settings = load_daily_automation_settings(path=profile.automation_settings_path)
     preset = _resolve_daily_short_preset(settings, extra_overrides=profile.preset_overrides or {})
-    publishing = _normalize_daily_publishing(settings.get("publishing") if isinstance(settings.get("publishing"), dict) else None)
+    publishing = _apply_publishing_env_overrides(
+        _normalize_daily_publishing(settings.get("publishing") if isinstance(settings.get("publishing"), dict) else None)
+    )
     used_topics = load_used_topics(path=profile.topics_used_path)
 
     topic_override = str(settings.get("topic_override", "") or "").strip()
@@ -637,7 +668,7 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
         except Exception as exc:
             print(f"[Checkpoint 6] YouTube upload failed (non-fatal): {exc}", file=sys.stderr)
     else:
-        print(f"[Checkpoint 6] YouTube credentials not found for channel={profile.channel_id} — skipping.", file=sys.stderr)
+        print(f"[Checkpoint 6] YouTube upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
 
     # Checkpoint 7: Instagram upload (non-fatal; only for enabled channels with credentials)
     instagram_media_id = ""
