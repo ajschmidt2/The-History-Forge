@@ -577,6 +577,8 @@ def _render_daily_automation_status(project_id: str) -> None:
         selected_daily_music = ""
 
     save_col, run_col = st.columns(2)
+    daily_progress_holder = st.empty()
+    daily_log_holder = st.empty()
     if save_col.button("Save daily automation settings", width="stretch"):
         save_daily_automation_settings({
             "topic_override": topic_override.strip(),
@@ -628,11 +630,35 @@ def _render_daily_automation_status(project_id: str) -> None:
                 "ai_video_provider": daily_ai_provider if daily_ai_provider != "None" else "",
             },
         })
+        progress_bar = daily_progress_holder.progress(0.0, text="Starting daily job...")
+        status_box = daily_log_holder.status("Daily job in progress...", expanded=True)
+        daily_updates: list[str] = []
+
+        def _daily_progress_callback(event: dict[str, Any]) -> None:
+            step = str(event.get("step", "daily_job") or "daily_job")
+            status = str(event.get("status", "in_progress") or "in_progress").lower()
+            index = int(event.get("index", 0) or 0)
+            total = max(1, int(event.get("total", 1) or 1))
+            message = str(event.get("message", "") or "").strip()
+            detail = str(event.get("detail", "") or "").strip()
+            ratio = min(1.0, max(0.0, index / total))
+            label = f"{step}: {message or status}"
+            if detail:
+                label = f"{label} — {detail}"
+            daily_updates.append(label)
+            progress_bar.progress(ratio, text=label)
+            with status_box:
+                st.write(f"{index}/{total} · {label}")
+
         try:
-            result = run_daily_video_job(profile=HISTORY_CHANNEL)
+            result = run_daily_video_job(profile=HISTORY_CHANNEL, progress_callback=_daily_progress_callback)
         except Exception as exc:  # noqa: BLE001
+            progress_bar.progress(1.0, text="Daily job failed")
+            status_box.update(label="Daily job failed", state="error", expanded=True)
             st.error(f"Daily job failed: {exc}")
         else:
+            progress_bar.progress(1.0, text="Daily job completed")
+            status_box.update(label="Daily job completed", state="complete", expanded=False)
             st.success("Daily job completed.")
             st.json(result)
 
