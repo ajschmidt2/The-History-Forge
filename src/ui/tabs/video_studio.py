@@ -884,11 +884,11 @@ def tab_video_compile() -> None:
             st.success(
                 "Loaded assets from Supabase "
                 "(images: {images}, audio: {audio}, videos: {videos}, music: {music}, generated videos: {generated}).".format(
-                    images=fetched_from_cloud["image"],
-                    audio=fetched_from_cloud["audio"],
-                    videos=fetched_from_cloud["video"],
-                    music=fetched_from_cloud["music"],
-                    generated=fetched_from_cloud["generated_video"],
+                    images=fetched_from_cloud.get("image", 0),
+                    audio=fetched_from_cloud.get("audio", 0),
+                    videos=fetched_from_cloud.get("video", 0),
+                    music=fetched_from_cloud.get("music", 0),
+                    generated=fetched_from_cloud.get("generated_video", 0),
                 )
             )
 
@@ -953,11 +953,11 @@ def tab_video_compile() -> None:
         st.success(
             "Synced from Supabase "
             "(images: {images}, audio: {audio}, videos: {videos}, music: {music}, generated videos: {generated}).".format(
-                images=fetched["image"],
-                audio=fetched["audio"],
-                videos=fetched["video"],
-                music=fetched["music"],
-                generated=fetched["generated_video"],
+                images=fetched.get("image", 0),
+                audio=fetched.get("audio", 0),
+                videos=fetched.get("video", 0),
+                music=fetched.get("music", 0),
+                generated=fetched.get("generated_video", 0),
             )
         )
         st.rerun()
