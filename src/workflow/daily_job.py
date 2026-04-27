@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from src.config.secrets import get_secret
 from src.constants import SUPABASE_VIDEO_BUCKET
@@ -45,6 +45,23 @@ _DAY_TO_CRON = {
     "sun": "SUN",
 }
 _CRON_TO_DAY = {value: key for key, value in _DAY_TO_CRON.items()}
+
+
+def _resolve_timezone(timezone_name: str) -> tuple[str, ZoneInfo | timezone]:
+    """Resolve a timezone key to a tzinfo object with a safe UTC fallback."""
+    requested_name = str(timezone_name or "").strip() or DEFAULT_DAILY_TIMEZONE
+    try:
+        return requested_name, ZoneInfo(requested_name)
+    except ZoneInfoNotFoundError:
+        pass
+
+    if requested_name != DEFAULT_DAILY_TIMEZONE:
+        try:
+            return DEFAULT_DAILY_TIMEZONE, ZoneInfo(DEFAULT_DAILY_TIMEZONE)
+        except ZoneInfoNotFoundError:
+            pass
+
+    return "UTC", timezone.utc
 
 
 # ---------------------------------------------------------------------------
@@ -234,11 +251,7 @@ def _normalize_daily_schedule(raw_schedule: dict[str, Any] | None) -> dict[str, 
         hour_local = 7
     hour_local = max(0, min(23, hour_local))
 
-    timezone_name = str(schedule.get("timezone", DEFAULT_DAILY_TIMEZONE) or DEFAULT_DAILY_TIMEZONE).strip()
-    try:
-        ZoneInfo(timezone_name)
-    except Exception:
-        timezone_name = DEFAULT_DAILY_TIMEZONE
+    timezone_name, _ = _resolve_timezone(str(schedule.get("timezone", DEFAULT_DAILY_TIMEZONE) or DEFAULT_DAILY_TIMEZONE).strip())
 
     return {
         "enabled": enabled,
@@ -254,7 +267,8 @@ def build_daily_workflow_cron(schedule: dict[str, Any], *, reference_dt: datetim
     if not normalized["enabled"]:
         return ""
 
-    tz = ZoneInfo(normalized["timezone"])
+    resolved_timezone, tz = _resolve_timezone(normalized["timezone"])
+    normalized["timezone"] = resolved_timezone
     reference = reference_dt or datetime.now(tz)
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=tz)
@@ -289,7 +303,8 @@ def parse_daily_workflow_cron(cron_expr: str, *, timezone_name: str = DEFAULT_DA
         return normalized
     utc_hour = max(0, min(23, utc_hour))
 
-    tz = ZoneInfo(normalized["timezone"])
+    resolved_timezone, tz = _resolve_timezone(normalized["timezone"])
+    normalized["timezone"] = resolved_timezone
     reference = reference_dt or datetime.now(timezone.utc)
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
