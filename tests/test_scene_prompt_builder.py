@@ -50,12 +50,14 @@ def test_generate_prompts_builds_structured_scene_spec() -> None:
         assert "moment_selection" in scene.prompt_spec
         assert "continuity lock" in scene.video_prompt_spec
         assert "epic scene" not in scene.image_prompt.lower()
-        assert "Scene uniqueness:" in scene.image_prompt
-        assert "Scene uniqueness:" in scene.video_prompt
+        assert "different story beat" in scene.image_prompt
+        assert "different story beat" in scene.video_prompt
         assert "Script anchor keywords:" not in scene.image_prompt
         assert "Script anchor keywords:" not in scene.video_prompt
         assert "Absolutely no readable text" in scene.image_prompt
         assert "Absolutely no readable text" in scene.video_prompt
+        assert "Primary subject:" not in scene.image_prompt
+        assert "Opening frame:" not in scene.video_prompt
 
 
 def test_generate_prompts_uses_global_location_without_repeating_character_appearance() -> None:
@@ -80,6 +82,36 @@ def test_generate_prompts_uses_global_location_without_repeating_character_appea
 
     assert "Constantinople, the Golden Horn" in out.image_prompt
     assert "appearance:" not in out.image_prompt
+
+
+def test_generate_prompts_uses_global_character_when_scene_subject_is_weak() -> None:
+    scene = Scene(
+        index=1,
+        title="Shadows of History",
+        script_excerpt="In the shadows of history, one young woman's bravery changed everything.",
+        visual_intent="shadow bravery turning point",
+    )
+    visual_context = {
+        "time_period": "American Revolution, 18th century",
+        "location": "Dutchess County, New York",
+        "clothing_style": "colonial riding clothes and simple military uniforms",
+        "visual_atmosphere": "moody twilight with lantern light",
+        "character_name": "Sybil Ludington",
+        "character_appearance": "young rider with determined expression",
+        "visual_style": "dramatic realism",
+        "color_palette": "deep blues and warm lantern golds",
+    }
+
+    [out] = generate_prompts_for_scenes(
+        [scene],
+        tone="Documentary",
+        style="Photorealistic cinematic",
+        visual_context=visual_context,
+    )
+
+    assert out.prompt_spec["primary_subject"] == "Sybil Ludington"
+    assert "Sybil Ludington" in out.image_prompt
+    assert "Primary subject:" not in out.image_prompt
 
 
 def test_generate_prompts_prefers_named_subjects_and_concrete_actions() -> None:

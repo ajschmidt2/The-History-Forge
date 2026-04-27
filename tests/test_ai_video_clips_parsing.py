@@ -106,6 +106,7 @@ def test_build_prompt_variants_sanitizes_and_shortens() -> None:
     assert all("children" not in prompt.lower() for prompt in variants)
     assert all("violent" not in prompt.lower() for prompt in variants)
     assert all("flames" not in prompt.lower() for prompt in variants)
+    assert all("never as visible writing" in prompt.lower() for prompt in variants)
 
 
 def test_ai_video_clips_retry_with_safer_prompt_variant(tmp_path: Path, monkeypatch) -> None:

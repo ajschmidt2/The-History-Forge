@@ -259,18 +259,21 @@ def _build_prompt_variants(
         f"Cinematic historical documentary shot. Subject: {subject}. Setting: {setting}, {period}. "
         f"Action: {motion}. Camera: {camera}. Atmosphere: {atmosphere}. "
         f"Keep identity stable, motion subtle, and the result safe, non-graphic, and realistic. "
-        f"No text, no logos, no explicit injury, no visible harm. Compose for {aspect_ratio}."
+        f"Treat prompt words as instructions only, never as visible writing. "
+        f"No text, no letters, no logos, no title cards, no signage, no captions, no subtitles, no explicit injury, no visible harm. Compose for {aspect_ratio}."
     )
     minimal = (
         f"Animate this historical image into a safe cinematic documentary clip. Subject: {subject}. "
         f"Setting: {setting}. Camera: {camera}. Subtle realistic motion only. "
-        f"No text, no explicit harm, no gore, no chaos. Aspect ratio {aspect_ratio}."
+        f"Treat prompt words as instructions only, never as visible writing. "
+        f"No text, no letters, no captions, no title cards, no signage, no explicit harm, no gore, no chaos. Aspect ratio {aspect_ratio}."
     )
     variants = [base_prompt, concise, minimal]
     if opening:
         variants.insert(
             1,
-            f"{opening}. Camera: {camera}. Keep the scene historically grounded, safe, non-graphic, and visually distinct from neighboring stills. No text. Aspect ratio {aspect_ratio}.",
+            f"{opening}. Camera: {camera}. Keep the scene historically grounded, safe, non-graphic, and visually distinct from neighboring stills. "
+            f"Treat prompt words as instructions only, never as visible writing. No text, no letters, no captions, no signage. Aspect ratio {aspect_ratio}.",
         )
     deduped: list[str] = []
     seen: set[str] = set()
@@ -278,6 +281,12 @@ def _build_prompt_variants(
         cleaned = _sanitize_video_prompt(variant)
         if len(cleaned) > 700:
             cleaned = _trim_sentence(cleaned, 700)
+        phrase = "Treat prompt words as instructions only, never as visible writing."
+        if "never as visible writing" not in cleaned.lower():
+            available = 700 - len(phrase) - 1
+            if available > 0 and len(cleaned) > available:
+                cleaned = cleaned[:available].rsplit(" ", 1)[0].rstrip(" ,.;")
+            cleaned = f"{cleaned} {phrase}".strip()
         if cleaned and cleaned not in seen:
             seen.add(cleaned)
             deduped.append(cleaned)

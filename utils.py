@@ -1448,6 +1448,7 @@ _SCENE_SUBJECT_STOPWORDS = {
     "have", "has", "had", "about", "during", "after", "before", "when", "where", "what", "which", "would",
     "could", "should", "through", "across", "between", "there", "these", "those", "his", "her", "its", "our",
     "your", "than", "then", "them", "been", "being", "also", "still", "very", "more", "most", "many",
+    "in", "on", "of", "by", "as", "at", "to", "up", "out", "off", "onto", "upon", "under",
     "year", "years", "moment", "moments", "story", "stories", "history", "historic", "empire", "empires",
     "fate", "legacy", "resilience", "symbol", "turning", "point", "points", "victory", "grasp", "massive",
     "formidable", "determine", "resourceful", "desperate", "bold", "across", "toward", "within", "throughout",
@@ -1455,6 +1456,8 @@ _SCENE_SUBJECT_STOPWORDS = {
     "most", "many", "much", "some", "such", "like", "made", "make", "into", "yet", "his", "her", "their",
     "path", "paths", "stakes", "effort", "journey", "crossing", "storybeat", "scene", "scenes", "narration",
     "thing", "things", "way", "ways", "days", "night", "nights", "day", "years", "century", "centuries",
+    "ultimately", "suddenly", "meanwhile", "perhaps", "maybe", "later", "earlier", "young", "american",
+    "changed", "change", "course", "became", "become", "shadows", "everything", "bravery", "courage",
 }
 
 _ROLE_CANDIDATES = [
@@ -1483,17 +1486,32 @@ _VISUAL_ACTION_VERBS = [
     "emerges", "emerge", "reveals", "reveal", "crowds", "crowd", "gathers", "gather",
 ]
 
+_WEAK_PRIMARY_SUBJECT_TERMS = {
+    "american revolution",
+    "french revolution",
+    "industrial revolution",
+    "world war",
+    "world war ii",
+    "world war i",
+    "civil war",
+    "historical subject",
+}
+
+_GENERIC_HUMAN_SUBJECTS = {
+    "woman", "women", "man's", "man", "men", "person", "people", "figure", "figures", "young figure",
+}
+
 
 def _scene_anchor_keywords(text: str, limit: int = 8) -> list[str]:
     words = re.findall(r"[A-Za-z][A-Za-z\-']{2,}", text or "")
     ranked: list[str] = []
     seen: set[str] = set()
     for word in words:
-        token = word.lower()
+        token = re.sub(r"'s$", "", word.lower())
         if token in _SCENE_SUBJECT_STOPWORDS or token in seen:
             continue
         seen.add(token)
-        ranked.append(word)
+        ranked.append(re.sub(r"'s$", "", word))
         if len(ranked) >= limit:
             break
     return ranked
@@ -1537,6 +1555,45 @@ def _extract_object_subject(text: str) -> str:
     return ""
 
 
+def _is_weak_primary_subject(subject: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", str(subject or "")).strip(" ,.")
+    if not cleaned:
+        return True
+    lowered = cleaned.lower()
+    lowered = re.sub(r"'s$", "", lowered)
+    if lowered in _WEAK_PRIMARY_SUBJECT_TERMS:
+        return True
+    if lowered in _GENERIC_HUMAN_SUBJECTS:
+        return True
+    parts = [part.lower() for part in re.findall(r"[A-Za-z][A-Za-z\-']+", cleaned)]
+    normalized_parts = [re.sub(r"'s$", "", part) for part in parts]
+    if not parts:
+        return True
+    if all(part in _SCENE_SUBJECT_STOPWORDS for part in normalized_parts):
+        return True
+    if len(normalized_parts) == 1 and (
+        normalized_parts[0] in _SCENE_SUBJECT_STOPWORDS
+        or normalized_parts[0] in _GENERIC_HUMAN_SUBJECTS
+        or len(normalized_parts[0]) <= 2
+    ):
+        return True
+    if len(normalized_parts) <= 2 and any(part in {"revolution", "war", "history", "mystery"} for part in normalized_parts):
+        return True
+    return False
+
+
+def _scene_has_pronoun_reference(text: str) -> bool:
+    return bool(re.search(r"\b(he|she|his|her|hers)\b", str(text or "").lower()))
+
+
+def _scene_implies_generic_person(text: str) -> bool:
+    lower = str(text or "").lower()
+    return bool(
+        re.search(r"\b(young\s+woman|young\s+man|woman|man|person|figure|rider|leader)\b", lower)
+        or re.search(r"\b(?:woman|man|person|figure|rider|leader)'s\b", lower)
+    )
+
+
 def _select_secondary_subjects(excerpt: str, primary_subject: str, anchor_keywords: list[str]) -> list[str]:
     lower_excerpt = (excerpt or "").lower()
     primary_parts = {part.lower() for part in re.findall(r"[A-Za-z][A-Za-z\-']+", primary_subject or "")}
@@ -1555,7 +1612,7 @@ def _select_secondary_subjects(excerpt: str, primary_subject: str, anchor_keywor
 
     for keyword in anchor_keywords:
         lowered = keyword.lower()
-        if lowered in primary_parts or lowered in seen or lowered in _SCENE_SUBJECT_STOPWORDS:
+        if lowered in primary_parts or lowered in seen or lowered in _SCENE_SUBJECT_STOPWORDS or lowered in _GENERIC_HUMAN_SUBJECTS:
             continue
         if lowered in _VISUAL_ACTION_VERBS:
             continue
@@ -1601,6 +1658,8 @@ def _extract_scene_action(excerpt: str, primary_subject: str, anchor_keywords: l
     details = merged_details[:3]
     if details:
         return _clean_generic_phrases(f"{primary_subject} {verb} beside " + ", ".join(details))
+    if verb.endswith("through"):
+        return _clean_generic_phrases(f"{primary_subject} {verb} the scene")
     return _clean_generic_phrases(f"{primary_subject} {verb} through the scene")
 
 
@@ -1627,10 +1686,11 @@ def _select_primary_subject(scene: Scene, anchor_keywords: list[str]) -> str:
 
     for keyword in anchor_keywords:
         cleaned = keyword.strip()
-        if cleaned and cleaned.lower() not in _SCENE_SUBJECT_STOPWORDS:
+        if cleaned and not _is_weak_primary_subject(cleaned):
             return cleaned
 
-    return _clean_generic_phrases(title_text) or "historical subject"
+    fallback = _clean_generic_phrases(title_text)
+    return fallback if not _is_weak_primary_subject(fallback) else "historical subject"
 
 
 def _classify_scene_intent(excerpt: str) -> str:
@@ -1818,21 +1878,26 @@ def _build_image_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> s
         str(spec.get("global_visual_style_control", "") or ""),
         limit=8,
     )
+    secondary_clause = ""
+    if spec.get("secondary_subjects"):
+        secondary_clause = f"Supporting elements include {', '.join(spec.get('secondary_subjects', []))}. "
+    objects_clause = ""
+    if spec.get("important_objects"):
+        objects_clause = f"Include period-appropriate objects such as {', '.join(spec.get('important_objects', []))}. "
+    visible_action = str(spec.get("visible_action", "") or "").strip()
     return _clean_generic_phrases(
         f"{_style}; {tone}. "
-        f"Frozen moment: {spec.get('moment_selection', '')}. "
-        f"Primary subject: {spec.get('primary_subject', '')}. "
-        f"Secondary subjects: {', '.join(spec.get('secondary_subjects', [])) or 'none'}. "
-        f"Setting: {spec.get('setting/location', '')}, {spec.get('time_period', '')}. "
-        f"Visible action: {spec.get('visible_action', '')}. "
-        f"Camera framing: {spec.get('camera_framing', '')}. "
-        f"Composition: {spec.get('composition_notes', '')}. "
-        f"Lighting: {spec.get('lighting', '')}. "
+        f"Create a cinematic historical documentary frame showing {visible_action} "
+        f"in {spec.get('setting/location', '')} during {spec.get('time_period', '')}. "
+        f"{secondary_clause}"
+        f"Use {spec.get('camera_framing', '')} with {spec.get('composition_notes', '')}. "
+        f"Light the scene with {spec.get('lighting', '')}. "
         f"{_palette_clause}"
-        f"Historical grounding: {spec.get('historical_context', '')}; {spec.get('wardrobe_or_architecture_details', '')}. "
-        f"Important objects: {', '.join(spec.get('important_objects', [])) or 'none'}. "
-        f"Scene uniqueness: {spec.get('scene_uniqueness_note', '')}. "
-        "Photoreal detail, subject priority. Absolutely no readable text, letters, words, numerals, subtitles, captions, logos, watermarks, or signage anywhere in frame."
+        f"Keep the scene historically grounded: {spec.get('historical_context', '')}; {spec.get('wardrobe_or_architecture_details', '')}. "
+        f"{objects_clause}"
+        f"{spec.get('scene_uniqueness_note', '')} "
+        "Treat every word in this prompt as off-screen instruction only, never as visible writing inside the image. "
+        "Absolutely no readable text, letters, words, numerals, subtitles, captions, logos, watermarks, signage, title cards, posters, banners, or written markings anywhere in frame."
         f"{_visual_control}"
     )
 
@@ -1841,18 +1906,23 @@ def _build_video_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> t
     _style = spec.get("visual_style", "") or style_phrase
     _palette = spec.get("color_palette", "")
     _palette_clause = f"Color palette: {_palette}. " if _palette else ""
+    visible_action = str(spec.get("visible_action", "") or "").strip()
     opening = _clean_generic_phrases(
-        f"Opening frame: {spec.get('primary_subject', '')} in {spec.get('setting/location', '')}, {spec.get('time_period', '')}, {spec.get('camera_framing', '')}"
+        f"{spec.get('primary_subject', '')} in {spec.get('setting/location', '')}, {spec.get('time_period', '')}, {spec.get('camera_framing', '')}"
     )
+    motion_phrase = visible_action
+    primary_subject_lower = str(spec.get("primary_subject", "") or "").strip().lower()
+    if motion_phrase and primary_subject_lower and not motion_phrase.lower().startswith(primary_subject_lower):
+        motion_phrase = f"{spec.get('primary_subject', '')} {motion_phrase}"
     subject_motion = _clean_generic_phrases(
-        f"Subject motion: {spec.get('primary_subject', '')} performs {spec.get('visible_action', '')} with stable body proportions and identity."
+        f"{motion_phrase} with stable body proportions and identity."
     )
     # Per-clip camera motion is injected at generation time (ai_video_clips.py);
     # this default covers scenes rendered as still-image video.
     camera_motion = spec.get("camera_motion_override") or "Camera motion: slow dolly-in with subtle lateral drift, no abrupt cuts."
     environment_motion = "Environment motion: smoke, dust, cloth, firelight, and ambient particles move naturally with consistent wind direction."
     ending = _clean_generic_phrases(
-        f"Ending frame: same subject, same location, same lighting direction, action resolves into {spec.get('emotional_tone', 'documentary tension')}."
+        f"Same subject, same location, same lighting direction, action resolves into {spec.get('emotional_tone', 'documentary tension')}."
     )
     continuity_lock = {
         "same clothing": True,
@@ -1870,12 +1940,13 @@ def _build_video_prompt(spec: dict[str, Any], style_phrase: str, tone: str) -> t
         "continuity lock": continuity_lock,
     }
     prompt = (
-        f"{_style}; {tone}. 5-second continuous historical shot. "
+        f"{_style}; {tone}. 5-second continuous historical documentary shot. "
         f"{_palette_clause}"
-        f"{opening}. {subject_motion}. {camera_motion}. {environment_motion}. {ending}. "
-        f"Keep subject stable and temporally continuous from first second to last second. "
-        f"Scene uniqueness: {spec.get('scene_uniqueness_note', '')}."
-        " Absolutely no readable text, letters, words, numerals, subtitles, captions, logos, watermarks, or signage anywhere in frame."
+        f"Begin with {opening}. Continue with {subject_motion}. {camera_motion}. {environment_motion}. End with {ending}. "
+        "Keep subject identity, wardrobe, location, and lighting stable from first second to last second. "
+        f"{spec.get('scene_uniqueness_note', '')}. "
+        "Treat every word in this prompt as off-screen instruction only, never as visible writing inside the shot. "
+        "Absolutely no readable text, letters, words, numerals, subtitles, captions, logos, watermarks, signage, title cards, posters, banners, or written markings anywhere in frame."
         f"{_control_keywords_block('Visual style guidance:', str(spec.get('global_visual_style_control', '') or ''), limit=8)}"
     )
     return _clean_generic_phrases(prompt), video_spec
@@ -2040,8 +2111,39 @@ def generate_prompts_for_scenes(
             _scene_text = f"{getattr(s, 'title', '')} {getattr(s, 'script_excerpt', '')}".lower()
             _character_tokens = [part for part in re.findall(r"[A-Za-z][A-Za-z\-']+", str(_vc.get("character_name", "") or "").lower()) if len(part) >= 3]
             _mentions_global_character = bool(_character_tokens) and any(token in _scene_text for token in _character_tokens)
-            if _vc.get("character_name") and (not str(spec.get("primary_subject", "")).strip() or _mentions_global_character):
+            _weak_subject = _is_weak_primary_subject(str(spec.get("primary_subject", "") or ""))
+            _pronoun_scene = _scene_has_pronoun_reference(getattr(s, "script_excerpt", ""))
+            _generic_person_scene = _scene_implies_generic_person(getattr(s, "script_excerpt", ""))
+            _replaced_with_global_character = False
+            if _vc.get("character_name") and (
+                not str(spec.get("primary_subject", "")).strip()
+                or _mentions_global_character
+                or _weak_subject
+                or (s.index == 1 and (_pronoun_scene or _generic_person_scene))
+            ):
                 spec["primary_subject"] = _vc["character_name"]
+                _replaced_with_global_character = True
+            if _replaced_with_global_character:
+                _anchor_keywords = list(spec.get("anchor_keywords", []) or [])
+                spec["secondary_subjects"] = _select_secondary_subjects(
+                    str(getattr(s, "script_excerpt", "") or ""),
+                    str(spec.get("primary_subject", "") or ""),
+                    _anchor_keywords,
+                )
+                spec["visible_action"] = _extract_scene_action(
+                    str(getattr(s, "script_excerpt", "") or ""),
+                    str(spec.get("primary_subject", "") or ""),
+                    _anchor_keywords,
+                )
+                spec["moment_selection"] = _clean_generic_phrases(
+                    f"{spec.get('primary_subject', '')} "
+                    f"{('interacting with ' + spec['secondary_subjects'][0]) if spec.get('secondary_subjects') else 'at a decisive story beat'} "
+                    f"in {spec.get('setting/location', '') or 'the historical setting'}"
+                )
+                spec["one_sentence_scene_summary"] = _clean_generic_phrases(
+                    f"{getattr(s, 'title', 'Scene') or 'Scene'} shows {spec.get('visible_action', '')} "
+                    f"in {spec.get('setting/location', '')} during {spec.get('time_period', '')}."
+                )
             if _vc.get("character_appearance") and _mentions_global_character:
                 existing_wardrobe = str(spec.get("wardrobe_or_architecture_details", "") or "")
                 appearance_note = f"appearance: {_vc['character_appearance']}"
@@ -2398,7 +2500,8 @@ def _build_safe_fallback_image_prompt(
         f"Setting: {setting}, {time_period}. "
         f"Camera framing: {framing}. Composition: {composition}. Lighting: {lighting}. "
         f"Period details: {wardrobe}. "
-        f"Compose for {aspect_ratio}. No text, no captions, no logos, no modern objects."
+        f"Compose for {aspect_ratio}. Treat prompt words as instructions only, never as visible writing. "
+        "No text, no captions, no logos, no title cards, no signage, and no modern objects."
     ).strip()
 
 
@@ -2416,12 +2519,21 @@ def _image_prompt_variants(
         visual_style=visual_style,
         visual_context_block=visual_context_block,
     )
-    return [
+    variants = [
         base_prompt,
-        f"{base_prompt}\n{_STRICT_IMAGE_CLEANLINESS_RULE}",
+        f"{base_prompt}\nTreat all prompt wording as off-screen instruction only. Never render letters, words, labels, or typography inside the scene.\n{_STRICT_IMAGE_CLEANLINESS_RULE}",
         fallback,
-        f"{fallback}\n{_STRICT_IMAGE_CLEANLINESS_RULE}",
+        f"{fallback}\nTreat all prompt wording as off-screen instruction only. Never render letters, words, labels, or typography inside the scene.\n{_STRICT_IMAGE_CLEANLINESS_RULE}",
     ]
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for variant in variants:
+        cleaned = _sanitize_prompt_for_safety(variant)
+        key = re.sub(r"\s+", " ", cleaned).strip()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(cleaned)
+    return deduped
 
 
 # ----------------------------
