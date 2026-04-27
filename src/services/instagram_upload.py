@@ -65,6 +65,19 @@ class InstagramUploadResult:
     permalink: str | None = None
 
 
+@dataclass(slots=True)
+class InstagramTokenHealth:
+    configured: bool
+    valid: bool
+    can_publish: bool
+    refresh_supported: bool
+    expires_at: datetime | None
+    seconds_remaining: int | None
+    app_id: str
+    scopes: list[str]
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # Credential helpers
 # ---------------------------------------------------------------------------
@@ -172,6 +185,76 @@ def should_refresh_access_token(
     seconds_remaining = int(expires_at - int(time.time()))
     refresh_window = max(1, int(window_days)) * 86400
     return seconds_remaining <= refresh_window, seconds_remaining
+
+
+def get_token_health(*, refresh_window_days: int = 7) -> InstagramTokenHealth:
+    user_id = _get_user_id()
+    token = _get_access_token()
+    app_id = str(get_secret("META_APP_ID") or get_secret("meta_app_id") or "").strip()
+
+    if not user_id or not token:
+        return InstagramTokenHealth(
+            configured=False,
+            valid=False,
+            can_publish=False,
+            refresh_supported=False,
+            expires_at=None,
+            seconds_remaining=None,
+            app_id=app_id,
+            scopes=[],
+            message="Instagram credentials are not configured.",
+        )
+
+    try:
+        token_data = inspect_access_token(token=token)
+        scopes = [str(scope).strip() for scope in (token_data.get("scopes") or []) if str(scope).strip()]
+        expires_at_raw = token_data.get("expires_at")
+        expires_at: datetime | None = None
+        seconds_remaining: int | None = None
+        if isinstance(expires_at_raw, int) and expires_at_raw > 0:
+            expires_at = datetime.fromtimestamp(expires_at_raw, tz=timezone.utc)
+            seconds_remaining = int(expires_at_raw - int(time.time()))
+
+        valid = bool(token_data.get("is_valid", False))
+        can_publish = False
+        if valid:
+            can_publish, publish_msg = validate_instagram_credentials()
+        else:
+            publish_msg = "Instagram token is not valid."
+
+        refresh_supported = bool(valid and app_id)
+        if valid and seconds_remaining is not None:
+            threshold = max(1, int(refresh_window_days)) * 86400
+            if seconds_remaining <= threshold:
+                message = f"{publish_msg} Token should be refreshed soon."
+            else:
+                message = publish_msg
+        else:
+            message = publish_msg
+
+        return InstagramTokenHealth(
+            configured=True,
+            valid=valid,
+            can_publish=can_publish,
+            refresh_supported=refresh_supported,
+            expires_at=expires_at,
+            seconds_remaining=seconds_remaining,
+            app_id=app_id,
+            scopes=scopes,
+            message=message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return InstagramTokenHealth(
+            configured=True,
+            valid=False,
+            can_publish=False,
+            refresh_supported=False,
+            expires_at=None,
+            seconds_remaining=None,
+            app_id=app_id,
+            scopes=[],
+            message=str(exc),
+        )
 
 
 def instagram_configured() -> bool:

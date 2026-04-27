@@ -18,6 +18,7 @@ import streamlit as st
 from src.config.secrets import get_secret
 from src.services.instagram_upload import (
     InstagramUploadError,
+    get_token_health as get_instagram_token_health,
     instagram_configured,
     upload_reel,
     validate_instagram_credentials,
@@ -312,10 +313,20 @@ def _render_youtube_tab(video_path: str, thumbnail_path: str, meta: dict) -> Non
 
 def _render_instagram_tab(video_path: str, meta: dict) -> None:
     is_authed, auth_msg = validate_instagram_credentials()
+    health = get_instagram_token_health()
     if is_authed:
         st.success(f"Instagram connected — {auth_msg}")
     else:
         st.error(f"Not connected: {auth_msg}")
+    if health.configured:
+        if health.valid and health.can_publish:
+            if health.seconds_remaining is not None:
+                days_left = max(0, int(health.seconds_remaining // 86400))
+                st.caption(f"Token health: valid • approx. {days_left} day(s) remaining • refresh_supported={health.refresh_supported}")
+            else:
+                st.caption(f"Token health: valid • refresh_supported={health.refresh_supported}")
+        else:
+            st.caption(f"Token health: {health.message}")
         with st.expander("How to connect Instagram", expanded=not is_authed):
             st.markdown(
                 """

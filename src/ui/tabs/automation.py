@@ -510,13 +510,26 @@ def _render_daily_automation_status(project_id: str) -> None:
     )
 
     st.markdown("##### Daily Instagram Posting")
-    from src.services.instagram_upload import validate_instagram_credentials as _validate_ig_credentials
+    from src.services.instagram_upload import (
+        get_token_health as _get_ig_token_health,
+        validate_instagram_credentials as _validate_ig_credentials,
+    )
 
     ig_ready, ig_status = _validate_ig_credentials()
+    ig_health = _get_ig_token_health()
     if ig_ready:
         st.success(f"Instagram connected: {ig_status}")
     else:
         st.info(f"Instagram not ready yet: {ig_status}")
+    if ig_health.configured:
+        if ig_health.valid and ig_health.can_publish:
+            if ig_health.seconds_remaining is not None:
+                ig_days_left = max(0, int(ig_health.seconds_remaining // 86400))
+                st.caption(f"Instagram token health: valid • approx. {ig_days_left} day(s) remaining • refresh_supported={ig_health.refresh_supported}")
+            else:
+                st.caption(f"Instagram token health: valid • refresh_supported={ig_health.refresh_supported}")
+        else:
+            st.caption(f"Instagram token health: {ig_health.message}")
     instagram_enabled = st.toggle(
         "Post daily videos to Instagram",
         value=bool(publishing.get("instagram_enabled", True)),
