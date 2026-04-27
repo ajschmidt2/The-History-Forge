@@ -582,7 +582,7 @@ def pull_project_assets(project_id: str, project_dir: Path) -> dict[str, int]:
             except OSError:
                 continue
 
-    return {key: value for key, value in results.items() if key in {"image", "audio", "video"} or value}
+    return results
 
 
 def list_all_bucket_videos(bucket: str = SUPABASE_VIDEO_BUCKET, limit: int = 100) -> list[dict[str, str]]:
