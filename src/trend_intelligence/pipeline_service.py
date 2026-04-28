@@ -93,8 +93,8 @@ class TrendIntelligencePipelineService:
 
         merged_results: list[PipelineTopicResult] = []
         for seed in seeds:
-            videos = self._safe_search_topic_videos(seed.topic, videos_per_topic)
-            analysis = self.analysis_adapter.analyze_topic(seed.topic, videos)
+            videos = self._safe_search_topic_videos(seed.topic, videos_per_topic, content_type="both")
+            analysis = self.analysis_adapter.analyze_topic(seed.topic, videos, content_type="both")
             merged_results.append(PipelineTopicResult(seed=seed, videos=tuple(videos), analysis=analysis))
 
         youtube_source = self.youtube_adapter.source_name if self.youtube_adapter is not None else "youtube_unavailable"
@@ -180,8 +180,17 @@ class TrendIntelligencePipelineService:
         else:
             youtube_query = f"{seed.topic} history"
 
-        videos = self._safe_search_topic_videos(youtube_query, videos_per_topic)
-        analysis = self.analysis_adapter.analyze_topic(seed.topic, videos, brand_focus=filters.brand_focus)
+        videos = self._safe_search_topic_videos(
+            youtube_query,
+            videos_per_topic,
+            content_type=filters.content_type,
+        )
+        analysis = self.analysis_adapter.analyze_topic(
+            seed.topic,
+            videos,
+            brand_focus=filters.brand_focus,
+            content_type=filters.content_type,
+        )
 
         video_candidates = tuple(self._to_video_candidate(video) for video in videos)
         raw_topic = self._to_raw_topic(seed)
@@ -192,9 +201,15 @@ class TrendIntelligencePipelineService:
 
         score = build_score_breakdown(
             trend_momentum=scoreTrendMomentum(raw_topic),
-            watch_time_potential=scoreWatchTimePotential(list(video_candidates)),
+            watch_time_potential=scoreWatchTimePotential(
+                list(video_candidates),
+                content_type=filters.content_type,
+            ),
             clickability=scoreClickability(seed.topic, list(video_candidates)),
-            competition_gap=scoreCompetitionGap(list(video_candidates)),
+            competition_gap=scoreCompetitionGap(
+                list(video_candidates),
+                content_type=filters.content_type,
+            ),
             brand_alignment=scoreBrandAlignment(
                 seed.topic,
                 filters.brand_focus,
@@ -226,11 +241,15 @@ class TrendIntelligencePipelineService:
             sampled_videos=video_candidates,
         )
 
-    def _safe_search_topic_videos(self, topic: str, videos_per_topic: int) -> list[VideoResult]:
+    def _safe_search_topic_videos(self, topic: str, videos_per_topic: int, *, content_type: str) -> list[VideoResult]:
         if self.youtube_adapter is None:
             return []
         try:
-            return self.youtube_adapter.search_topic_videos(topic, limit=videos_per_topic)
+            return self.youtube_adapter.search_topic_videos(
+                topic,
+                limit=videos_per_topic,
+                content_type=content_type,
+            )
         except Exception as exc:
             if self.youtube_adapter_error is None:
                 self.youtube_adapter_error = f"YouTube source query failed: {exc}"

@@ -27,7 +27,7 @@ class YouTubeSourceAdapter(ABC):
     source_name: str
 
     @abstractmethod
-    def search_topic_videos(self, topic: str, *, limit: int) -> list[VideoResult]:
+    def search_topic_videos(self, topic: str, *, limit: int, content_type: str = "both") -> list[VideoResult]:
         """Return normalized video result data for one topic."""
         raise NotImplementedError
 
@@ -38,6 +38,13 @@ class TopicAnalysisAdapter(ABC):
     source_name: str
 
     @abstractmethod
-    def analyze_topic(self, topic: str, videos: list[VideoResult], *, brand_focus: str = "all") -> TopicAnalysis:
+    def analyze_topic(
+        self,
+        topic: str,
+        videos: list[VideoResult],
+        *,
+        brand_focus: str = "all",
+        content_type: str = "both",
+    ) -> TopicAnalysis:
         """Return normalized explanation, angles, hooks, and thumbnail ideas."""
         raise NotImplementedError

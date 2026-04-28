@@ -110,3 +110,53 @@ def test_pipeline_service_records_youtube_init_error(monkeypatch):
 
     assert service.youtube_adapter is None
     assert service.youtube_adapter_error is not None
+
+
+def test_pipeline_service_passes_content_type_to_youtube_and_analysis():
+    class _SpyYoutube:
+        source_name = "spy_youtube"
+
+        def __init__(self):
+            self.calls = []
+
+        def search_topic_videos(self, topic: str, *, limit: int, content_type: str = "both"):
+            self.calls.append((topic, limit, content_type))
+            return MockYouTubeSourceAdapter().search_topic_videos(topic, limit=limit, content_type=content_type)
+
+    class _SpyAnalysis:
+        source_name = "spy_analysis"
+
+        def __init__(self):
+            self.calls = []
+
+        def analyze_topic(self, topic: str, videos, *, brand_focus: str = "all", content_type: str = "both"):
+            self.calls.append((topic, brand_focus, content_type, len(videos)))
+            from src.trend_intelligence.adapters.topic_analysis_adapter import DeterministicTopicAnalysisAdapter
+
+            return DeterministicTopicAnalysisAdapter().analyze_topic(
+                topic,
+                videos,
+                brand_focus=brand_focus,
+                content_type=content_type,
+            )
+
+    youtube = _SpyYoutube()
+    analysis = _SpyAnalysis()
+    service = TrendIntelligencePipelineService(
+        trends_adapter=MockTrendsSourceAdapter(),
+        youtube_adapter=youtube,
+        analysis_adapter=analysis,
+    )
+    filters = TrendScanFilters(
+        timeframe="7d",
+        content_type="shorts",
+        brand_focus="mysteries",
+        minimum_score=0,
+    )
+
+    service.run_trend_intelligence_scan(filters, topic_limit=2, videos_per_topic=2, max_workers=1)
+
+    assert youtube.calls
+    assert all(call[2] == "shorts" for call in youtube.calls)
+    assert analysis.calls
+    assert all(call[2] == "shorts" for call in analysis.calls)

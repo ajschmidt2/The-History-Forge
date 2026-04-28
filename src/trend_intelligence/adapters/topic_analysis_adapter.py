@@ -22,33 +22,78 @@ class DeterministicTopicAnalysisAdapter(TopicAnalysisAdapter):
 
     source_name = "deterministic_topic_analysis"
 
-    def analyze_topic(self, topic: str, videos: list[VideoResult], *, brand_focus: str = "all") -> TopicAnalysis:
+    def analyze_topic(
+        self,
+        topic: str,
+        videos: list[VideoResult],
+        *,
+        brand_focus: str = "all",
+        content_type: str = "both",
+    ) -> TopicAnalysis:
         video_count = len(videos)
         top_channel = videos[0].channel_title if videos else "N/A"
         avg_views = int(sum(video.view_count for video in videos) / video_count) if video_count else 0
+        angle_mode = "documentary deep dive" if content_type in {"long-form", "both"} else "high-retention short"
+        topic_lower = topic.lower()
+        if any(term in topic_lower for term in ("mystery", "disappearance", "secret", "what happened", "lost")):
+            angles = (
+                f"The strongest evidence in the {topic} mystery",
+                f"What most retellings of {topic} leave out",
+                f"The most credible explanation for {topic}",
+            )
+            hooks = (
+                f"This history mystery still doesn't sit right.",
+                f"The evidence behind {topic} is stranger than the legend.",
+                f"Most people know the myth, not what likely happened.",
+            )
+            thumbs = (
+                "Key figure or location + a single unsettling clue",
+                "Before/after evidence board layout with one bold focal object",
+                "Historic photo or map detail with one red circle highlight",
+            )
+        elif any(term in topic_lower for term in ("forgotten", "hero", "general", "woman", "who was", "life of")):
+            angles = (
+                f"Why {topic} deserves a second look",
+                f"The decision that made {topic} historically important",
+                f"How later retellings pushed {topic} into the background",
+            )
+            hooks = (
+                f"History almost erased this person.",
+                f"You probably know the event but not the person who shaped it.",
+                f"This overlooked figure changed more than most textbooks admit.",
+            )
+            thumbs = (
+                "Single portrait + one bold emotional word",
+                "Known famous figure contrasted with the overlooked subject",
+                "Historic portrait with strong date or battlefield/map cue",
+            )
+        else:
+            angles = (
+                f"What most people miss about {topic}",
+                f"The chain reaction that made {topic} inevitable",
+                f"Why {topic} still matters more than it seems",
+            )
+            hooks = (
+                f"The real story of {topic} is more dramatic than the headline.",
+                f"One decision changed the course of {topic}.",
+                f"The part of {topic} that keeps people watching is rarely the beginning.",
+            )
+            thumbs = (
+                "Central figure or location + conflict-driven contrast",
+                "Map or artifact close-up with one sharp focal detail",
+                "Before/after visual framing that implies consequence",
+            )
 
         return TopicAnalysis(
             topic=topic,
             explanation=(
                 f"{topic} is trending due to sustained discovery signals and {video_count} related uploads. "
                 f"Observed top-channel pattern: {top_channel}. "
-                f"Average sampled views: {avg_views:,}."
+                f"Average sampled views: {avg_views:,}. Recommended packaging bias: {angle_mode}."
             ),
-            angles=(
-                f"What most people miss about {topic}",
-                f"The chain reaction that made {topic} inevitable",
-                f"How {topic} still impacts current geopolitics",
-            ),
-            hooks=(
-                f"You were probably taught {topic} backwards.",
-                f"This one decision changed {topic} forever.",
-                f"The hidden catalyst behind {topic} nobody mentions.",
-            ),
-            thumbnail_ideas=(
-                f"Split timeline graphic showing before/after {topic}",
-                f"Historic map + bold text: '{topic}: WHY NOW?'",
-                "Portrait close-up + turning-point date in red",
-            ),
+            angles=angles,
+            hooks=hooks,
+            thumbnail_ideas=thumbs,
             source=self.source_name,
         )
 
@@ -73,12 +118,19 @@ class OpenAITopicAnalysisAdapter(TopicAnalysisAdapter):
         self._api_key = str(get_secret("OPENAI_API_KEY", "") or "")
         self._enabled = str(get_secret("TREND_INTELLIGENCE_OPENAI_ENABLED", "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
-    def analyze_topic(self, topic: str, videos: list[VideoResult], *, brand_focus: str = "all") -> TopicAnalysis:
+    def analyze_topic(
+        self,
+        topic: str,
+        videos: list[VideoResult],
+        *,
+        brand_focus: str = "all",
+        content_type: str = "both",
+    ) -> TopicAnalysis:
         if not self._enabled or not str(getattr(self, "_api_key", "") or "").strip():
-            return self.fallback.analyze_topic(topic, videos, brand_focus=brand_focus)
+            return self.fallback.analyze_topic(topic, videos, brand_focus=brand_focus, content_type=content_type)
         try:
             from src.ai.provider_router import get_router
-            prompt = _build_prompt(topic, videos, brand_focus=brand_focus)
+            prompt = _build_prompt(topic, videos, brand_focus=brand_focus, content_type=content_type)
             raw = get_router().generate_structured(prompt.user, system=prompt.system, task_type="json")
             parsed = _parse_response(raw)
             return TopicAnalysis(
@@ -91,10 +143,15 @@ class OpenAITopicAnalysisAdapter(TopicAnalysisAdapter):
             )
         except Exception:
             logger.exception("Topic analysis provider failed. Falling back to deterministic analysis.")
-            return self.fallback.analyze_topic(topic, videos, brand_focus=brand_focus)
+            return self.fallback.analyze_topic(topic, videos, brand_focus=brand_focus, content_type=content_type)
 
-
-def _build_prompt(topic: str, videos: list[VideoResult], *, brand_focus: str = "all") -> TopicAnalysisPrompt:
+def _build_prompt(
+    topic: str,
+    videos: list[VideoResult],
+    *,
+    brand_focus: str = "all",
+    content_type: str = "both",
+) -> TopicAnalysisPrompt:
     condensed_videos = [
         {
             "title": video.title,
@@ -114,15 +171,21 @@ def _build_prompt(topic: str, videos: list[VideoResult], *, brand_focus: str = "
         if brand_focus.lower() != "all"
         else "The creator covers all areas of history."
     )
+    format_instruction = {
+        "shorts": "Optimize for YouTube Shorts: immediate hook, 45-70 second payoff, one core reveal.",
+        "long-form": "Optimize for long-form YouTube documentaries: curiosity gap opening, sustained structure, retention through escalating reveals.",
+        "both": "Optimize for YouTube first and propose ideas that can stretch into either a documentary or a short companion cut.",
+    }.get(content_type, "Optimize for YouTube history storytelling.")
 
     system = (
-        "You are a trend intelligence strategist for history-focused video channels. "
+        "You are a trend intelligence strategist for a cinematic history YouTube channel called History Crossroads. "
         "Return strict JSON only and never include markdown."
     )
     user = (
         "Analyze why this history topic may be trending and produce creator-ready ideation.\n"
         f"Topic: {topic}\n"
         f"Creator focus: {focus_instruction}\n"
+        f"Packaging mode: {format_instruction}\n"
         f"Sampled videos (JSON): {json.dumps(condensed_videos, ensure_ascii=False)}\n\n"
         "Return JSON with exactly this shape:\n"
         "{\n"
@@ -133,6 +196,8 @@ def _build_prompt(topic: str, videos: list[VideoResult], *, brand_focus: str = "
         "}\n"
         "Rules:\n"
         "- Keep each item concise and specific to this topic and the creator focus.\n"
+        "- Favor hooks and thumbnail directions that suit YouTube history audiences: mystery, reversal, forgotten figure, stakes, consequence, evidence, or hidden cause.\n"
+        "- Avoid bland school-report phrasing.\n"
         "- No numbering in strings.\n"
         "- Avoid generic advice and avoid policy/safety disclaimers.\n"
     )

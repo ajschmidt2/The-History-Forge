@@ -167,8 +167,14 @@ class MockYouTubeSourceAdapter(YouTubeSourceAdapter):
     def __init__(self, api_key: str | None = None) -> None:
         self.api_key = api_key or get_secret("YOUTUBE_API_KEY")
 
-    def search_topic_videos(self, topic: str, *, limit: int) -> list[VideoResult]:
+    def search_topic_videos(self, topic: str, *, limit: int, content_type: str = "both") -> list[VideoResult]:
         base_title = topic.split(":")[0].strip()
+        if content_type == "shorts":
+            durations = [1.1, 0.95, 1.25, 1.4]
+        elif content_type == "long-form":
+            durations = [18.0, 22.0, 16.5, 24.0]
+        else:
+            durations = [18.0, 1.1, 20.5, 0.95]
         return [
             VideoResult(
                 topic=topic,
@@ -179,7 +185,7 @@ class MockYouTubeSourceAdapter(YouTubeSourceAdapter):
                 like_count=13_500 - (idx * 800),
                 comment_count=1_250 - (idx * 90),
                 published_at="2026-02-01T00:00:00Z",
-                duration_minutes=18.0 + idx,
+                duration_minutes=durations[idx % len(durations)],
                 source=self.source_name,
             )
             for idx in range(max(0, limit))

@@ -8,7 +8,7 @@ from src.ui.trend_intelligence_types import ScriptBuilderPayload, TopicResult, T
 def render_page_header() -> None:
     st.header("📈 Trend Intelligence")
     st.caption(
-        "Scan emerging history content opportunities with score-based signals and practical creative angles."
+        "Scan emerging history content opportunities with score-based signals, YouTube-aware packaging cues, and practical creative angles for History Crossroads."
     )
 
 
@@ -59,9 +59,21 @@ def _options_or_fallback(options: list[str], fallback: str) -> list[str]:
     return sanitized if sanitized else [fallback]
 
 
+def _format_fit_label(topic: TopicResult) -> str:
+    watch = topic.score_breakdown.watch_time_potential_score
+    click = topic.score_breakdown.clickability_score
+    gap = topic.score_breakdown.competition_gap_score
+    if watch >= 78 and gap >= 55:
+        return "Best fit: Long-form documentary"
+    if click >= 76 and gap >= 45:
+        return "Best fit: YouTube Short or teaser-led package"
+    return "Best fit: Flexible package with long-form core and short companion cuts"
+
+
 def render_topic_card(topic: TopicResult, idx: int) -> ScriptBuilderPayload | None:
     with st.container(border=True):
         st.subheader(topic.topic_title)
+        st.caption(_format_fit_label(topic))
 
         score_cols = st.columns(3)
         score_cols[0].metric("Total Score", topic.total_score)

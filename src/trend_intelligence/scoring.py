@@ -5,6 +5,8 @@ from src.trend_intelligence.brand_profile import (
     BrandProfile,
     ChannelPerformanceSnapshot,
 )
+from datetime import UTC, datetime
+
 from src.trend_intelligence.types import RawTrendTopic, TopicScoreBreakdown, YouTubeVideoCandidate
 
 
@@ -23,48 +25,72 @@ def scoreTrendMomentum(topic: RawTrendTopic) -> float:
     return clamp_score(signal_component + growth_component + regional_component)
 
 
-def scoreWatchTimePotential(video_candidates: list[YouTubeVideoCandidate]) -> float:
+def scoreWatchTimePotential(video_candidates: list[YouTubeVideoCandidate], *, content_type: str = "both") -> float:
     """Return a deterministic placeholder watch-time potential score (0-100)."""
     if not video_candidates:
         return 50.0
 
-    # Placeholder logic: favor longer average duration and stronger engagement density.
-    # TODO: Replace with a watch-time prediction model from channel/topic retention history.
     avg_duration_minutes = sum(v.duration_seconds for v in video_candidates) / len(video_candidates) / 60
-    duration_component = min(60.0, avg_duration_minutes * 3.0)
+    normalized_type = (content_type or "both").strip().lower()
+    if normalized_type == "shorts":
+        duration_fit = sum(1 for v in video_candidates if 0.6 <= (v.duration_seconds / 60) <= 1.35) / len(video_candidates)
+        duration_component = 55.0 * duration_fit
+    elif normalized_type == "long-form":
+        duration_fit = sum(1 for v in video_candidates if 8.0 <= (v.duration_seconds / 60) <= 28.0) / len(video_candidates)
+        depth_bonus = min(15.0, avg_duration_minutes * 1.2)
+        duration_component = (45.0 * duration_fit) + depth_bonus
+    else:
+        duration_component = min(55.0, avg_duration_minutes * 2.4)
 
     avg_engagement_rate = sum((v.likes + v.comments) / max(v.views, 1) for v in video_candidates) / len(video_candidates)
-    engagement_component = min(40.0, avg_engagement_rate * 1200)
+    avg_comments_rate = sum(v.comments / max(v.views, 1) for v in video_candidates) / len(video_candidates)
+    engagement_component = min(35.0, avg_engagement_rate * 950)
+    comment_component = min(10.0, avg_comments_rate * 2200)
 
-    return clamp_score(duration_component + engagement_component)
+    return clamp_score(duration_component + engagement_component + comment_component)
 
 
 def scoreClickability(topic: str, video_candidates: list[YouTubeVideoCandidate]) -> float:
     """Return a deterministic placeholder clickability score (0-100)."""
-    # Placeholder logic: combine known clickable keywords and view concentration.
-    # TODO: Replace with a title/thumbnail CTR estimation pipeline.
-    keyword_bonus_terms = ("why", "how", "secret", "collapse", "fall", "truth")
-    keyword_bonus = 15.0 if any(term in topic.lower() for term in keyword_bonus_terms) else 0.0
+    topic_lower = topic.lower()
+    keyword_bonus_terms = ("why", "how", "secret", "collapse", "fall", "truth", "forgotten", "mystery", "lost", "hidden")
+    keyword_bonus = 14.0 if any(term in topic_lower for term in keyword_bonus_terms) else 0.0
+    specificity_bonus = 8.0 if any(ch.isdigit() for ch in topic) or ":" in topic or " of " in topic_lower else 0.0
 
     if not video_candidates:
-        return clamp_score(45.0 + keyword_bonus)
+        return clamp_score(42.0 + keyword_bonus + specificity_bonus)
 
     avg_views = sum(v.views for v in video_candidates) / len(video_candidates)
     max_views = max(v.views for v in video_candidates)
-    view_ratio_component = 85.0 * (avg_views / max(max_views, 1))
-    return clamp_score(view_ratio_component + keyword_bonus)
+    title_keyword_hits = 0
+    title_patterns = ("secret", "forgotten", "why", "how", "mystery", "true story", "real story", "untold")
+    for video in video_candidates:
+        title_lower = video.title.lower()
+        if any(pattern in title_lower for pattern in title_patterns):
+            title_keyword_hits += 1
+    title_pattern_component = min(16.0, (title_keyword_hits / len(video_candidates)) * 16.0)
+    view_ratio_component = 62.0 * (avg_views / max(max_views, 1))
+    return clamp_score(18.0 + view_ratio_component + keyword_bonus + specificity_bonus + title_pattern_component)
 
 
-def scoreCompetitionGap(video_candidates: list[YouTubeVideoCandidate]) -> float:
+def scoreCompetitionGap(video_candidates: list[YouTubeVideoCandidate], *, content_type: str = "both") -> float:
     """Return a deterministic placeholder competition-gap score (0-100)."""
     if not video_candidates:
         return 85.0
 
-    # Placeholder logic: fewer high-view incumbents means larger competition gap.
-    # TODO: Replace with SERP saturation and competitor-authority analysis.
     high_competition_count = sum(1 for video in video_candidates if video.views >= 500_000)
     high_competition_ratio = high_competition_count / len(video_candidates)
-    return clamp_score((1.0 - high_competition_ratio) * 100.0)
+    now = datetime.now(UTC)
+    recent_count = sum(1 for video in video_candidates if (now - video.published_at).days <= 30)
+    recent_ratio = recent_count / len(video_candidates)
+    duplicate_prefixes = len({video.title.lower().split(":")[0].strip()[:32] for video in video_candidates})
+    freshness_penalty = recent_ratio * 18.0
+    saturation_penalty = (1.0 - (duplicate_prefixes / len(video_candidates))) * 14.0
+    format_penalty = 0.0
+    if (content_type or "both").strip().lower() == "shorts":
+        shorts_dense = sum(1 for v in video_candidates if v.duration_seconds <= 90) / len(video_candidates)
+        format_penalty = shorts_dense * 8.0
+    return clamp_score(((1.0 - high_competition_ratio) * 100.0) - freshness_penalty - saturation_penalty - format_penalty)
 
 
 def scoreBrandAlignment(

@@ -46,6 +46,50 @@ def test_individual_scores_are_deterministic_and_normalized():
     assert 0 <= scoreBrandAlignment(topic.topic, "ancient history") <= 100
 
 
+def test_watch_time_scoring_responds_to_content_type():
+    shorts = [
+        _video(views=90_000, likes=4_500, comments=320, duration_seconds=55),
+        _video(views=140_000, likes=6_800, comments=510, duration_seconds=62),
+    ]
+    long_form = [
+        _video(views=220_000, likes=8_400, comments=900, duration_seconds=900),
+        _video(views=310_000, likes=11_000, comments=1300, duration_seconds=1320),
+    ]
+
+    assert scoreWatchTimePotential(shorts, content_type="shorts") > scoreWatchTimePotential(shorts, content_type="long-form")
+    assert scoreWatchTimePotential(long_form, content_type="long-form") > scoreWatchTimePotential(long_form, content_type="shorts")
+
+
+def test_clickability_rewards_curiosity_packaging_terms():
+    videos = [
+        YouTubeVideoCandidate(
+            video_id="v1",
+            title="The Forgotten General Who Changed WWII",
+            channel_title="History Channel",
+            views=120_000,
+            likes=4_000,
+            comments=350,
+            duration_seconds=700,
+            published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+        YouTubeVideoCandidate(
+            video_id="v2",
+            title="The Secret Behind Rome's Sudden Collapse",
+            channel_title="History Channel",
+            views=240_000,
+            likes=8_000,
+            comments=700,
+            duration_seconds=900,
+            published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+    ]
+
+    strong = scoreClickability("The Forgotten General Who Changed WWII", videos)
+    plain = scoreClickability("World War II military strategy", videos)
+
+    assert strong > plain
+
+
 def test_overall_score_uses_expected_weights():
     overall = scoreTopicOverall(
         trend_momentum=80,

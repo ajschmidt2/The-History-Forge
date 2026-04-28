@@ -59,7 +59,7 @@ class YouTubeTopicSourceAdapter(YouTubeSourceAdapter):
         if not self.enabled:
             logger.warning("YOUTUBE_API_KEY is missing or empty; YouTube Trend adapter is disabled.")
 
-    def search_topic_videos(self, topic: str, *, limit: int) -> list[VideoResult]:
+    def search_topic_videos(self, topic: str, *, limit: int, content_type: str = "both") -> list[VideoResult]:
         safe_limit = max(0, int(limit))
         if safe_limit == 0:
             return []
@@ -72,13 +72,20 @@ class YouTubeTopicSourceAdapter(YouTubeSourceAdapter):
             client = self._client()
         except Exception:
             logger.exception("YouTube API client initialization failed; using fallback adapter.")
-            return self.fallback.search_topic_videos(topic, limit=safe_limit)
+            return self.fallback.search_topic_videos(topic, limit=safe_limit, content_type=content_type)
 
         if client is None:
-            return self.fallback.search_topic_videos(topic, limit=safe_limit)
+            return self.fallback.search_topic_videos(topic, limit=safe_limit, content_type=content_type)
 
         try:
-            search_hits = self._search_videos(client=client, topic=topic, limit=safe_limit)
+            query, duration_filter, order = _build_youtube_query(topic=topic, content_type=content_type)
+            search_hits = self._search_videos(
+                client=client,
+                topic=query,
+                limit=safe_limit,
+                video_duration=duration_filter,
+                order=order,
+            )
             if not search_hits:
                 return []
 
@@ -98,9 +105,9 @@ class YouTubeTopicSourceAdapter(YouTubeSourceAdapter):
         except Exception:
             logger.exception(
                 "YouTube topic lookup failed; using fallback adapter.",
-                extra={"topic": topic, "limit": safe_limit, "source": self.source_name},
+                extra={"topic": topic, "limit": safe_limit, "source": self.source_name, "content_type": content_type},
             )
-            return self.fallback.search_topic_videos(topic, limit=safe_limit)
+            return self.fallback.search_topic_videos(topic, limit=safe_limit, content_type=content_type)
 
     def _client(self):
         if not self.enabled:
@@ -111,7 +118,15 @@ class YouTubeTopicSourceAdapter(YouTubeSourceAdapter):
             logger.exception("Failed to initialize YouTube Data API client.")
             return None
 
-    def _search_videos(self, *, client: Any, topic: str, limit: int) -> list[_SearchVideoHit]:
+    def _search_videos(
+        self,
+        *,
+        client: Any,
+        topic: str,
+        limit: int,
+        video_duration: str,
+        order: str,
+    ) -> list[_SearchVideoHit]:
         self._throttle()
         response = (
             client.search()
@@ -121,7 +136,8 @@ class YouTubeTopicSourceAdapter(YouTubeSourceAdapter):
                 type="video",
                 maxResults=min(limit, 50),
                 relevanceLanguage="en",
-                order="relevance",
+                order=order,
+                videoDuration=video_duration,
             )
             .execute()
         )
@@ -282,3 +298,12 @@ def _iso_duration_to_seconds(value: str) -> int:
         number = ""
 
     return total
+
+
+def _build_youtube_query(*, topic: str, content_type: str) -> tuple[str, str, str]:
+    normalized = (content_type or "both").strip().lower()
+    if normalized == "shorts":
+        return (f"{topic} history shorts", "short", "relevance")
+    if normalized == "long-form":
+        return (f"{topic} history documentary", "long", "relevance")
+    return (f"{topic} history documentary", "any", "relevance")
