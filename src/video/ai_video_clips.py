@@ -2,9 +2,8 @@
 src/video/ai_video_clips.py
 
 Animates the first and middle generated scene images into true AI video clips.
-Supports three providers:
-  - google_veo_lite: Gemini/Veo Fast image-to-video
-  - falai: fal.ai Wan image-to-video fallback
+Supports clip generation through fal.ai for workflow automation.
+Legacy Google Veo support remains available only for direct low-level callers.
 
 Provider is selected at call time via the `provider` argument.
 """
@@ -109,7 +108,7 @@ def _clip_target_indexes(scene_count: int) -> tuple[int, int, int, int]:
     )
 
 
-def normalize_ai_video_provider(provider: object, fallback: str = "google_veo_lite") -> str:
+def normalize_ai_video_provider(provider: object, fallback: str = "falai") -> str:
     """Normalize provider settings and migrate removed legacy choices."""
     value = (str(provider or fallback).strip().lower() or fallback)
     if value == "sora":
@@ -308,8 +307,15 @@ def _validate_fal_inputs(prompt: str, image_path: Optional[Path], aspect_ratio: 
     if image_path is not None and not image_path.exists():
         raise ValueError(f"Image path does not exist: {image_path}")
 
-def _resolve_fal_model(workflow_logger: logging.Logger) -> tuple[str, bool]:
-    override_model = str(get_secret("fal_video_model", "") or "").strip()
+def _resolve_fal_model(
+    workflow_logger: logging.Logger,
+    model_override: str = "",
+) -> tuple[str, bool]:
+    # Caller-supplied override takes priority, then secret/env, then default.
+    override_model = (
+        str(model_override or "").strip()
+        or str(get_secret("fal_video_model", "") or "").strip()
+    )
     candidate = override_model or DEFAULT_FAL_VIDEO_MODEL
     ok, detail = validate_fal_model_slug(candidate)
     if not ok:
@@ -333,11 +339,12 @@ def _generate_falai_video_clip(
     duration_seconds: int = 5,
     image_path: Optional[Path] = None,
     workflow_logger: logging.Logger | None = None,
+    fal_video_model: str = "",
 ) -> tuple[bool, str]:
     _validate_fal_inputs(prompt, image_path, aspect_ratio, duration_seconds)
     wlog = workflow_logger or logger
     debug_path = Path("data/projects") / project_id / "debug" / f"fal_video_{clip_label}.json"
-    model_slug, override_applied = _resolve_fal_model(wlog)
+    model_slug, override_applied = _resolve_fal_model(wlog, model_override=fal_video_model)
     if not override_applied:
         assert model_slug == WORKING_TEST_MODEL_SLUG
 
@@ -417,15 +424,16 @@ def generate_scene_video(
     duration_seconds,
     output_path,
     debug_dir=None,
+    fal_video_model: str = "",
 ):
     """Provider abstraction for scene clip generation."""
     provider_name = normalize_ai_video_provider(provider)
     if provider_name == "auto":
-        provider_name = normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "google_veo_lite"))
+        provider_name = normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "falai"))
     output = Path(output_path)
 
     if provider_name == "falai":
-        model_slug, _ = _resolve_fal_model(logger)
+        model_slug, _ = _resolve_fal_model(logger, model_override=fal_video_model)
         if not image_path:
             reason = "image input is required (upload, URL, data URI, or local file path)"
             return {
@@ -533,9 +541,10 @@ def generate_ai_video_clips(
     tmp_dir: Path,
     aspect_ratio: str = "9:16",
     duration_seconds: int = 5,
-    provider: str = "google_veo_lite",
+    provider: str = "falai",
     workflow_logger=None,
     clip_done_callback=None,
+    fal_video_model: str = "",
 ) -> tuple:
     """
     Main entry point called by the automation step runner.
@@ -545,7 +554,7 @@ def generate_ai_video_clips(
         tmp_dir:          Directory to write output MP4 files.
         aspect_ratio:     "9:16", "16:9", or "1:1".
         duration_seconds: Clip length for image-to-video providers.
-        provider:         "google_veo_lite", "falai", or "auto".
+        provider:         "falai", "google_veo_lite", or "auto".
 
     Returns:
         (opening_clip_path | None, mid_clip_path | None)
@@ -557,7 +566,7 @@ def generate_ai_video_clips(
     """
     provider = normalize_ai_video_provider(provider)
     if provider == "auto":
-        provider = normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "google_veo_lite"))
+        provider = normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "falai"))
     if provider not in SUPPORTED_PROVIDERS:
         raise ValueError(
             f"ai_video_clips: unknown provider '{provider}'. "
@@ -767,6 +776,7 @@ def generate_ai_video_clips(
                         duration_seconds=duration_seconds,
                         output_path=str(out_path),
                         debug_dir=Path("data/projects") / project_id / "debug",
+                        fal_video_model=fal_video_model,
                     )
                     ok = bool(scene_result.get("ok"))
                     reason = str(scene_result.get("error") or "")

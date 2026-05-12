@@ -6,6 +6,7 @@ from src.video.ai_video_clips import (
     extract_video_url,
     generate_ai_video_clips,
     is_valid_video_file,
+    normalize_ai_video_provider,
     write_video_artifact,
 )
 
@@ -35,6 +36,13 @@ def test_write_video_artifact_dict_without_video(tmp_path: Path) -> None:
     ok, reason = write_video_artifact({"status": "ok", "data": {}}, output)
     assert ok is False
     assert reason == "provider returned dict without video artifact"
+
+
+def test_normalize_ai_video_provider_defaults_to_falai() -> None:
+    assert normalize_ai_video_provider(None) == "falai"
+    assert normalize_ai_video_provider("auto") == "auto"
+    assert normalize_ai_video_provider("google_veo_lite") == "google_veo_lite"
+    assert normalize_ai_video_provider("sora") == "falai"
 
 
 def test_ai_video_clip_prompts_differentiate_from_neighboring_stills(tmp_path: Path, monkeypatch) -> None:

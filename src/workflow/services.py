@@ -47,6 +47,8 @@ from utils import (
     split_script_into_scenes,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class PipelineOptions:
@@ -346,6 +348,16 @@ def _try_set_session_state(key: str, value: object) -> None:
         pass
 
 
+def _resolve_ai_clip_provider(requested_provider: object) -> str:
+    """Coerce AI clip generation onto fal.ai for workflow automation."""
+    provider = str(requested_provider or "").strip().lower()
+    if provider in {"", "none"}:
+        return "falai"
+    if provider != "falai":
+        logger.warning("ai_video_clips requested provider=%s coerced_to=falai", provider)
+    return "falai"
+
+
 def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) -> StepResult:
     """Generate opening and midpoint AI video clips and persist paths to project payload."""
     import shutil
@@ -354,8 +366,10 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
 
     _logger = _workflow_logger(project_id)
     aspect_ratio = (options.aspect_ratio if options else None) or "9:16"
-    provider = normalize_ai_video_provider(
-        (options.ai_video_provider if options else None) or get_secret("HF_VIDEO_PROVIDER", "google_veo_lite")
+    provider = _resolve_ai_clip_provider(
+        normalize_ai_video_provider(
+            (options.ai_video_provider if options else None) or get_secret("HF_VIDEO_PROVIDER", "falai")
+        )
     )
 
     # Allow session_state overrides from the Automation tab per-run settings.
@@ -372,7 +386,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             import streamlit as st
             ss_provider = st.session_state.get("automation_run_provider", "")
             if ss_provider:
-                provider = normalize_ai_video_provider(ss_provider)
+                provider = _resolve_ai_clip_provider(normalize_ai_video_provider(ss_provider))
             aspect_ratio = st.session_state.get("automation_clip_aspect_ratio", aspect_ratio)
             duration_seconds = st.session_state.get("automation_clip_duration", 5)
         except Exception:  # noqa: BLE001
@@ -385,9 +399,9 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             _settings = load_daily_automation_settings()
             _preset_provider = str(_settings.get("preset", {}).get("ai_video_provider", "") or "")
             if _preset_provider:
-                provider = normalize_ai_video_provider(_preset_provider)
+                provider = _resolve_ai_clip_provider(normalize_ai_video_provider(_preset_provider))
             else:
-                provider = normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "google_veo_lite"))
+                provider = _resolve_ai_clip_provider(normalize_ai_video_provider(get_secret("HF_VIDEO_PROVIDER", "falai")))
         except Exception:  # noqa: BLE001
             pass
 

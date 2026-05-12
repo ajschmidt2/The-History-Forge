@@ -5,6 +5,7 @@ from src.workflow.services import (
     FullWorkflowResult,
     PipelineOptions,
     StepResult,
+    _resolve_ai_clip_provider,
     run_full_workflow,
 )
 from utils import Scene
@@ -121,3 +122,9 @@ def test_run_full_workflow_fails_ai_video_clips_when_enabled(tmp_path, monkeypat
 
     assert result.failed_step == "ai_video_clips"
     assert "0/4" in " ".join(result.warnings)
+
+
+def test_resolve_ai_clip_provider_forces_falai():
+    assert _resolve_ai_clip_provider("falai") == "falai"
+    assert _resolve_ai_clip_provider("google_veo_lite") == "falai"
+    assert _resolve_ai_clip_provider("auto") == "falai"

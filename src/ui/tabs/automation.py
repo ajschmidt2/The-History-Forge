@@ -18,10 +18,11 @@ from src.audio import (
     get_tts_provider_options,
     resolve_tts_settings,
 )
-from src.services.google_veo_video import google_veo_lite_configured
 from src.services.youtube_oauth import build_youtube_auth_url, resolve_youtube_redirect_uri
 from src.services.youtube_upload import exchange_code_for_token, run_local_oauth_sign_in, validate_youtube_credentials
 from src.video.ai_video_clips import SUPPORTED_PROVIDERS
+from src.services.fal_video_test import FAL_VIDEO_MODELS, DEFAULT_FAL_VIDEO_MODEL
+from image_gen import OPENAI_IMAGE_MODELS, DEFAULT_OPENAI_IMAGE_MODEL
 from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import DEFAULT_VOICE_ID
 from src.workflow.models import PIPELINE_STEPS
@@ -166,8 +167,8 @@ def _build_shorts_pipeline_options(base: PipelineOptions, music_track: str, sele
         include_subtitles=False,
         automation_mode="topic_to_short_video" if selected_mode == "topic_to_short_video" else selected_mode,
         script_profile="youtube_short_60s",
-        ai_video_provider="google_veo_lite",
-        image_provider="gemini",
+        ai_video_provider="falai",
+        image_provider="openai",
     )
 
 
@@ -227,7 +228,7 @@ def _render_workflow_progress(project_id: str, mode: str, progress_holder: Any, 
         step_label = current.replace('_', ' ').title()
         if current == "ai_video_clips":
             clips_progress = st.session_state.get("ai_clips_progress", "")
-            detail = f" â€” {clips_progress}" if clips_progress else " (this takes 5-10 minutes, please keep this tab open)"
+            detail = f" — {clips_progress}" if clips_progress else " (this takes 5-10 minutes, please keep this tab open)"
             st.write(f"Running step {current_idx} of {len(step_order)}: {step_label}{detail}")
         else:
             st.write(f"Running step {current_idx} of {len(step_order)}: {step_label}")
@@ -510,26 +511,13 @@ def _render_daily_automation_status(project_id: str) -> None:
     )
 
     st.markdown("##### Daily Instagram Posting")
-    from src.services.instagram_upload import (
-        get_token_health as _get_ig_token_health,
-        validate_instagram_credentials as _validate_ig_credentials,
-    )
+    from src.services.instagram_upload import validate_instagram_credentials as _validate_ig_credentials
 
     ig_ready, ig_status = _validate_ig_credentials()
-    ig_health = _get_ig_token_health()
     if ig_ready:
         st.success(f"Instagram connected: {ig_status}")
     else:
         st.info(f"Instagram not ready yet: {ig_status}")
-    if ig_health.configured:
-        if ig_health.valid and ig_health.can_publish:
-            if ig_health.seconds_remaining is not None:
-                ig_days_left = max(0, int(ig_health.seconds_remaining // 86400))
-                st.caption(f"Instagram token health: valid • approx. {ig_days_left} day(s) remaining • refresh_supported={ig_health.refresh_supported}")
-            else:
-                st.caption(f"Instagram token health: valid • refresh_supported={ig_health.refresh_supported}")
-        else:
-            st.caption(f"Instagram token health: {ig_health.message}")
     instagram_enabled = st.toggle(
         "Post daily videos to Instagram",
         value=bool(publishing.get("instagram_enabled", True)),
@@ -549,20 +537,81 @@ def _render_daily_automation_status(project_id: str) -> None:
     daily_transition_label = st.selectbox("Daily scene transition", options=list(_daily_transition_options.keys()), index=list(_daily_transition_options.keys()).index(_daily_transition_label))
     daily_transition_type = _daily_transition_options[daily_transition_label]
 
-    _daily_ai_options = ["None", "google_veo_lite", "falai", "auto"]
-    _daily_ai_default = str(preset.get("ai_video_provider", "google_veo_lite") or "google_veo_lite")
+    _daily_ai_options = ["falai", "None"]
+    _daily_ai_default = str(preset.get("ai_video_provider", "falai") or "falai")
     if _daily_ai_default not in _daily_ai_options:
-        _daily_ai_default = "google_veo_lite"
+        _daily_ai_default = "falai"
     daily_ai_provider = st.selectbox(
         "Daily AI video provider",
         options=_daily_ai_options,
         index=_daily_ai_options.index(_daily_ai_default),
         format_func=lambda p: {
             "None": "None",
-            "google_veo_lite": "Google Gemini Veo 3.1 Lite",
-            "falai": "fal.ai (Wan 2.2)",
-            "auto": "Auto (HF_VIDEO_PROVIDER)",
+            "falai": "fal.ai (image-to-video)",
         }.get(p, p),
+    )
+
+    # fal.ai video model selector (shown only when fal.ai is selected)
+    _fal_model_slugs = [slug for slug, _ in FAL_VIDEO_MODELS]
+    _fal_model_labels = {slug: label for slug, label in FAL_VIDEO_MODELS}
+    _fal_model_default = str(preset.get("fal_video_model", DEFAULT_FAL_VIDEO_MODEL) or DEFAULT_FAL_VIDEO_MODEL)
+    if _fal_model_default not in _fal_model_slugs:
+        _fal_model_default = DEFAULT_FAL_VIDEO_MODEL
+    if daily_ai_provider == "falai":
+        daily_fal_video_model = st.selectbox(
+            "fal.ai video model",
+            options=_fal_model_slugs,
+            format_func=lambda x: _fal_model_labels.get(x, x),
+            index=_fal_model_slugs.index(_fal_model_default),
+            key="daily_fal_video_model",
+            help="Select which fal.ai image-to-video model to use. Faster/cheaper vs. higher quality.",
+        )
+    else:
+        daily_fal_video_model = _fal_model_default
+
+    # Image provider selector
+    _daily_img_provider_options = ["openai", "falai", "gemini"]
+    _daily_img_provider_labels = {
+        "openai": "OpenAI (gpt-image-1 / DALL-E)",
+        "falai":  "fal.ai (FLUX Dev)",
+        "gemini": "Google Gemini / Imagen",
+    }
+    _daily_img_default = str(preset.get("image_provider", "openai") or "openai")
+    if _daily_img_default not in _daily_img_provider_options:
+        _daily_img_default = "openai"
+    daily_image_provider = st.selectbox(
+        "Daily image generator",
+        options=_daily_img_provider_options,
+        format_func=lambda x: _daily_img_provider_labels.get(x, x),
+        index=_daily_img_provider_options.index(_daily_img_default),
+        key="daily_image_provider",
+    )
+
+    # OpenAI image model selector (shown only when OpenAI is selected)
+    _openai_model_slugs = [slug for slug, _ in OPENAI_IMAGE_MODELS]
+    _openai_model_labels = {slug: label for slug, label in OPENAI_IMAGE_MODELS}
+    _openai_model_default = str(preset.get("openai_image_model", DEFAULT_OPENAI_IMAGE_MODEL) or DEFAULT_OPENAI_IMAGE_MODEL)
+    if _openai_model_default not in _openai_model_slugs:
+        _openai_model_default = DEFAULT_OPENAI_IMAGE_MODEL
+    if daily_image_provider == "openai":
+        daily_openai_image_model = st.selectbox(
+            "OpenAI image model",
+            options=_openai_model_slugs,
+            format_func=lambda x: _openai_model_labels.get(x, x),
+            index=_openai_model_slugs.index(_openai_model_default),
+            key="daily_openai_image_model",
+            help="gpt-image-1 is the newest/best. dall-e-2 is cheapest.",
+        )
+    else:
+        daily_openai_image_model = _openai_model_default
+
+    # Image search toggle
+    _enable_image_search_default = bool(preset.get("enable_image_search", False))
+    daily_enable_image_search = st.toggle(
+        "Enable historical image search",
+        value=_enable_image_search_default,
+        key="daily_enable_image_search",
+        help="When enabled, searches Wikimedia Commons, Library of Congress, and Unsplash for real historical images for each scene before AI generation.",
     )
 
     project_music_tracks = _list_music_tracks(project_dir(project_id) / "assets/music")
@@ -576,11 +625,25 @@ def _render_daily_automation_status(project_id: str) -> None:
     else:
         selected_daily_music = ""
 
-    save_col, run_col = st.columns(2)
-    daily_progress_holder = st.empty()
-    daily_log_holder = st.empty()
-    if save_col.button("Save daily automation settings", width="stretch"):
-        save_daily_automation_settings({
+    def _build_daily_preset_dict() -> dict:
+        return {
+            "scene_count": int(scene_count),
+            "target_word_count": int(target_word_count),
+            "target_duration_seconds": int(target_duration),
+            "subtitles_enabled": bool(subtitles_enabled),
+            "music_enabled": bool(music_enabled),
+            "music_relative_level": float(music_level),
+            "effects_style": daily_effects_style,
+            "scene_transition_type": daily_transition_type,
+            "ai_video_provider": daily_ai_provider if daily_ai_provider != "None" else "",
+            "fal_video_model": daily_fal_video_model,
+            "image_provider": daily_image_provider,
+            "openai_image_model": daily_openai_image_model,
+            "enable_image_search": bool(daily_enable_image_search),
+        }
+
+    def _build_daily_settings_dict() -> dict:
+        return {
             "topic_override": topic_override.strip(),
             "topic_direction": topic_direction.strip(),
             "selected_music_track": selected_daily_music if music_enabled else "",
@@ -590,75 +653,24 @@ def _render_daily_automation_status(project_id: str) -> None:
                 "instagram_enabled": bool(instagram_enabled),
             },
             "schedule": effective_schedule,
-            "preset": {
-                "scene_count": int(scene_count),
-                "target_word_count": int(target_word_count),
-                "target_duration_seconds": int(target_duration),
-                "subtitles_enabled": bool(subtitles_enabled),
-                "music_enabled": bool(music_enabled),
-                "music_relative_level": float(music_level),
-                "effects_style": daily_effects_style,
-                "scene_transition_type": daily_transition_type,
-                "ai_video_provider": daily_ai_provider if daily_ai_provider != "None" else "",
-            },
-        })
+            "preset": _build_daily_preset_dict(),
+        }
+
+    save_col, run_col = st.columns(2)
+    if save_col.button("Save daily automation settings", width="stretch"):
+        save_daily_automation_settings(_build_daily_settings_dict())
         if workflow_path.exists():
             updated = update_daily_workflow_schedule(workflow_text, effective_schedule, reference_dt=datetime.now())
             workflow_path.write_text(updated, encoding="utf-8")
         st.success("Daily automation settings saved.")
 
     if run_col.button("Run daily job now", width="stretch"):
-        save_daily_automation_settings({
-            "topic_override": topic_override.strip(),
-            "topic_direction": topic_direction.strip(),
-            "selected_music_track": selected_daily_music if music_enabled else "",
-            "publishing": {
-                "youtube_enabled": bool(youtube_enabled),
-                "youtube_privacy_status": youtube_privacy,
-                "instagram_enabled": bool(instagram_enabled),
-            },
-            "schedule": effective_schedule,
-            "preset": {
-                "scene_count": int(scene_count),
-                "target_word_count": int(target_word_count),
-                "target_duration_seconds": int(target_duration),
-                "subtitles_enabled": bool(subtitles_enabled),
-                "music_enabled": bool(music_enabled),
-                "music_relative_level": float(music_level),
-                "effects_style": daily_effects_style,
-                "scene_transition_type": daily_transition_type,
-                "ai_video_provider": daily_ai_provider if daily_ai_provider != "None" else "",
-            },
-        })
-        progress_bar = daily_progress_holder.progress(0.0, text="Starting daily job...")
-        status_box = daily_log_holder.status("Daily job in progress...", expanded=True)
-        daily_updates: list[str] = []
-
-        def _daily_progress_callback(event: dict[str, Any]) -> None:
-            step = str(event.get("step", "daily_job") or "daily_job")
-            status = str(event.get("status", "in_progress") or "in_progress").lower()
-            index = int(event.get("index", 0) or 0)
-            total = max(1, int(event.get("total", 1) or 1))
-            message = str(event.get("message", "") or "").strip()
-            detail = str(event.get("detail", "") or "").strip()
-            ratio = min(1.0, max(0.0, index / total))
-            label = f"{step}: {message or status}"
-            if detail:
-                label = f"{label} — {detail}"
-            daily_updates.append(label)
-            progress_bar.progress(ratio, text=label)
-            with status_box:
-                st.write(f"{index}/{total} · {label}")
-
+        save_daily_automation_settings(_build_daily_settings_dict())
         try:
-            result = run_daily_video_job(profile=HISTORY_CHANNEL, progress_callback=_daily_progress_callback)
+            result = run_daily_video_job(profile=HISTORY_CHANNEL)
         except Exception as exc:  # noqa: BLE001
-            progress_bar.progress(1.0, text="Daily job failed")
-            status_box.update(label="Daily job failed", state="error", expanded=True)
             st.error(f"Daily job failed: {exc}")
         else:
-            progress_bar.progress(1.0, text="Daily job completed")
-            status_box.update(label="Daily job completed", state="complete", expanded=False)
             st.success("Daily job completed.")
             st.json(result)
 
@@ -689,10 +701,10 @@ def tab_automation(project_id: str) -> None:
 
     st.markdown("#### Automation Settings")
     mode_label_map = {
-        "Topic â†’ 60s Short Video": "topic_to_short_video",
-        "Existing Script â†’ Full Workflow": "existing_script_full_workflow",
+        "Topic â†' 60s Short Video": "topic_to_short_video",
+        "Existing Script â†' Full Workflow": "existing_script_full_workflow",
     }
-    current_mode_label = "Topic â†’ 60s Short Video" if automation_mode == "topic_to_short_video" else "Existing Script â†’ Full Workflow"
+    current_mode_label = "Topic â†' 60s Short Video" if automation_mode == "topic_to_short_video" else "Existing Script â†' Full Workflow"
     selected_mode_label = st.selectbox("Automation Mode", options=list(mode_label_map.keys()), index=list(mode_label_map.keys()).index(current_mode_label))
     selected_mode = mode_label_map[selected_mode_label]
 
@@ -752,43 +764,54 @@ def tab_automation(project_id: str) -> None:
         enable_video_effects = st.toggle("Video Effects", value=default_enable_effects)
         video_effects_style = st.selectbox("Video Effects Style", options=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"], index=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"].index(default_effect_style), disabled=not enable_video_effects)
 
-    # â”€â”€ AI Video Clips â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    st.subheader("ðŸŽ¬ AI Video Clips")
-    _ai_video_provider_options = ["None", "Google Gemini Veo 3.1 Lite", "fal.ai (Wan 2.2)", "Auto (HF_VIDEO_PROVIDER)"]
+    # â"€â"€ AI Video Clips â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+    st.subheader("🎬 AI Video Clips")
+    _ai_video_provider_options = ["fal.ai (image-to-video)", "None"]
     _ai_provider_internal_to_label = {
-        "google_veo_lite": "Google Gemini Veo 3.1 Lite",
-        "falai": "fal.ai (Wan 2.2)",
-        "auto": "Auto (HF_VIDEO_PROVIDER)",
+        "falai": "fal.ai (image-to-video)",
     }
-    _daily_ai_label = _ai_provider_internal_to_label.get(str(_daily_preset.get("ai_video_provider", "") or ""), "Google Gemini Veo 3.1 Lite")
-    _default_ai_video_provider = str(payload.get("ai_video_provider") or _daily_ai_label or "Google Gemini Veo 3.1 Lite")
+    _daily_ai_label = _ai_provider_internal_to_label.get(str(_daily_preset.get("ai_video_provider", "") or ""), "fal.ai (image-to-video)")
+    _default_ai_video_provider = str(payload.get("ai_video_provider") or _daily_ai_label or "fal.ai (image-to-video)")
     if _default_ai_video_provider not in _ai_video_provider_options:
-        _default_ai_video_provider = "Google Gemini Veo 3.1 Lite"
+        _default_ai_video_provider = "fal.ai (image-to-video)"
     ai_video_provider = st.selectbox(
         "AI Video Clip Generator",
         options=_ai_video_provider_options,
         index=_ai_video_provider_options.index(_default_ai_video_provider),
         key="auto_ai_video_provider",
-        help="Generates 2 short AI video clips: one at the start, one at the midpoint of the final video.",
+        help="Generates 4 short AI video clips at key story beats in the video.",
     )
+
+    # fal.ai video model selector for the main run panel
+    _run_fal_model_slugs = [slug for slug, _ in FAL_VIDEO_MODELS]
+    _run_fal_model_labels = {slug: label for slug, label in FAL_VIDEO_MODELS}
+    _run_fal_default = str(_daily_preset.get("fal_video_model", DEFAULT_FAL_VIDEO_MODEL) or DEFAULT_FAL_VIDEO_MODEL)
+    if _run_fal_default not in _run_fal_model_slugs:
+        _run_fal_default = DEFAULT_FAL_VIDEO_MODEL
+    if "fal.ai" in ai_video_provider:
+        run_fal_video_model = st.selectbox(
+            "fal.ai video model",
+            options=_run_fal_model_slugs,
+            format_func=lambda x: _run_fal_model_labels.get(x, x),
+            index=_run_fal_model_slugs.index(_run_fal_default),
+            key="run_fal_video_model_selector",
+            help="Choose which fal.ai model generates the video clips.",
+        )
+        st.session_state["fal_video_model_override"] = run_fal_video_model
+    else:
+        st.session_state["fal_video_model_override"] = _run_fal_default
 
     with st.expander("âš™ï¸ AI Video Settings", expanded=False):
         from src.config.secrets import fal_configured as _fal_cfg
         _fal_ok = _fal_cfg()
-        _google_lite_ok = google_veo_lite_configured()
-        # Gemini video is primary; fal.ai remains available as a fallback.
-        _available = []
-        if _google_lite_ok:
-            _available.append("google_veo_lite")
-        _available.append("falai")
-        _available.append("auto")
+        _available = ["falai"] if _fal_ok else []
 
         if not _available:
             st.warning(
                 "No AI video providers are configured. "
-                "Set GEMINI_API_KEY or fal_api_key."
+                "Set fal_api_key."
             )
-            _run_provider = "google_veo_lite"
+            _run_provider = "falai"
         else:
             _daily_run_provider = str(_daily_preset.get("ai_video_provider", "") or "")
             _global_default = (
@@ -800,9 +823,7 @@ def tab_automation(project_id: str) -> None:
                 _global_default = _available[0]
 
             _provider_display = {
-                "falai": "âœ¨ fal.ai",
-                "google_veo_lite": "ðŸ”· Gemini Veo Lite",
-                "auto": "ðŸ§  Auto",
+                "falai": "fal.ai",
             }
             _run_provider = st.selectbox(
                 "Provider for this run",
@@ -831,25 +852,20 @@ def tab_automation(project_id: str) -> None:
         )
 
         if _run_provider == "falai":
+            _fal_model_display = st.session_state.get("fal_video_model_override", "")
             st.info(
-                "fal.ai (Wan 2.2) uses image-to-video when a scene image is available, "
-                "and falls back to text-to-video otherwise. ~$0.50 per 5s clip."
+                f"fal.ai uses image-to-video when a scene image is available, "
+                f"and falls back to text-to-video otherwise. "
+                f"Model: {_fal_model_display or 'wan/v2.2-5b'}. ~$0.50 per 5s clip."
             )
-        elif _run_provider == "google_veo_lite":
-            st.info(
-                "Gemini Veo 3.1 Lite uses generated scene images to create short image-to-video clips."
-            )
-        elif _run_provider == "auto":
-            st.info("Auto resolves to HF_VIDEO_PROVIDER (defaults to Gemini Veo Lite when not set).")
         else:
             st.info("Run the Images step before AI Video Clips.")
 
     # Store resolved provider for use in the step runner.
     # If the main selectbox is "None", mark provider as empty so the step is skipped.
     _label_to_internal = {
-        "Google Gemini Veo 3.1 Lite": "google_veo_lite",
-        "fal.ai (Wan 2.2)": "falai",
-        "Auto (HF_VIDEO_PROVIDER)": "auto",
+        "fal.ai (image-to-video)": "falai",
+        "None": "",
     }
     _main_selection_internal = _label_to_internal.get(ai_video_provider, "")
     if _main_selection_internal:
@@ -1039,8 +1055,11 @@ def tab_automation(project_id: str) -> None:
         topic=topic_input.strip(),
         topic_direction=topic_direction.strip(),
         script_profile="youtube_short_60s" if selected_mode == "topic_to_short_video" else str(payload.get("script_profile", "") or ""),
-        ai_video_provider=st.session_state.get("automation_run_provider", "google_veo_lite"),
-        image_provider=str(st.session_state.get("image_provider", "gemini") or "gemini"),
+        ai_video_provider=st.session_state.get("automation_run_provider", "falai"),
+        image_provider=str(_daily_preset.get("image_provider", "openai") or "openai"),
+        openai_image_model=str(_daily_preset.get("openai_image_model", DEFAULT_OPENAI_IMAGE_MODEL) or DEFAULT_OPENAI_IMAGE_MODEL),
+        fal_video_model=str(st.session_state.get("fal_video_model_override", "") or _daily_preset.get("fal_video_model", DEFAULT_FAL_VIDEO_MODEL) or DEFAULT_FAL_VIDEO_MODEL),
+        enable_image_search=bool(_daily_preset.get("enable_image_search", False)),
     )
 
     st.markdown("#### Controls")
@@ -1073,7 +1092,7 @@ def tab_automation(project_id: str) -> None:
         payload["scene_count"] = 14
         payload["max_scenes"] = 14
         save_project_payload(project_id, payload)
-        st.session_state["automation_run_provider"] = "google_veo_lite"
+        st.session_state["automation_run_provider"] = "falai"
         st.session_state.pop("ai_clips_progress", None)
         payload["enable_subtitles"] = False
         payload["automation_include_captions"] = False
@@ -1106,7 +1125,7 @@ def tab_automation(project_id: str) -> None:
 
     if c_full.button("Run Full Workflow", width="stretch"):
         if selected_mode == "topic_to_short_video" and not topic_input.strip():
-            st.error("Topic is required for Topic â†’ 60s Short Video mode.")
+            st.error("Topic is required for Topic â†' 60s Short Video mode.")
             return
         if selected_mode == "existing_script_full_workflow" and not script_text:
             st.error("Existing Script mode requires project script text.")
@@ -1174,79 +1193,4 @@ def tab_automation(project_id: str) -> None:
     if c_render.button("Render Final Video", width="stretch"):
         _persist_current_settings()
         result = run_render_video(project_id, pipeline_options)
-        if result.status == StepStatus.COMPLETED:
-            st.success("Render completed.")
-            st.rerun()
-        else:
-            st.error(result.message or "Render failed.")
-
-    failed_candidates = [step for step in PIPELINE_STEPS if state.step_statuses.get(step) == StepStatus.FAILED]
-    default_reset_step = "script" if selected_mode == "topic_to_short_video" else "voiceover"
-    reset_step = st.selectbox("Failed step to reset", options=failed_candidates or [default_reset_step], key=f"automation_reset_{project_id}")
-    selected_downstream = st.selectbox("Reset downstream from", options=list(PIPELINE_STEPS), key=f"automation_downstream_{project_id}")
-    r1, r2 = st.columns(2)
-    if r1.button("Reset Failed Step", width="stretch", disabled=not failed_candidates):
-        _reset_step(project_id, reset_step)
-        st.success(f"Reset step: {reset_step}")
-
-    if r2.button("Reset Downstream from Selected Step", width="stretch"):
-        reset_downstream_steps(project_id, selected_downstream)
-        st.success(f"Reset downstream from: {selected_downstream}")
-
-    st.markdown("#### Render Preflight")
-    preflight = preflight_report(project_id)
-    payload = load_project_payload(project_id)
-    selected_music_track = str(payload.get("selected_music_track", "") or "")
-    music_resolution = resolve_music_track_for_project(project_id, selected_music_track)
-    timeline_music_path = ""
-    timeline_includes_music = False
-    timeline_path = project_dir(project_id) / "timeline.json"
-    if timeline_path.exists():
-        timeline_payload = _load_json(timeline_path)
-        if timeline_payload:
-            meta = timeline_payload.get("meta", {}) if isinstance(timeline_payload.get("meta"), dict) else {}
-            timeline_includes_music = bool(meta.get("include_music", False))
-            music_payload = meta.get("music", {}) if isinstance(meta.get("music"), dict) else {}
-            timeline_music_path = str(music_payload.get("path", "") or "")
-    if preflight["ok"]:
-        st.success("Preflight passed. Timeline/media references look healthy.")
-    else:
-        st.warning(f"Preflight found {preflight['issue_count']} issue(s).")
-        if preflight["issues"].get("invalid_timeline_references"):
-            st.error("Invalid timeline references detected:")
-            for item in preflight["issues"]["invalid_timeline_references"]:
-                st.code(str(item), language="text")
-        expected_count = preflight.get("timeline_scene_count_expected")
-        actual_count = preflight.get("timeline_scene_count_actual")
-        if expected_count or actual_count:
-            st.caption(f"Timeline scene count: expected={expected_count} actual={actual_count}")
-        if preflight.get("timeline_rebuild_attempted") is not None:
-            st.caption(
-                "Timeline rebuild status: "
-                f"attempted={preflight.get('timeline_rebuild_attempted', False)} "
-                f"succeeded={preflight.get('timeline_rebuild_succeeded', False)}"
-            )
-    st.caption(
-        "Music diagnostics Â· "
-        f"selected={selected_music_track or 'none'} Â· "
-        f"resolved={music_resolution.get('resolved_path', '') or 'none'} Â· "
-        f"exists={music_resolution.get('file_exists', False)} Â· "
-        f"copied_to_project={music_resolution.get('copied_to_project', False)} Â· "
-        f"timeline_include_music={timeline_includes_music} Â· "
-        f"timeline_music_path={timeline_music_path or 'none'}"
-    )
-
-    st.markdown("#### Logs")
-    st.caption("Recent workflow log lines")
-    st.code(_tail_file(workflow_log, lines=120) or "No workflow.log lines yet.", language="text")
-
-    st.caption("Last render report")
-    report_payload = _load_json(render_report)
-    if report_payload:
-        st.json(report_payload)
-        st.caption(f"Post-run summary Â· final={report_payload.get('output_path', str(final_render))} | output_size={report_payload.get('resolved_output_size', 'unknown')} | subtitles={report_payload.get('subtitles_enabled', 'unknown')} (filter={report_payload.get('subtitle_filter_applied', 'unknown')}) | effects={report_payload.get('effect_style', 'unknown')} | music={report_payload.get('music_track', 'none')}")
-    else:
-        st.info("No render report found.")
-
-    _render_post_run_video_section(project_id, final_render)
-    _render_quick_scene_edits(project_id, scenes)
+  
