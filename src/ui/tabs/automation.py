@@ -252,6 +252,79 @@ def _render_workflow_progress(project_id: str, mode: str, progress_holder: Any, 
         output_holder.success(f"Final render path: {final_render}")
 
 
+def _render_daily_job_run_progress(
+    event: dict[str, Any],
+    progress_holder: Any,
+    status_holder: Any,
+    log_holder: Any,
+    result_holder: Any,
+    history: list[str],
+) -> None:
+    phase_order = ["setup", "script", "workflow", "supabase", "youtube", "instagram", "tiktok", "cleanup", "complete"]
+    phase_labels = {
+        "setup": "Setup",
+        "script": "Script",
+        "workflow": "Video Workflow",
+        "supabase": "Supabase Upload",
+        "youtube": "YouTube",
+        "instagram": "Instagram",
+        "tiktok": "TikTok",
+        "cleanup": "Cleanup",
+        "complete": "Done",
+    }
+    phase = str(event.get("phase", "setup") or "setup")
+    status = str(event.get("status", "in_progress") or "in_progress")
+    message = str(event.get("message", "") or "").strip()
+    project_id = str(event.get("project_id", "") or "").strip()
+    if message:
+        history.append(f"[{phase_labels.get(phase, phase)}] {status}: {message}")
+
+    if phase == "workflow" and isinstance(event.get("workflow_event"), dict) and project_id:
+        workflow_event = dict(event["workflow_event"])
+        workflow_step = str(workflow_event.get("step", "") or "")
+        workflow_status = str(workflow_event.get("status", "") or "")
+        if workflow_step:
+            detail = workflow_step.replace("_", " ").title()
+            if workflow_status == StepStatus.IN_PROGRESS:
+                message = f"Workflow step: {detail}"
+            elif workflow_status:
+                message = f"Workflow step {detail}: {workflow_status}"
+
+    completed = 0
+    if phase in phase_order:
+        idx = phase_order.index(phase)
+        completed = idx + (1 if status in {"completed", "skipped"} else 0)
+    ratio = min(1.0, completed / len(phase_order))
+
+    with progress_holder.container():
+        st.progress(ratio)
+        st.write(message or f"{phase_labels.get(phase, phase)}: {status}")
+
+    with status_holder.container():
+        cols = st.columns(len(phase_order))
+        for idx, item in enumerate(phase_order):
+            state = "pending"
+            if idx < completed:
+                state = "completed"
+            elif item == phase:
+                state = status
+            cols[idx].markdown(f"**{phase_labels[item]}**\n\n`{state}`")
+
+    with log_holder.container():
+        st.caption("Daily run progress")
+        st.code("\n".join(history[-20:]) if history else "Waiting for progress updates...", language="text")
+
+    if status == "completed" and phase == "complete":
+        final_render_path = str(event.get("final_render_path", "") or "").strip()
+        public_url = str(event.get("public_url", "") or "").strip()
+        with result_holder.container():
+            st.success("Daily job completed.")
+            if final_render_path:
+                st.write(f"Final render: `{final_render_path}`")
+            if public_url:
+                st.write(f"Public URL: {public_url}")
+
+
 def _render_post_run_video_section(project_id: str, final_render: Path) -> None:
     st.markdown("#### Final Video")
     if not final_render.exists():
@@ -693,6 +766,10 @@ def _render_daily_automation_status(project_id: str) -> None:
         }
 
     save_col, run_col = st.columns(2)
+    daily_progress_holder = st.empty()
+    daily_status_holder = st.empty()
+    daily_log_holder = st.empty()
+    daily_result_holder = st.empty()
     if save_col.button("Save daily automation settings", width="stretch"):
         save_daily_automation_settings(_build_daily_settings_dict())
         if workflow_path.exists():
@@ -702,12 +779,47 @@ def _render_daily_automation_status(project_id: str) -> None:
 
     if run_col.button("Run daily job now", width="stretch"):
         save_daily_automation_settings(_build_daily_settings_dict())
+        progress_history: list[str] = []
+
+        def _daily_progress_callback(event: dict[str, Any]) -> None:
+            _render_daily_job_run_progress(
+                event,
+                daily_progress_holder,
+                daily_status_holder,
+                daily_log_holder,
+                daily_result_holder,
+                progress_history,
+            )
+
+        _daily_progress_callback(
+            {
+                "phase": "setup",
+                "status": "in_progress",
+                "message": "Starting daily job",
+            }
+        )
         try:
-            result = run_daily_video_job(profile=HISTORY_CHANNEL)
+            result = run_daily_video_job(profile=HISTORY_CHANNEL, progress_callback=_daily_progress_callback)
         except Exception as exc:  # noqa: BLE001
+            _daily_progress_callback(
+                {
+                    "phase": "complete",
+                    "status": "failed",
+                    "message": str(exc),
+                }
+            )
             st.error(f"Daily job failed: {exc}")
         else:
-            st.success("Daily job completed.")
+            _daily_progress_callback(
+                {
+                    "phase": "complete",
+                    "status": "completed",
+                    "project_id": str(result.get("project_id", "") or ""),
+                    "final_render_path": str(result.get("final_render_path", "") or ""),
+                    "public_url": str(result.get("public_url", "") or ""),
+                    "message": "Daily job completed",
+                }
+            )
             st.json(result)
 
 def tab_automation(project_id: str) -> None:

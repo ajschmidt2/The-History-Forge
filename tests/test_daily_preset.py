@@ -374,3 +374,70 @@ def test_run_daily_job_uploads_to_youtube_when_enabled(tmp_path: Path, monkeypat
     assert summary["youtube_privacy_status"] == "unlisted"
     assert summary["youtube_video_id"] == "yt123"
     assert upload_calls[0]["privacy_status"] == "unlisted"
+
+
+def test_run_daily_job_emits_progress_events(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_root = Path("data/projects/generated_project")
+    final_path = project_root / "renders/final.mp4"
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    final_path.write_bytes(b"x" * 200_000)
+
+    def fake_run_full_workflow(*args, **kwargs):
+        callback = None
+        if len(args) >= 2:
+            callback = getattr(args[1], "progress_callback", None)
+        if callback is None:
+            callback = kwargs.get("progress_callback")
+        if callable(callback):
+            callback({"step": "voiceover", "status": "in_progress", "index": 1, "total": 8})
+            callback({"step": "render", "status": "completed", "index": 8, "total": 8})
+
+        class Result:
+            failed_step = ""
+            warnings = []
+            final_output_path = str(final_path)
+
+        return Result()
+
+    monkeypatch.setattr("src.workflow.daily_job.generate_daily_topic", lambda **_kwargs: "Test Topic")
+    monkeypatch.setattr("src.workflow.daily_job.generate_daily_short_script", lambda *_args, **_kwargs: "A" * 160)
+    monkeypatch.setattr("src.workflow.daily_job.ensure_project_files", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job.upsert_project", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job.project_dir", lambda *_args, **_kwargs: project_root)
+    monkeypatch.setattr("src.workflow.daily_job.load_project_payload", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("src.workflow.daily_job.save_project_payload", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job.save_used_topic", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job.run_full_workflow", fake_run_full_workflow)
+    monkeypatch.setattr("src.workflow.daily_job._upload_final_to_generated_bucket", lambda *_args, **_kwargs: {
+        "bucket": "generated-videos",
+        "object_path": "daily-renders/test.mp4",
+        "public_url": "https://example.com/final.mp4",
+    })
+    monkeypatch.setattr("src.workflow.daily_job._append_run_history", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.workflow.daily_job._validate_yt_credentials", lambda **_kwargs: (False, "skip"))
+    monkeypatch.setattr("src.workflow.daily_job._ig_configured", lambda: False)
+    monkeypatch.setattr("src.workflow.daily_job._tt_configured", lambda: False)
+    monkeypatch.setattr("src.workflow.daily_job._sb_store.cleanup_project_intermediate_assets", lambda *_args, **_kwargs: {})
+
+    events: list[dict] = []
+    save_daily_automation_settings(
+        {
+            "publishing": {"youtube_enabled": False, "youtube_privacy_status": "private", "instagram_enabled": False},
+            "preset": {"music_enabled": False},
+        },
+        path=Path(HISTORY_CHANNEL.automation_settings_path),
+    )
+
+    run_daily_video_job(
+        run_date=datetime(2026, 4, 24).date(),
+        profile=HISTORY_CHANNEL,
+        progress_callback=lambda event: events.append(event),
+    )
+
+    phases = [event.get("phase") for event in events]
+    assert "setup" in phases
+    assert "script" in phases
+    assert "workflow" in phases
+    assert "supabase" in phases
+    assert "complete" in phases

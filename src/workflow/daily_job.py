@@ -7,6 +7,7 @@ import sys
 import os
 import re
 from dataclasses import dataclass, field, replace
+from collections.abc import Callable
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -389,6 +390,15 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _emit_daily_progress(progress_callback: Callable[[dict[str, Any]], None] | None, **event: Any) -> None:
+    if not callable(progress_callback):
+        return
+    try:
+        progress_callback(event)
+    except Exception:
+        pass
+
+
 def _project_id_for_day(run_date: date, channel_id: str = "daily") -> str:
     ts = datetime.now(timezone.utc).strftime("%H%M")
     return f"{channel_id}_daily_{run_date.isoformat().replace('-', '_')}_{ts}"
@@ -469,10 +479,21 @@ def _upload_final_to_generated_bucket(project_id: str, final_path: Path, run_dat
     return {"bucket": SUPABASE_VIDEO_BUCKET, "object_path": object_path, "public_url": public_url}
 
 
-def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = HISTORY_CHANNEL) -> dict[str, Any]:
+def run_daily_video_job(
+    run_date: date | None = None,
+    profile: ChannelProfile = HISTORY_CHANNEL,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     target_date = run_date or date.today()
     project_id = _project_id_for_day(target_date, channel_id=profile.channel_id)
     timestamp = _utc_now().isoformat()
+    _emit_daily_progress(
+        progress_callback,
+        phase="setup",
+        status="in_progress",
+        project_id=project_id,
+        message=f"Preparing daily job for {profile.channel_name}",
+    )
 
     settings = load_daily_automation_settings(path=profile.automation_settings_path)
     preset = _resolve_daily_short_preset(settings, extra_overrides=profile.preset_overrides or {})
@@ -484,6 +505,14 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     topic_direction = str(settings.get("topic_direction", "") or "").strip() or profile.topic_direction
     topic = topic_override or generate_daily_topic(used_topics=used_topics, topic_direction=topic_direction)
 
+    _emit_daily_progress(
+        progress_callback,
+        phase="script",
+        status="in_progress",
+        project_id=project_id,
+        topic=topic,
+        message=f"Generating script for: {topic}",
+    )
     script_text = generate_daily_short_script(topic, preset, channel_name=profile.channel_name)
     music_track = str(settings.get("selected_music_track", "") or "").strip() or _resolve_default_music_track()
     if preset.music_enabled and not music_track:
@@ -537,6 +566,15 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
 
     # Checkpoint 1: verify script is substantial
     print(f"[Checkpoint 1] channel={profile.channel_id} topic={topic!r} script_len={len(script_text)}", file=sys.stderr)
+    _emit_daily_progress(
+        progress_callback,
+        phase="script",
+        status="completed",
+        project_id=project_id,
+        topic=topic,
+        script_length=len(script_text),
+        message=f"Script ready for: {topic}",
+    )
     if len(script_text) < 50:
         raise RuntimeError(
             f"Generated script is too short ({len(script_text)} chars); expected at least 50 characters."
@@ -548,6 +586,24 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     _preset_payload = settings.get("preset") if isinstance(settings.get("preset"), dict) else {}
     _transition = str(_preset_payload.get("scene_transition_type", "fade") or "fade")
     pipeline = replace(pipeline, scene_transition_type=_transition)
+    _emit_daily_progress(
+        progress_callback,
+        phase="workflow",
+        status="in_progress",
+        project_id=project_id,
+        message="Running full workflow",
+    )
+
+    def _workflow_progress(event: dict[str, Any]) -> None:
+        _emit_daily_progress(
+            progress_callback,
+            phase="workflow",
+            status=str(event.get("status", "in_progress")),
+            project_id=project_id,
+            workflow_event=event,
+            message=str(event.get("message", "") or ""),
+        )
+
     run_result = run_full_workflow(
         project_id,
         FullWorkflowOptions(
@@ -562,11 +618,21 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
             overwrite_render=True,
             enable_ai_video=True,
             pipeline=pipeline,
+            progress_callback=_workflow_progress,
         ),
     )
     print(
         f"[Checkpoint 2] Workflow returned. failed_step={run_result.failed_step!r}  warnings={run_result.warnings}",
         file=sys.stderr,
+    )
+    _emit_daily_progress(
+        progress_callback,
+        phase="workflow",
+        status="failed" if run_result.failed_step else "completed",
+        project_id=project_id,
+        failed_step=run_result.failed_step,
+        warnings=run_result.warnings,
+        message="Workflow finished" if not run_result.failed_step else f"Workflow failed at {run_result.failed_step}",
     )
 
     # Checkpoint 3: abort on workflow failure
@@ -591,9 +657,24 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
         )
 
     # Checkpoint 5: upload to Supabase
+    _emit_daily_progress(
+        progress_callback,
+        phase="supabase",
+        status="in_progress",
+        project_id=project_id,
+        message="Uploading final video to Supabase",
+    )
     upload_result = _upload_final_to_generated_bucket(project_id, final_path, target_date)
     save_used_topic(topic, run_date=target_date, path=profile.topics_used_path)
     print(f"[Checkpoint 5] Supabase upload complete. public_url={upload_result['public_url']}", file=sys.stderr)
+    _emit_daily_progress(
+        progress_callback,
+        phase="supabase",
+        status="completed",
+        project_id=project_id,
+        public_url=upload_result["public_url"],
+        message="Supabase upload complete",
+    )
 
     # Checkpoint 6: YouTube upload (non-fatal; skipped if credentials are absent)
     youtube_video_id = ""
@@ -601,6 +682,13 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     _yt_client_secrets = Path(get_secret(profile.youtube_client_secrets_secret, profile.youtube_client_secrets_file)).expanduser()
     _yt_token = Path(get_secret(profile.youtube_token_file_secret, profile.youtube_token_file)).expanduser()
     if publishing["youtube_enabled"]:
+        _emit_daily_progress(
+            progress_callback,
+            phase="youtube",
+            status="in_progress",
+            project_id=project_id,
+            message="Uploading to YouTube",
+        )
         try:
             _yt_ready, _yt_status = _validate_yt_credentials(
                 client_secrets_file=_yt_client_secrets,
@@ -628,18 +716,55 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
                     f"video_id={youtube_video_id} url={youtube_url}",
                     file=sys.stderr,
                 )
+                _emit_daily_progress(
+                    progress_callback,
+                    phase="youtube",
+                    status="completed",
+                    project_id=project_id,
+                    video_id=youtube_video_id,
+                    url=youtube_url,
+                    message="YouTube upload complete",
+                )
             else:
                 print(f"[Checkpoint 6] YouTube upload skipped: {_yt_status}", file=sys.stderr)
+                _emit_daily_progress(
+                    progress_callback,
+                    phase="youtube",
+                    status="skipped",
+                    project_id=project_id,
+                    message=str(_yt_status),
+                )
         except Exception as exc:
             print(f"[Checkpoint 6] YouTube upload failed (non-fatal): {exc}", file=sys.stderr)
+            _emit_daily_progress(
+                progress_callback,
+                phase="youtube",
+                status="failed",
+                project_id=project_id,
+                message=str(exc),
+            )
     else:
         print(f"[Checkpoint 6] YouTube credentials not found for channel={profile.channel_id} — skipping.", file=sys.stderr)
+        _emit_daily_progress(
+            progress_callback,
+            phase="youtube",
+            status="skipped",
+            project_id=project_id,
+            message="YouTube upload disabled",
+        )
 
     # Checkpoint 7: Instagram upload (non-fatal; only for enabled channels with credentials)
     instagram_media_id = ""
     instagram_permalink = ""
     if profile.instagram_enabled and publishing.get("instagram_enabled", True):
         if _ig_configured():
+            _emit_daily_progress(
+                progress_callback,
+                phase="instagram",
+                status="in_progress",
+                project_id=project_id,
+                message="Uploading to Instagram",
+            )
             try:
                 # Refresh token first (resets 60-day expiry; non-fatal if META creds missing)
                 try:
@@ -662,18 +787,55 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
                 instagram_media_id = _ig_result.media_id
                 instagram_permalink = _ig_result.permalink or ""
                 print(f"[Checkpoint 7] Instagram upload complete. media_id={instagram_media_id} permalink={instagram_permalink}", file=sys.stderr)
+                _emit_daily_progress(
+                    progress_callback,
+                    phase="instagram",
+                    status="completed",
+                    project_id=project_id,
+                    media_id=instagram_media_id,
+                    permalink=instagram_permalink,
+                    message="Instagram upload complete",
+                )
             except Exception as exc:
                 print(f"[Checkpoint 7] Instagram upload failed (non-fatal): {exc}", file=sys.stderr)
+                _emit_daily_progress(
+                    progress_callback,
+                    phase="instagram",
+                    status="failed",
+                    project_id=project_id,
+                    message=str(exc),
+                )
         else:
             print(f"[Checkpoint 7] Instagram credentials not configured — skipping.", file=sys.stderr)
+            _emit_daily_progress(
+                progress_callback,
+                phase="instagram",
+                status="skipped",
+                project_id=project_id,
+                message="Instagram credentials not configured",
+            )
     else:
         print(f"[Checkpoint 7] Instagram upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
+        _emit_daily_progress(
+            progress_callback,
+            phase="instagram",
+            status="skipped",
+            project_id=project_id,
+            message="Instagram upload disabled",
+        )
 
     # Checkpoint 8: TikTok upload (non-fatal; only for enabled channels with credentials)
     tiktok_publish_id = ""
     tiktok_share_url = ""
     if profile.tiktok_enabled:
         if _tt_configured():
+            _emit_daily_progress(
+                progress_callback,
+                phase="tiktok",
+                status="in_progress",
+                project_id=project_id,
+                message="Uploading to TikTok",
+            )
             try:
                 _tt_hashtags = " ".join(profile.tiktok_hashtags)
                 _tt_title = f"{topic}\n\n{_tt_hashtags}\n\n{profile.youtube_subscribe_cta}"[:2200]
@@ -685,23 +847,81 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
                 tiktok_publish_id = _tt_result.publish_id
                 tiktok_share_url = _tt_result.share_url or ""
                 print(f"[Checkpoint 8] TikTok upload complete. publish_id={tiktok_publish_id} share_url={tiktok_share_url}", file=sys.stderr)
+                _emit_daily_progress(
+                    progress_callback,
+                    phase="tiktok",
+                    status="completed",
+                    project_id=project_id,
+                    publish_id=tiktok_publish_id,
+                    share_url=tiktok_share_url,
+                    message="TikTok upload complete",
+                )
             except Exception as exc:
                 print(f"[Checkpoint 8] TikTok upload failed (non-fatal): {exc}", file=sys.stderr)
+                _emit_daily_progress(
+                    progress_callback,
+                    phase="tiktok",
+                    status="failed",
+                    project_id=project_id,
+                    message=str(exc),
+                )
         else:
             print("[Checkpoint 8] TikTok credentials not configured — skipping.", file=sys.stderr)
+            _emit_daily_progress(
+                progress_callback,
+                phase="tiktok",
+                status="skipped",
+                project_id=project_id,
+                message="TikTok credentials not configured",
+            )
     else:
         print(f"[Checkpoint 8] TikTok upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
+        _emit_daily_progress(
+            progress_callback,
+            phase="tiktok",
+            status="skipped",
+            project_id=project_id,
+            message="TikTok upload disabled",
+        )
 
     # Checkpoint 9: clean up intermediate Supabase assets (non-fatal)
+    _emit_daily_progress(
+        progress_callback,
+        phase="cleanup",
+        status="in_progress",
+        project_id=project_id,
+        message="Cleaning up intermediate assets",
+    )
     try:
         deleted = _sb_store.cleanup_project_intermediate_assets(project_id)
         if deleted:
             summary_str = ", ".join(f"{b}={n}" for b, n in deleted.items())
             print(f"[Checkpoint 9] Supabase cleanup complete: {summary_str}", file=sys.stderr)
+            _emit_daily_progress(
+                progress_callback,
+                phase="cleanup",
+                status="completed",
+                project_id=project_id,
+                message=f"Cleanup complete: {summary_str}",
+            )
         else:
             print("[Checkpoint 9] Supabase cleanup: nothing to delete (or Supabase not configured).", file=sys.stderr)
+            _emit_daily_progress(
+                progress_callback,
+                phase="cleanup",
+                status="completed",
+                project_id=project_id,
+                message="Cleanup complete",
+            )
     except Exception as exc:
         print(f"[Checkpoint 9] Supabase cleanup failed (non-fatal): {exc}", file=sys.stderr)
+        _emit_daily_progress(
+            progress_callback,
+            phase="cleanup",
+            status="failed",
+            project_id=project_id,
+            message=str(exc),
+        )
 
     summary = {
         "timestamp": timestamp,
@@ -745,6 +965,15 @@ def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = 
     payload["instagram_media_id"] = instagram_media_id
     payload["instagram_permalink"] = instagram_permalink
     save_project_payload(project_id, payload)
+    _emit_daily_progress(
+        progress_callback,
+        phase="complete",
+        status="completed",
+        project_id=project_id,
+        final_render_path=str(final_path),
+        public_url=upload_result["public_url"],
+        message="Daily job completed",
+    )
     return summary
 
 
