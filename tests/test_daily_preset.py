@@ -30,6 +30,7 @@ def test_daily_short_preset_pipeline_defaults():
     assert options.enable_broll is True
     assert options.auto_search_broll is True
     assert options.auto_assign_broll is True
+    assert options.historical_media_verification == "strict"
 
 
 def test_daily_automation_settings_roundtrip(tmp_path: Path):
@@ -61,6 +62,7 @@ def test_daily_automation_settings_roundtrip(tmp_path: Path):
                 "auto_search_broll": True,
                 "auto_assign_broll": False,
                 "broll_preferred_provider": "Pixabay then Pexels",
+                "historical_media_verification": "standard",
             },
         },
         path=settings_path,
@@ -84,6 +86,7 @@ def test_daily_automation_settings_roundtrip(tmp_path: Path):
     assert saved["preset"]["auto_search_broll"] is True
     assert saved["preset"]["auto_assign_broll"] is False
     assert saved["preset"]["broll_preferred_provider"] == "Pixabay then Pexels"
+    assert saved["preset"]["historical_media_verification"] == "standard"
     assert saved["preset"]["openai_tts_voice"] == DAILY_SHORT_PRESET.openai_tts_voice
 
 
@@ -96,6 +99,7 @@ def test_resolve_daily_short_preset_preserves_media_search_settings():
                 "auto_search_broll": True,
                 "auto_assign_broll": False,
                 "broll_preferred_provider": "Pixabay then Pexels",
+                "historical_media_verification": "standard",
                 "openai_image_model": "gpt-image-1",
                 "fal_video_model": "fal-ai/wan/v2.2-5b/image-to-video",
             }
@@ -107,6 +111,7 @@ def test_resolve_daily_short_preset_preserves_media_search_settings():
     assert preset.auto_search_broll is True
     assert preset.auto_assign_broll is False
     assert preset.broll_preferred_provider == "Pixabay then Pexels"
+    assert preset.historical_media_verification == "standard"
     assert preset.openai_image_model == "gpt-image-1"
 
 

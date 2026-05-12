@@ -90,6 +90,7 @@ class PipelineOptions:
     auto_search_broll: bool = False
     auto_assign_broll: bool = True
     broll_preferred_provider: str = "Pexels then Pixabay"
+    historical_media_verification: str = "strict"
     force_render_rebuild: bool = False
 
 
@@ -1225,6 +1226,7 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
                 era=_era,
                 cache_dir=_search_cache,
                 unsplash_access_key=_unsplash_key,
+                verification_level=str(getattr(cfg, "historical_media_verification", "strict") or "strict"),
             )
             logger.info("image_search_done found=%d/%d", len(_search_results), len(_scene_dicts))
         except Exception as exc:  # noqa: BLE001 — search failure must not block generation
@@ -1253,6 +1255,8 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
                         "provider": getattr(_sr, "provider", ""),
                         "title": getattr(_sr, "title", ""),
                         "source_url": getattr(_sr, "source_url", ""),
+                        "match_score": float(getattr(_sr, "match_score", 0.0) or 0.0),
+                        "verification_notes": str(getattr(_sr, "verification_notes", "") or ""),
                     }
                     out.write_bytes(_img_bytes)
                     record_asset(project_id, "image", out)
@@ -1371,6 +1375,7 @@ def run_assign_broll(project_id: str, options: PipelineOptions | None = None) ->
             scenes,
             aspect_ratio=cfg.aspect_ratio,
             provider_priority=_provider_priority_label_to_list(preferred_provider),
+            verification_level=str(getattr(cfg, "historical_media_verification", "strict") or "strict"),
         )
         save_scenes(project_id, scenes)
         sync_scene_asset_metadata(project_id, scenes)

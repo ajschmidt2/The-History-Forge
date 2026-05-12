@@ -38,6 +38,7 @@ class DailyShortPreset:
     auto_search_broll: bool = True
     auto_assign_broll: bool = True
     broll_preferred_provider: str = "Pexels then Pixabay"
+    historical_media_verification: str = "strict"
 
     def to_pipeline_options(self, *, topic: str = "", selected_music_track: str = "") -> PipelineOptions:
         return PipelineOptions(
@@ -66,6 +67,7 @@ class DailyShortPreset:
             auto_search_broll=self.auto_search_broll,
             auto_assign_broll=self.auto_assign_broll,
             broll_preferred_provider=self.broll_preferred_provider,
+            historical_media_verification=self.historical_media_verification,
         )
 
     def as_dict(self) -> dict[str, object]:

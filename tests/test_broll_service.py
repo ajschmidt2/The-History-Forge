@@ -30,6 +30,53 @@ def test_search_broll_returns_first_success(monkeypatch):
     assert result[0].provider == "pixabay"
 
 
+def test_search_broll_for_scene_ranks_more_relevant_clip(monkeypatch):
+    monkeypatch.setattr(service, "broll_provider_status", lambda: {"pexels": True, "pixabay": True})
+
+    generic = service.BrollResult(
+        provider="pexels",
+        id="1",
+        title="people walking city generic stock footage",
+        duration_sec=5.0,
+        width=720,
+        height=1280,
+        orientation="vertical",
+        preview_image_url="",
+        video_url="https://example.com/generic.mp4",
+        page_url="https://example.com/generic",
+        attribution_text="Video on Pexels",
+        license_note="free",
+    )
+    relevant = service.BrollResult(
+        provider="pixabay",
+        id="2",
+        title="world war ii resistance bicycle escape occupied france",
+        duration_sec=6.0,
+        width=720,
+        height=1280,
+        orientation="vertical",
+        preview_image_url="",
+        video_url="https://example.com/relevant.mp4",
+        page_url="https://example.com/relevant",
+        attribution_text="Video on Pixabay",
+        license_note="free",
+    )
+
+    monkeypatch.setattr(service, "search_pexels_videos", lambda *args, **kwargs: [generic])
+    monkeypatch.setattr(service, "search_pixabay_videos", lambda *args, **kwargs: [relevant])
+
+    scene = SimpleNamespace(
+        broll_query="world war ii resistance bicycle escape occupied france",
+        visual_intent="resistance courier escaping by bicycle",
+        script_excerpt="She slipped through occupied France on a bicycle, evading patrols.",
+    )
+
+    results = service.search_broll_for_scene(scene, aspect_ratio="9:16", provider_priority=["pexels", "pixabay"], verification_level="strict")
+
+    assert results
+    assert results[0].id == "2"
+
+
 def test_generate_broll_query_prefers_media_plan_hint():
     scene = SimpleNamespace(
         broll_query="",

@@ -46,6 +46,11 @@ _MIN_HEIGHT = 300
 # Max file size for downloaded images (bytes)
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB
 
+_GENERIC_MEDIA_WORDS = {
+    "history", "historical", "photo", "photograph", "image", "portrait", "people", "person", "woman",
+    "man", "group", "crowd", "war", "world", "documentary", "scene", "figure", "story", "event",
+}
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -72,6 +77,77 @@ class ImageResult:
 
     license: str = ""
     """License string if known (e.g. 'CC BY-SA 4.0', 'Public Domain')."""
+
+    match_score: float = 0.0
+    """Estimated relevance score between 0 and 1 for this scene."""
+
+    verification_notes: str = ""
+    """Short note describing why this result was selected."""
+
+
+def _keyword_terms(*parts: str) -> list[str]:
+    words = re.findall(r"[A-Za-z][A-Za-z'-]{2,}", " ".join(str(part or "") for part in parts))
+    seen: set[str] = set()
+    selected: list[str] = []
+    for word in words:
+        lowered = word.lower()
+        if lowered in seen or lowered in _GENERIC_MEDIA_WORDS:
+            continue
+        seen.add(lowered)
+        selected.append(word)
+    return selected
+
+
+def _score_candidate_metadata(
+    candidate: dict,
+    *,
+    scene_title: str,
+    scene_description: str,
+    topic: str,
+    era: str,
+    query: str,
+    verification_level: str,
+) -> tuple[float, str]:
+    haystack = " ".join(
+        [
+            str(candidate.get("title", "") or ""),
+            str(candidate.get("page_url", "") or ""),
+            str(candidate.get("image_url", "") or ""),
+        ]
+    ).lower()
+    if not haystack:
+        return 0.0, "candidate_has_no_metadata"
+
+    strong_terms = _keyword_terms(scene_title, scene_description, topic, era, query)
+    if not strong_terms:
+        strong_terms = _keyword_terms(query, scene_title)
+    if not strong_terms:
+        return 0.0, "no_strong_terms"
+
+    matches: list[str] = []
+    for term in strong_terms:
+        lowered = term.lower()
+        if lowered in haystack:
+            matches.append(term)
+
+    overlap = len(matches) / max(1, min(len(strong_terms), 6))
+    phrase_bonus = 0.0
+    for phrase in (query, scene_title, topic):
+        cleaned = re.sub(r"\s+", " ", str(phrase or "")).strip().lower()
+        if cleaned and len(cleaned) >= 8 and cleaned in haystack:
+            phrase_bonus = max(phrase_bonus, 0.25)
+
+    provider = str(candidate.get("provider", "") or "").lower()
+    provider_bonus = 0.08 if provider in {"wikimedia", "loc"} else 0.02
+    penalty = 0.0
+    if verification_level == "strict" and len(matches) < 2:
+        penalty += 0.2
+    if "unsplash.com" in haystack and verification_level == "strict":
+        penalty += 0.08
+
+    score = max(0.0, min(1.0, overlap + phrase_bonus + provider_bonus - penalty))
+    note = f"matched_terms={matches[:4]}" if matches else "metadata_match_weak"
+    return score, note
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +528,7 @@ def search_image_for_scene(
     providers: tuple[str, ...] = ("wikimedia", "loc", "unsplash"),
     prefer_portrait: bool = True,
     query_hints: list[str] | None = None,
+    verification_level: str = "standard",
 ) -> Optional[ImageResult]:
     """
     Search for a real historical image relevant to a scene.
@@ -487,14 +564,17 @@ def search_image_for_scene(
         "unsplash": lambda q: _unsplash_search(q, unsplash_access_key, limit=5),
     }
 
-    for provider in providers:
+    ranked_candidates: list[tuple[float, int, int, str, str, dict, str]] = []
+    min_score = 0.0 if verification_level == "off" else (0.3 if verification_level == "standard" else 0.48)
+
+    for provider_index, provider in enumerate(providers):
         fn = provider_fns.get(provider)
         if fn is None:
             continue
         if provider == "unsplash" and not unsplash_access_key:
             continue
 
-        for query in queries:
+        for query_index, query in enumerate(queries):
             cache_key = _query_hash(query, provider)
             cached = _read_cache(cache_dir, cache_key)
             if cached:
@@ -509,32 +589,55 @@ def search_image_for_scene(
                 _write_cache(cache_dir, cache_key, {"candidates": candidates})
 
             for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate = dict(candidate)
+                candidate["provider"] = provider
+                score, note = _score_candidate_metadata(
+                    candidate,
+                    scene_title=scene_title,
+                    scene_description=scene_description,
+                    topic=topic,
+                    era=era,
+                    query=query,
+                    verification_level=verification_level,
+                )
+                if score < min_score:
+                    continue
                 img_url = candidate.get("image_url", "")
                 if not img_url:
                     continue
+                ranked_candidates.append((score, -provider_index, -query_index, provider, query, candidate, note))
 
-                raw = _download_image_bytes(img_url)
-                if not raw:
-                    continue
+    ranked_candidates.sort(reverse=True)
+    for score, _provider_order, _query_order, provider, query, candidate, note in ranked_candidates[:8]:
+        img_url = str(candidate.get("image_url", "") or "").strip()
+        if not img_url:
+            continue
 
-                normalized = _normalize_image_bytes(raw)
-                if not normalized:
-                    continue
+        raw = _download_image_bytes(img_url)
+        if not raw:
+            continue
 
-                # Save to cache_dir
-                dest_name = f"search_s{scene_index:02d}_{provider}.png"
-                dest = cache_dir / dest_name
-                if not _save_image(normalized, dest):
-                    continue
+        normalized = _normalize_image_bytes(raw)
+        if not normalized:
+            continue
 
-                return ImageResult(
-                    local_path=dest,
-                    source_url=candidate.get("page_url", img_url),
-                    image_url=img_url,
-                    title=candidate.get("title", query),
-                    provider=provider,
-                    license=candidate.get("license", ""),
-                )
+        dest_name = f"search_s{scene_index:02d}_{provider}.png"
+        dest = cache_dir / dest_name
+        if not _save_image(normalized, dest):
+            continue
+
+        return ImageResult(
+            local_path=dest,
+            source_url=str(candidate.get("page_url", img_url) or img_url),
+            image_url=img_url,
+            title=str(candidate.get("title", query) or query),
+            provider=provider,
+            license=str(candidate.get("license", "") or ""),
+            match_score=score,
+            verification_notes=note,
+        )
 
     return None
 
@@ -546,6 +649,7 @@ def search_images_for_scenes(
     cache_dir: Optional[Path] = None,
     unsplash_access_key: str = "",
     providers: tuple[str, ...] = ("wikimedia", "loc", "unsplash"),
+    verification_level: str = "standard",
 ) -> dict[int, ImageResult]:
     """
     Batch search for all scenes.
@@ -578,6 +682,7 @@ def search_images_for_scenes(
             unsplash_access_key=unsplash_access_key,
             providers=providers,
             query_hints=scene.get("query_hints") if isinstance(scene.get("query_hints"), list) else None,
+            verification_level=verification_level,
         )
         if result:
             results[idx] = result

@@ -383,6 +383,10 @@ def _resolve_daily_short_preset(settings: dict[str, Any], extra_overrides: dict 
         broll_preferred_provider=str(
             preset_payload.get("broll_preferred_provider", base.broll_preferred_provider) or base.broll_preferred_provider
         ),
+        historical_media_verification=str(
+            preset_payload.get("historical_media_verification", base.historical_media_verification)
+            or base.historical_media_verification
+        ),
     )
 
 

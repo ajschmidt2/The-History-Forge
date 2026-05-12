@@ -21,6 +21,10 @@ _DOWNLOAD_TIMEOUT = 120
 _SEARCH_CACHE_TTL_SECONDS = 600.0
 _SEARCH_CACHE: dict[str, tuple[float, list[BrollResult]]] = {}
 _LAST_SEARCH_ERRORS: list[str] = []
+_GENERIC_BROLL_WORDS = frozenset({
+    "video", "footage", "clip", "historical", "history", "people", "person", "group",
+    "background", "generic", "stock", "scene", "documentary",
+})
 
 
 def _cache_key(query: str, aspect_ratio: str, per_page: int, priority: list[str]) -> str:
@@ -68,6 +72,42 @@ def _extract_keywords(text: str, max_keywords: int = 5) -> list[str]:
         if len(keywords) >= max_keywords:
             break
     return keywords
+
+
+def _score_broll_result(scene: Any, result: BrollResult, verification_level: str = "standard") -> tuple[float, str]:
+    query = generate_broll_query_for_scene(scene)
+    strong_terms = _extract_keywords(
+        " ".join(
+            [
+                str(query or ""),
+                str(getattr(scene, "title", "") or ""),
+                str(getattr(scene, "script_excerpt", "") or ""),
+            ]
+        ),
+        max_keywords=8,
+    )
+    strong_terms = [term for term in strong_terms if term not in _GENERIC_BROLL_WORDS]
+    haystack = " ".join(
+        [
+            str(result.title or ""),
+            str(result.page_url or ""),
+            str(result.attribution_text or ""),
+        ]
+    ).lower()
+    matches = [term for term in strong_terms if term in haystack]
+    overlap = len(matches) / max(1, min(len(strong_terms), 6))
+    phrase_bonus = 0.0
+    query_clean = re.sub(r"\s+", " ", str(query or "")).strip().lower()
+    if query_clean and len(query_clean) >= 10 and query_clean in haystack:
+        phrase_bonus = 0.25
+    duration = float(result.duration_sec or 0.0)
+    duration_bonus = 0.12 if 3.0 <= duration <= 12.0 else 0.0
+    provider_bonus = 0.04 if str(result.provider or "").lower() == "pexels" else 0.02
+    penalty = 0.0
+    if verification_level == "strict" and len(matches) < 2:
+        penalty += 0.22
+    score = max(0.0, min(1.0, overlap + phrase_bonus + duration_bonus + provider_bonus - penalty))
+    return score, (f"matched_terms={matches[:4]}" if matches else "metadata_match_weak")
 
 
 def generate_broll_query_for_scene(scene: Any) -> str:
@@ -120,6 +160,7 @@ def search_broll(
         "pixabay": search_pixabay_videos,
     }
 
+    gathered: list[BrollResult] = []
     for provider_name in priority:
         fn = provider_map.get(provider_name)
         if fn is None:
@@ -141,10 +182,12 @@ def search_broll(
             continue
 
         if results:
-            _cache_set(key, results)
-            return results
+            gathered.extend(results)
         _LAST_SEARCH_ERRORS.append(f"No {provider_name.title()} results found for this scene.")
 
+    if gathered:
+        _cache_set(key, gathered)
+        return gathered
     return []
 
 
@@ -153,11 +196,20 @@ def search_broll_for_scene(
     aspect_ratio: str = "16:9",
     per_page: int = 5,
     provider_priority: list[str] | None = None,
+    verification_level: str = "standard",
 ) -> list[BrollResult]:
     query = generate_broll_query_for_scene(scene)
     if not query:
         return []
-    return search_broll(query, aspect_ratio=aspect_ratio, per_page=per_page, provider_priority=provider_priority)
+    results = search_broll(query, aspect_ratio=aspect_ratio, per_page=per_page, provider_priority=provider_priority)
+    min_score = 0.0 if verification_level == "off" else (0.28 if verification_level == "standard" else 0.45)
+    ranked: list[tuple[float, BrollResult]] = []
+    for result in results:
+        score, _note = _score_broll_result(scene, result, verification_level=verification_level)
+        if score >= min_score:
+            ranked.append((score, result))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [result for _score, result in ranked]
 
 
 def scene_prefers_broll(scene: Any) -> bool:
@@ -228,6 +280,15 @@ def assign_broll_to_scene(scene: Any, result: BrollResult, local_path: Path | st
     scene.broll_duration_sec = result.duration_sec
     scene.broll_orientation = result.orientation
     scene.use_broll = True
+    prompt_spec = getattr(scene, "prompt_spec", {}) or {}
+    if isinstance(prompt_spec, dict):
+        scene.prompt_spec = dict(prompt_spec)
+        scene.prompt_spec["resolved_media"] = {
+            "type": "broll",
+            "provider": str(getattr(result, "provider", "") or ""),
+            "title": str(getattr(result, "title", "") or ""),
+            "source_url": str(getattr(result, "page_url", "") or getattr(result, "video_url", "") or ""),
+        }
 
 
 def clear_broll_from_scene(scene: Any) -> None:
@@ -248,6 +309,7 @@ def auto_assign_broll_to_scenes(
     aspect_ratio: str = "16:9",
     provider_priority: list[str] | None = None,
     per_page: int = 5,
+    verification_level: str = "standard",
 ) -> tuple[int, int]:
     """Search and assign B-roll to scenes that prefer motion coverage."""
     searched = 0
@@ -267,6 +329,7 @@ def auto_assign_broll_to_scenes(
             aspect_ratio=aspect_ratio,
             per_page=per_page,
             provider_priority=provider_priority,
+            verification_level=verification_level,
         )
         searched += 1
         if not results:

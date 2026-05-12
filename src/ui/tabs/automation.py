@@ -718,6 +718,23 @@ def _render_daily_automation_status(project_id: str) -> None:
         key="daily_broll_provider",
         disabled=not daily_enable_broll,
     )
+    _verification_options = ["strict", "standard", "off"]
+    _verification_labels = {
+        "strict": "Strict",
+        "standard": "Standard",
+        "off": "Off",
+    }
+    _verification_default = str(preset.get("historical_media_verification", "strict") or "strict").lower()
+    if _verification_default not in _verification_options:
+        _verification_default = "strict"
+    daily_historical_media_verification = st.selectbox(
+        "Historical media verification",
+        options=_verification_options,
+        index=_verification_options.index(_verification_default),
+        format_func=lambda value: _verification_labels.get(value, value.title()),
+        key="daily_historical_media_verification",
+        help="Strict rejects weak or generic historical photos and B-roll more aggressively.",
+    )
 
     project_music_tracks = _list_music_tracks(project_dir(project_id) / "assets/music")
     shared_music_tracks = _list_shared_music_tracks()
@@ -749,6 +766,7 @@ def _render_daily_automation_status(project_id: str) -> None:
             "auto_search_broll": bool(daily_auto_search_broll),
             "auto_assign_broll": bool(daily_auto_assign_broll),
             "broll_preferred_provider": str(daily_broll_provider or "Pexels then Pixabay"),
+            "historical_media_verification": str(daily_historical_media_verification or "strict"),
         }
 
     def _build_daily_settings_dict() -> dict:
@@ -1212,6 +1230,7 @@ def tab_automation(project_id: str) -> None:
         auto_search_broll=bool(_daily_preset.get("auto_search_broll", True)),
         auto_assign_broll=bool(_daily_preset.get("auto_assign_broll", True)),
         broll_preferred_provider=str(_daily_preset.get("broll_preferred_provider", "Pexels then Pixabay") or "Pexels then Pixabay"),
+        historical_media_verification=str(_daily_preset.get("historical_media_verification", "strict") or "strict"),
     )
 
     st.markdown("#### Controls")
