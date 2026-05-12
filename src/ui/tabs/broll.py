@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
+from src.workflow.project_io import load_project_payload, save_project_payload
 
 logger = logging.getLogger(__name__)
 
@@ -53,17 +54,36 @@ def _broll_settings_key(project_id: str) -> str:
 def _load_broll_settings(project_id: str) -> dict:
     key = _broll_settings_key(project_id)
     if key not in st.session_state:
+        payload = load_project_payload(project_id)
+        saved = payload.get("broll_settings", {}) if isinstance(payload.get("broll_settings", {}), dict) else {}
         st.session_state[key] = {
             "enable_broll": False,
             "auto_search": False,
             "auto_assign_first": False,
             "preferred_provider": "Pexels then Pixabay",
         }
+        st.session_state[key].update(
+            {
+                "enable_broll": bool(saved.get("enable_broll", st.session_state[key]["enable_broll"])),
+                "auto_search": bool(saved.get("auto_search", st.session_state[key]["auto_search"])),
+                "auto_assign_first": bool(saved.get("auto_assign_first", st.session_state[key]["auto_assign_first"])),
+                "preferred_provider": str(saved.get("preferred_provider", st.session_state[key]["preferred_provider"]) or st.session_state[key]["preferred_provider"]),
+            }
+        )
     return st.session_state[key]
 
 
 def _save_broll_settings(project_id: str, settings: dict) -> None:
-    st.session_state[_broll_settings_key(project_id)] = settings
+    normalized = {
+        "enable_broll": bool(settings.get("enable_broll", False)),
+        "auto_search": bool(settings.get("auto_search", False)),
+        "auto_assign_first": bool(settings.get("auto_assign_first", False)),
+        "preferred_provider": str(settings.get("preferred_provider", "Pexels then Pixabay") or "Pexels then Pixabay"),
+    }
+    st.session_state[_broll_settings_key(project_id)] = normalized
+    payload = load_project_payload(project_id)
+    payload["broll_settings"] = normalized
+    save_project_payload(project_id, payload)
 
 
 def _search_results_key(scene_index: int) -> str:

@@ -75,6 +75,14 @@ def generate_broll_query_for_scene(scene: Any) -> str:
     if existing:
         return existing
 
+    prompt_spec = getattr(scene, "prompt_spec", {}) or {}
+    if isinstance(prompt_spec, dict):
+        media_plan = prompt_spec.get("media_plan", {})
+        if isinstance(media_plan, dict):
+            planned_query = str(media_plan.get("broll_query", "") or "").strip()
+            if planned_query:
+                return planned_query
+
     visual = str(getattr(scene, "visual_intent", "") or "").strip()
     if visual:
         keywords = _extract_keywords(visual, max_keywords=5)
@@ -152,6 +160,18 @@ def search_broll_for_scene(
     return search_broll(query, aspect_ratio=aspect_ratio, per_page=per_page, provider_priority=provider_priority)
 
 
+def scene_prefers_broll(scene: Any) -> bool:
+    active_media_type = str(getattr(scene, "active_media_type", "") or "").strip().lower()
+    if active_media_type == "broll":
+        return True
+    prompt_spec = getattr(scene, "prompt_spec", {}) or {}
+    if isinstance(prompt_spec, dict):
+        media_plan = prompt_spec.get("media_plan", {})
+        if isinstance(media_plan, dict):
+            return str(media_plan.get("primary_asset", "") or "").strip().lower() == "broll"
+    return False
+
+
 def download_broll_asset(project_id: str, scene_index: int, result: BrollResult) -> Path:
     broll_dir = Path("data/projects") / str(project_id) / "assets" / "broll"
     broll_dir.mkdir(parents=True, exist_ok=True)
@@ -219,3 +239,39 @@ def clear_broll_from_scene(scene: Any) -> None:
     scene.broll_duration_sec = 0.0
     scene.broll_orientation = ""
     scene.use_broll = False
+
+
+def auto_assign_broll_to_scenes(
+    project_id: str,
+    scenes: list[Any],
+    *,
+    aspect_ratio: str = "16:9",
+    provider_priority: list[str] | None = None,
+    per_page: int = 5,
+) -> tuple[int, int]:
+    """Search and assign B-roll to scenes that prefer motion coverage."""
+    searched = 0
+    assigned = 0
+    for scene in sorted(scenes, key=lambda item: int(getattr(item, "index", 0) or 0)):
+        if not scene_prefers_broll(scene):
+            continue
+        if bool(getattr(scene, "use_broll", False)) and str(getattr(scene, "broll_local_path", "") or "").strip():
+            continue
+        if str(getattr(scene, "video_path", "") or "").strip():
+            continue
+        if str(getattr(scene, "video_object_path", "") or "").strip():
+            continue
+
+        results = search_broll_for_scene(
+            scene,
+            aspect_ratio=aspect_ratio,
+            per_page=per_page,
+            provider_priority=provider_priority,
+        )
+        searched += 1
+        if not results:
+            continue
+        local_path = download_broll_asset(project_id, int(getattr(scene, "index", 0) or 0), results[0])
+        assign_broll_to_scene(scene, results[0], local_path)
+        assigned += 1
+    return searched, assigned

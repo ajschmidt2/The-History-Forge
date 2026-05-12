@@ -56,13 +56,14 @@ def test_run_full_workflow_runs_new_automation_order(tmp_path, monkeypatch):
     monkeypatch.setattr("src.workflow.services.run_apply_scene_narrative", lambda project_id, options=None: execution_order.append("narrative") or StepResult(project_id, "narrative", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_generate_prompts", lambda project_id, options=None: execution_order.append("prompts") or StepResult(project_id, "prompts", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_generate_images", lambda project_id, options=None: execution_order.append("images") or StepResult(project_id, "images", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_assign_broll", lambda project_id, options=None: execution_order.append("broll") or StepResult(project_id, "broll", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_apply_video_effects", lambda project_id, options=None: execution_order.append("effects") or StepResult(project_id, "effects", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_render_video", lambda project_id, options=None: execution_order.append("render") or StepResult(project_id, "render", StepStatus.COMPLETED, outputs={"video_path": "renders/final.mp4"}))
 
     result = run_full_workflow(project_id, FullWorkflowOptions(mode="full_auto", overwrite_scenes=True, overwrite_prompts=True, overwrite_images=True, overwrite_timeline=True, overwrite_render=True, overwrite_voiceover=True, pipeline=PipelineOptions(automation_mode="existing_script_full_workflow")))
 
     assert result.failed_step == ""
-    assert execution_order == ["voiceover", "scenes", "narrative", "prompts", "images", "effects", "render"]
+    assert execution_order == ["voiceover", "scenes", "narrative", "prompts", "images", "broll", "effects", "render"]
 
 
 def test_run_full_workflow_topic_mode_includes_script_step(tmp_path, monkeypatch):
@@ -81,12 +82,13 @@ def test_run_full_workflow_topic_mode_includes_script_step(tmp_path, monkeypatch
     monkeypatch.setattr("src.workflow.services.run_apply_scene_narrative", lambda project_id, options=None: execution_order.append("narrative") or StepResult(project_id, "narrative", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_generate_prompts", lambda project_id, options=None: execution_order.append("prompts") or StepResult(project_id, "prompts", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_generate_images", lambda project_id, options=None: execution_order.append("images") or StepResult(project_id, "images", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_assign_broll", lambda project_id, options=None: execution_order.append("broll") or StepResult(project_id, "broll", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_apply_video_effects", lambda project_id, options=None: execution_order.append("effects") or StepResult(project_id, "effects", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_render_video", lambda project_id, options=None: execution_order.append("render") or StepResult(project_id, "render", StepStatus.COMPLETED))
 
     result = run_full_workflow(project_id, FullWorkflowOptions(mode="full_auto", pipeline=PipelineOptions(automation_mode="topic_to_short_video", topic="Roman roads")))
     assert result.failed_step == ""
-    assert execution_order == ["script", "voiceover", "scenes", "narrative", "prompts", "images", "effects", "render"]
+    assert execution_order == ["script", "voiceover", "scenes", "narrative", "prompts", "images", "broll", "effects", "render"]
 
 
 def test_run_full_workflow_fails_ai_video_clips_when_enabled(tmp_path, monkeypatch):
@@ -103,6 +105,7 @@ def test_run_full_workflow_fails_ai_video_clips_when_enabled(tmp_path, monkeypat
     monkeypatch.setattr("src.workflow.services.run_apply_scene_narrative", lambda project_id, options=None: StepResult(project_id, "narrative", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_generate_prompts", lambda project_id, options=None: StepResult(project_id, "prompts", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_generate_images", lambda project_id, options=None: StepResult(project_id, "images", StepStatus.COMPLETED))
+    monkeypatch.setattr("src.workflow.services.run_assign_broll", lambda project_id, options=None: StepResult(project_id, "broll", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_apply_video_effects", lambda project_id, options=None: StepResult(project_id, "effects", StepStatus.COMPLETED))
     monkeypatch.setattr("src.workflow.services.run_ai_video_clips", lambda project_id, options=None: StepResult(project_id, "ai_video_clips", StepStatus.FAILED, message="Generated 0/4 AI video clips via google_veo_lite; all 4 clips are required."))
     monkeypatch.setattr("src.workflow.services.run_render_video", lambda project_id, options=None: StepResult(project_id, "render", StepStatus.COMPLETED))

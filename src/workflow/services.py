@@ -35,6 +35,7 @@ from src.workflow.project_io import (
     save_project_payload,
     save_scenes,
 )
+from src.workflow.media_planner import plan_media_for_scenes
 from src.workflow.state import load_workflow_state, save_workflow_state, update_step_status
 from utils import (
     extract_visual_context,
@@ -78,8 +79,15 @@ class PipelineOptions:
     topic: str = ""
     topic_direction: str = ""
     script_profile: str = "youtube_short_60s"
-    ai_video_provider: str = "google_veo_lite"
-    image_provider: str = "gemini"
+    ai_video_provider: str = "falai"
+    image_provider: str = "openai"
+    openai_image_model: str = "gpt-image-1"
+    fal_video_model: str = "fal-ai/wan/v2.2-5b/image-to-video"
+    enable_image_search: bool = False
+    enable_broll: bool = False
+    auto_search_broll: bool = False
+    auto_assign_broll: bool = True
+    broll_preferred_provider: str = "Pexels then Pixabay"
     force_render_rebuild: bool = False
 
 
@@ -97,7 +105,7 @@ class FullWorkflowOptions:
     enable_ai_video: bool = False
     ai_video_scene_indexes: list[int] = field(default_factory=list)
     hero_scene_indexes: list[int] = field(default_factory=list)
-    ai_video_provider: str = "google_veo_lite"
+    ai_video_provider: str = "falai"
     ai_video_seconds: int = 5
     pipeline: PipelineOptions = field(default_factory=PipelineOptions)
     progress_callback: Any | None = field(default=None, repr=False, compare=False)
@@ -310,6 +318,9 @@ def _step_outputs_exist(project_id: str, step: str) -> bool:
             return False
         images_dir = project_path / "assets/images"
         return all((images_dir / f"s{int(scene.index):02d}.png").exists() for scene in scenes)
+    if step == "broll":
+        scenes = load_scenes(project_id)
+        return any(bool(getattr(scene, "use_broll", False)) for scene in scenes)
     if step == "effects":
         payload = load_project_payload(project_id)
         return "enable_video_effects" in payload
@@ -380,6 +391,22 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
         except Exception:  # noqa: BLE001
             pass
 
+    # Resolve fal.ai model slug from options, session state, or daily settings.
+    fal_video_model = str(getattr(options, "fal_video_model", "") or "").strip()
+    if not fal_video_model and _session_state_live:
+        try:
+            import streamlit as st
+            fal_video_model = str(st.session_state.get("fal_video_model_override", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+    if not fal_video_model:
+        try:
+            from src.workflow.daily_job import load_daily_automation_settings
+            _settings = load_daily_automation_settings()
+            fal_video_model = str(_settings.get("preset", {}).get("fal_video_model", "") or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+
     requested_duration_seconds = int(round(float(duration_seconds)))
     if provider == "google_veo_lite":
         try:
@@ -426,6 +453,7 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             provider=provider,
             workflow_logger=_logger,
             clip_done_callback=_clip_done,
+            fal_video_model=fal_video_model,
         )
         _logger.info("ai_video_clips project=%s opening=%s q2=%s q3=%s q4=%s", project_id, opening_clip, q2_clip, q3_clip, q4_clip)
 
@@ -490,11 +518,15 @@ def run_ai_video_clips(project_id: str, options: PipelineOptions | None = None) 
             "q4_clip": str(q4_persisted) if q4_persisted else "",
             "generated": generated,
         }
-        if generated != 4:
-            msg = f"Generated {generated}/4 AI video clips via {provider}; all 4 clips are required."
+        if generated < 3:
+            # Require at least 3/4 clips; 1 failure is tolerated (missing clip
+            # uses a still-image fallback at render time via empty path in manifest).
+            msg = f"Generated {generated}/4 AI video clips via {provider}; at least 3 are required."
             _logger.warning("ai_video_clips incomplete provider=%s generated=%d expected=4", provider, generated)
             update_step_status(project_id, "ai_video_clips", StepStatus.FAILED, error=msg)
             return StepResult(project_id, "ai_video_clips", StepStatus.FAILED, message=msg, outputs=outputs)
+        elif generated < 4:
+            _logger.warning("ai_video_clips only %d/4 clips generated — within tolerance, continuing", generated)
 
         update_step_status(project_id, "ai_video_clips", StepStatus.COMPLETED)
         return StepResult(
@@ -553,6 +585,7 @@ def run_full_workflow(project_id: str, options: FullWorkflowOptions | None = Non
             ("narrative", cfg.overwrite_scenes, lambda: run_apply_scene_narrative(project_id, cfg.pipeline)),
             ("prompts", cfg.overwrite_prompts, lambda: run_generate_prompts(project_id, cfg.pipeline)),
             ("images", cfg.overwrite_images, lambda: run_generate_images(project_id, cfg.pipeline)),
+            ("broll", cfg.overwrite_timeline, lambda: run_assign_broll(project_id, cfg.pipeline)),
             ("effects", cfg.overwrite_timeline, lambda: run_apply_video_effects(project_id, cfg.pipeline)),
             ("ai_video_clips", cfg.overwrite_ai_video, lambda: run_ai_video_clips(project_id, cfg.pipeline)),
             ("render", cfg.overwrite_render, lambda: run_render_video(project_id, cfg.pipeline)),
@@ -1075,6 +1108,12 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
             objects=payload.get("object_registry", []),
             visual_context=visual_ctx or None,
         )
+        media_plans = plan_media_for_scenes(
+            scenes,
+            topic=str(payload.get("topic", "") or payload.get("project_title", "") or "").strip(),
+            era=str(payload.get("era", "") or "").strip(),
+            aspect_ratio=cfg.aspect_ratio,
+        )
         for scene in scenes:
             scene_title = str(getattr(scene, "title", "") or "").strip()
             scene_excerpt = str(getattr(scene, "script_excerpt", "") or "").strip()
@@ -1085,6 +1124,12 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
                 scene.image_prompt = base_prompt
             scene.video_prompt = str(getattr(scene, "video_prompt", "") or "").strip()
             scene.prompt_spec = dict(getattr(scene, "prompt_spec", {}) or {})
+            media_plan = media_plans.get(int(getattr(scene, "index", 0) or 0), {})
+            if media_plan:
+                scene.prompt_spec["media_plan"] = media_plan
+                scene.active_media_type = str(media_plan.get("primary_asset", "") or "")
+                if not str(getattr(scene, "broll_query", "") or "").strip():
+                    scene.broll_query = str(media_plan.get("broll_query", "") or "").strip()
             scene.prompt_spec["final_output"] = {
                 "scene_id": str(getattr(scene, "scene_id", "") or f"scene-{scene.index}"),
                 "image_prompt": scene.image_prompt,
@@ -1098,6 +1143,7 @@ def run_generate_prompts(project_id: str, options: PipelineOptions | None = None
                 "visual_intent": scene_visual_intent,
                 "aspect_ratio": cfg.aspect_ratio,
                 "scores": dict(getattr(scene, "prompt_scores", {}) or {}),
+                "media_plan": media_plan,
             }
         save_scenes(project_id, scenes)
         sync_scene_asset_metadata(project_id, scenes)
@@ -1122,7 +1168,9 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
 
     update_step_status(project_id, "images", StepStatus.IN_PROGRESS)
     images_dir = project_dir(project_id) / "assets/images"
+    images_dir.mkdir(parents=True, exist_ok=True)
     generated = 0
+    searched = 0
     logger = _workflow_logger(project_id)
     scenes_to_generate = scenes
     # Build a cross-scene visual anchor from project metadata so all images share
@@ -1133,17 +1181,83 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
     visual_anchor = ""
     if _topic:
         visual_anchor = f"{_topic}. {_era + '. ' if _era else ''}Consistent historical era, unified palette, same cinematic treatment across all scenes."
+
+    # ---- Image search (mix mode): try real historical images first ----
+    _enable_search = getattr(cfg, "enable_image_search", False)
+    _search_results: dict[int, object] = {}
+    if _enable_search:
+        try:
+            from src.research.image_search import search_images_for_scenes
+            from src.config import get_secret as _gs
+            _unsplash_key = str(_gs("UNSPLASH_ACCESS_KEY") or "")
+            _scene_dicts = [
+                {
+                    "index": getattr(s, "index", i),
+                    "title": getattr(s, "title", ""),
+                    "description": getattr(s, "narration", "") or getattr(s, "description", ""),
+                    "query_hints": (
+                        (getattr(s, "prompt_spec", {}) or {}).get("media_plan", {}).get("real_image_search_terms", [])
+                        if isinstance((getattr(s, "prompt_spec", {}) or {}).get("media_plan", {}), dict)
+                        else []
+                    ),
+                }
+                for i, s in enumerate(scenes_to_generate)
+            ]
+            _search_cache = project_dir(project_id) / "assets/images"
+            logger.info("image_search_start topic=%s scenes=%d", _topic, len(_scene_dicts))
+            _search_results = search_images_for_scenes(
+                scenes=_scene_dicts,
+                topic=_topic,
+                era=_era,
+                cache_dir=_search_cache,
+                unsplash_access_key=_unsplash_key,
+            )
+            logger.info("image_search_done found=%d/%d", len(_search_results), len(_scene_dicts))
+        except Exception as exc:  # noqa: BLE001 — search failure must not block generation
+            logger.warning("image_search_failed error=%s", exc)
+            _search_results = {}
+
     try:
         for scene in scenes_to_generate:
+            scene_idx = getattr(scene, "index", 0)
+            out = images_dir / f"s{scene_idx:02d}.png"
+
+            # Mix mode: if image search found a result for this scene, use it.
+            if _enable_search and scene_idx in _search_results:
+                _sr = _search_results[scene_idx]
+                _src_path = getattr(_sr, "local_path", None)
+                if _src_path and Path(_src_path).exists():
+                    _img_bytes = Path(_src_path).read_bytes()
+                    scene.image_bytes = _img_bytes
+                    scene.image_variations = [_img_bytes]
+                    scene.primary_image_index = 0
+                    scene.image_error = ""
+                    out.write_bytes(_img_bytes)
+                    record_asset(project_id, "image", out)
+                    try:
+                        _sb_store.upload_image(project_id, out.name, out)
+                    except Exception:
+                        pass
+                    searched += 1
+                    generated += 1
+                    logger.info(
+                        "image_search_used scene=%s provider=%s title=%r",
+                        scene_idx,
+                        getattr(_sr, "provider", "?"),
+                        getattr(_sr, "title", ""),
+                    )
+                    continue  # skip AI generation for this scene
+
+            # Fall back to AI image generation
             updated = generate_image_for_scene(
                 scene,
                 aspect_ratio=cfg.aspect_ratio,
                 visual_style=cfg.visual_style,
                 visual_anchor=visual_anchor,
-                provider=getattr(cfg, "image_provider", "gemini") or "gemini",
+                provider=getattr(cfg, "image_provider", "openai") or "openai",
+                model=getattr(cfg, "openai_image_model", None) or None,
             )
             if updated.image_bytes:
-                out = images_dir / f"s{updated.index:02d}.png"
                 out.write_bytes(updated.image_bytes)
                 record_asset(project_id, "image", out)
                 try:
@@ -1153,7 +1267,7 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
                 generated += 1
             else:
                 err = getattr(updated, "image_error", "") or "unknown error"
-                logger.warning("image_generation_failed scene=%s error=%s", getattr(updated, "index", "?"), err)
+                logger.warning("image_generation_failed scene=%s error=%s", scene_idx, err)
         save_scenes(project_id, scenes)
         sync_scene_asset_metadata(project_id, scenes)
     except Exception as exc:  # noqa: BLE001
@@ -1163,12 +1277,90 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
     expected_count = len(scenes_to_generate)
     if generated < expected_count:
         missing = expected_count - generated
-        msg = f"{missing}/{expected_count} scene images failed to generate"
-        update_step_status(project_id, "images", StepStatus.FAILED, error=msg)
-        return StepResult(project_id, "images", StepStatus.FAILED, message=msg, outputs={"generated": generated})
+        # Allow up to 1 missing image (e.g. rejected by artifact check) so a
+        # single borderline scene doesn't abort an otherwise successful job.
+        tolerance = 1
+        if missing > tolerance:
+            msg = f"{missing}/{expected_count} scene images failed to generate"
+            update_step_status(project_id, "images", StepStatus.FAILED, error=msg)
+            return StepResult(project_id, "images", StepStatus.FAILED, message=msg, outputs={"generated": generated})
+        else:
+            warn_msg = f"{missing}/{expected_count} scene image(s) failed but within tolerance — continuing"
+            logger.warning(warn_msg)
 
     update_step_status(project_id, "images", StepStatus.COMPLETED)
-    return StepResult(project_id, "images", StepStatus.COMPLETED, outputs={"generated": generated})
+    _outputs: dict[str, int] = {"generated": generated}
+    if _enable_search:
+        _outputs["searched"] = searched
+    return StepResult(project_id, "images", StepStatus.COMPLETED, outputs=_outputs)
+
+
+def _payload_broll_settings(project_id: str) -> dict[str, Any]:
+    payload = load_project_payload(project_id)
+    raw = payload.get("broll_settings", {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _provider_priority_label_to_list(preferred: str) -> list[str]:
+    mapping = {
+        "Pexels": ["pexels"],
+        "Pixabay": ["pixabay"],
+        "Pexels then Pixabay": ["pexels", "pixabay"],
+        "Pixabay then Pexels": ["pixabay", "pexels"],
+    }
+    return mapping.get(str(preferred or "").strip(), ["pexels", "pixabay"])
+
+
+def run_assign_broll(project_id: str, options: PipelineOptions | None = None) -> StepResult:
+    from src.broll.service import auto_assign_broll_to_scenes
+
+    ensure_project_files(project_id)
+    _, cfg = _load_options(project_id, options)
+    scenes = load_scenes(project_id)
+    if not scenes:
+        return StepResult(project_id, "broll", StepStatus.SKIPPED, message="No scenes available for B-roll.")
+
+    saved = _payload_broll_settings(project_id)
+    enabled = bool(getattr(cfg, "enable_broll", False) or saved.get("enable_broll", False))
+    auto_search = bool(getattr(cfg, "auto_search_broll", False) or saved.get("auto_search", False))
+    auto_assign = bool(getattr(cfg, "auto_assign_broll", True))
+    if "auto_assign_first" in saved:
+        auto_assign = bool(saved.get("auto_assign_first", auto_assign))
+    preferred_provider = (
+        str(getattr(cfg, "broll_preferred_provider", "") or "").strip()
+        or str(saved.get("preferred_provider", "") or "").strip()
+        or "Pexels then Pixabay"
+    )
+
+    if not enabled:
+        return StepResult(project_id, "broll", StepStatus.SKIPPED, message="B-roll is disabled.")
+    if not auto_search:
+        return StepResult(project_id, "broll", StepStatus.SKIPPED, message="B-roll auto-search is disabled.")
+    if not auto_assign:
+        return StepResult(project_id, "broll", StepStatus.SKIPPED, message="B-roll auto-assignment is disabled.")
+
+    update_step_status(project_id, "broll", StepStatus.IN_PROGRESS)
+    try:
+        searched, assigned = auto_assign_broll_to_scenes(
+            project_id,
+            scenes,
+            aspect_ratio=cfg.aspect_ratio,
+            provider_priority=_provider_priority_label_to_list(preferred_provider),
+        )
+        save_scenes(project_id, scenes)
+        sync_scene_asset_metadata(project_id, scenes)
+    except Exception as exc:  # noqa: BLE001
+        update_step_status(project_id, "broll", StepStatus.FAILED, error=str(exc))
+        return StepResult(project_id, "broll", StepStatus.FAILED, message=str(exc))
+
+    update_step_status(project_id, "broll", StepStatus.COMPLETED)
+    return StepResult(
+        project_id,
+        "broll",
+        StepStatus.COMPLETED,
+        outputs={"searched": searched, "assigned": assigned},
+        message=f"Searched {searched} scene(s); assigned {assigned} B-roll clip(s).",
+    )
 
 
 def run_generate_voiceover(project_id: str, options: PipelineOptions | None = None) -> StepResult:
