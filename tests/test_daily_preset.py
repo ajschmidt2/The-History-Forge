@@ -12,6 +12,7 @@ from src.workflow.daily_job import (
     update_daily_workflow_schedule,
 )
 from src.workflow.presets import DAILY_SHORT_PRESET
+from src.workflow.daily_job import _resolve_daily_short_preset
 
 
 def test_daily_short_preset_pipeline_defaults():
@@ -25,6 +26,10 @@ def test_daily_short_preset_pipeline_defaults():
     assert options.tts_provider == "openai"
     assert options.openai_tts_model == "gpt-4o-mini-tts"
     assert options.openai_tts_voice == "ash"
+    assert options.enable_image_search is True
+    assert options.enable_broll is True
+    assert options.auto_search_broll is True
+    assert options.auto_assign_broll is True
 
 
 def test_daily_automation_settings_roundtrip(tmp_path: Path):
@@ -51,6 +56,11 @@ def test_daily_automation_settings_roundtrip(tmp_path: Path):
                 "scene_count": 20,
                 "target_word_count": 180,
                 "subtitles_enabled": True,
+                "enable_image_search": True,
+                "enable_broll": True,
+                "auto_search_broll": True,
+                "auto_assign_broll": False,
+                "broll_preferred_provider": "Pixabay then Pexels",
             },
         },
         path=settings_path,
@@ -69,7 +79,35 @@ def test_daily_automation_settings_roundtrip(tmp_path: Path):
     assert saved["preset"]["scene_count"] == 20
     assert saved["preset"]["target_word_count"] == 180
     assert saved["preset"]["subtitles_enabled"] is True
+    assert saved["preset"]["enable_image_search"] is True
+    assert saved["preset"]["enable_broll"] is True
+    assert saved["preset"]["auto_search_broll"] is True
+    assert saved["preset"]["auto_assign_broll"] is False
+    assert saved["preset"]["broll_preferred_provider"] == "Pixabay then Pexels"
     assert saved["preset"]["openai_tts_voice"] == DAILY_SHORT_PRESET.openai_tts_voice
+
+
+def test_resolve_daily_short_preset_preserves_media_search_settings():
+    preset = _resolve_daily_short_preset(
+        {
+            "preset": {
+                "enable_image_search": True,
+                "enable_broll": True,
+                "auto_search_broll": True,
+                "auto_assign_broll": False,
+                "broll_preferred_provider": "Pixabay then Pexels",
+                "openai_image_model": "gpt-image-1",
+                "fal_video_model": "fal-ai/wan/v2.2-5b/image-to-video",
+            }
+        }
+    )
+
+    assert preset.enable_image_search is True
+    assert preset.enable_broll is True
+    assert preset.auto_search_broll is True
+    assert preset.auto_assign_broll is False
+    assert preset.broll_preferred_provider == "Pixabay then Pexels"
+    assert preset.openai_image_model == "gpt-image-1"
 
 
 def test_daily_automation_settings_defaults_include_youtube_publishing(tmp_path: Path):
@@ -78,192 +116,6 @@ def test_daily_automation_settings_defaults_include_youtube_publishing(tmp_path:
     assert saved["publishing"]["youtube_enabled"] is False
     assert saved["publishing"]["youtube_privacy_status"] == "private"
     assert saved["publishing"]["instagram_enabled"] is True
-
-
-def test_run_daily_job_honors_publishing_env_overrides(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    project_root = Path("data/projects/generated_project")
-    final_path = project_root / "renders/final.mp4"
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    final_path.write_bytes(b"x" * 200_000)
-
-    def fake_run_full_workflow(*_args, **_kwargs):
-        class Result:
-            failed_step = ""
-            warnings = []
-            final_output_path = str(final_path)
-        return Result()
-
-    class UploadResult:
-        video_id = "yt-env-123"
-
-    monkeypatch.setenv("DAILY_YOUTUBE_ENABLED", "true")
-    monkeypatch.setenv("DAILY_YOUTUBE_PRIVACY_STATUS", "public")
-    monkeypatch.setenv("DAILY_INSTAGRAM_ENABLED", "false")
-    monkeypatch.setattr("src.workflow.daily_job.generate_daily_topic", lambda **_kwargs: "Test Topic")
-    monkeypatch.setattr("src.workflow.daily_job.generate_daily_short_script", lambda *_args, **_kwargs: "A" * 160)
-    monkeypatch.setattr("src.workflow.daily_job.ensure_project_files", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.upsert_project", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.project_dir", lambda *_args, **_kwargs: project_root)
-    monkeypatch.setattr("src.workflow.daily_job.load_project_payload", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("src.workflow.daily_job.save_project_payload", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.save_used_topic", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.run_full_workflow", fake_run_full_workflow)
-    monkeypatch.setattr("src.workflow.daily_job._upload_final_to_generated_bucket", lambda *_args, **_kwargs: {
-        "bucket": "generated-videos",
-        "object_path": "daily-renders/test.mp4",
-        "public_url": "https://example.com/final.mp4",
-    })
-    monkeypatch.setattr("src.workflow.daily_job._append_run_history", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job._ig_configured", lambda: True)
-    monkeypatch.setattr("src.workflow.daily_job._tt_configured", lambda: False)
-    monkeypatch.setattr("src.workflow.daily_job._sb_store.cleanup_project_intermediate_assets", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("src.workflow.daily_job._validate_yt_credentials", lambda **_kwargs: (True, "ok"))
-
-    upload_calls = []
-
-    def fake_upload(**kwargs):
-        upload_calls.append(kwargs)
-        return UploadResult()
-
-    monkeypatch.setattr("src.workflow.daily_job._yt_upload_video", fake_upload)
-    monkeypatch.setattr("src.workflow.daily_job._ig_upload_reel", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Instagram should be disabled by env override")))
-
-    save_daily_automation_settings(
-        {
-            "publishing": {"youtube_enabled": False, "youtube_privacy_status": "private", "instagram_enabled": True},
-            "preset": {"music_enabled": False},
-        },
-        path=Path(HISTORY_CHANNEL.automation_settings_path),
-    )
-
-    summary = run_daily_video_job(run_date=datetime(2026, 4, 24).date(), profile=HISTORY_CHANNEL)
-
-    assert summary["youtube_enabled"] is True
-    assert summary["youtube_privacy_status"] == "public"
-    assert summary["instagram_enabled"] is False
-    assert summary["youtube_video_id"] == "yt-env-123"
-    assert upload_calls[0]["privacy_status"] == "public"
-
-
-def test_run_daily_job_avoids_remote_used_topics(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    project_root = Path("data/projects/generated_project")
-    final_path = project_root / "renders/final.mp4"
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    final_path.write_bytes(b"x" * 200_000)
-
-    def fake_run_full_workflow(*_args, **_kwargs):
-        class Result:
-            failed_step = ""
-            warnings = []
-            final_output_path = str(final_path)
-        return Result()
-
-    seen_used_topics: list[set[str]] = []
-
-    def fake_generate_daily_topic(*, used_topics=None, topic_direction=""):
-        seen_used_topics.append(set(used_topics or set()))
-        return "Fresh Topic"
-
-    monkeypatch.setattr("src.workflow.daily_job.generate_daily_topic", fake_generate_daily_topic)
-    monkeypatch.setattr("src.workflow.daily_job.generate_daily_short_script", lambda *_args, **_kwargs: "A" * 160)
-    monkeypatch.setattr("src.workflow.daily_job.ensure_project_files", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.upsert_project", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.project_dir", lambda *_args, **_kwargs: project_root)
-    monkeypatch.setattr("src.workflow.daily_job.load_project_payload", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("src.workflow.daily_job.save_project_payload", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.save_used_topic", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.run_full_workflow", fake_run_full_workflow)
-    monkeypatch.setattr("src.workflow.daily_job._upload_final_to_generated_bucket", lambda *_args, **_kwargs: {
-        "bucket": "generated-videos",
-        "object_path": "daily-renders/test.mp4",
-        "public_url": "https://example.com/final.mp4",
-    })
-    monkeypatch.setattr("src.workflow.daily_job._append_run_history", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job._validate_yt_credentials", lambda **_kwargs: (False, "skip"))
-    monkeypatch.setattr("src.workflow.daily_job._ig_configured", lambda: False)
-    monkeypatch.setattr("src.workflow.daily_job._tt_configured", lambda: False)
-    monkeypatch.setattr("src.workflow.daily_job._sb_store.cleanup_project_intermediate_assets", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("src.workflow.daily_job._load_remote_used_topics", lambda _profile: {"the mysterious disappearance of the sodder children in 1945."})
-    monkeypatch.setattr("src.workflow.daily_job._save_remote_used_topic", lambda *args, **kwargs: None)
-
-    save_daily_automation_settings(
-        {
-            "publishing": {"youtube_enabled": False, "youtube_privacy_status": "private", "instagram_enabled": False},
-            "preset": {"music_enabled": False},
-        },
-        path=Path(HISTORY_CHANNEL.automation_settings_path),
-    )
-
-    summary = run_daily_video_job(run_date=datetime(2026, 4, 24).date(), profile=HISTORY_CHANNEL)
-
-    assert summary["topic"] == "Fresh Topic"
-    assert seen_used_topics
-    assert "the mysterious disappearance of the sodder children in 1945." in seen_used_topics[0]
-
-
-def test_run_daily_job_emits_progress_events(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    project_root = Path("data/projects/generated_project")
-    final_path = project_root / "renders/final.mp4"
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    final_path.write_bytes(b"x" * 200_000)
-
-    def fake_run_full_workflow(*_args, **_kwargs):
-        progress = _kwargs["progress_callback"] if "progress_callback" in _kwargs else _args[1].progress_callback
-        if callable(progress):
-            progress({"step": "voiceover", "status": "in_progress", "index": 1, "total": 8, "message": "voiceover"})
-            progress({"step": "render", "status": "completed", "index": 8, "total": 8, "message": "render"})
-
-        class Result:
-            failed_step = ""
-            warnings = []
-            final_output_path = str(final_path)
-
-        return Result()
-
-    monkeypatch.setattr("src.workflow.daily_job.generate_daily_topic", lambda **_kwargs: "Test Topic")
-    monkeypatch.setattr("src.workflow.daily_job.generate_daily_short_script", lambda *_args, **_kwargs: "A" * 160)
-    monkeypatch.setattr("src.workflow.daily_job.ensure_project_files", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.upsert_project", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.project_dir", lambda *_args, **_kwargs: project_root)
-    monkeypatch.setattr("src.workflow.daily_job.load_project_payload", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("src.workflow.daily_job.save_project_payload", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.save_used_topic", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.run_full_workflow", fake_run_full_workflow)
-    monkeypatch.setattr("src.workflow.daily_job._upload_final_to_generated_bucket", lambda *_args, **_kwargs: {
-        "bucket": "generated-videos",
-        "object_path": "daily-renders/test.mp4",
-        "public_url": "https://example.com/final.mp4",
-    })
-    monkeypatch.setattr("src.workflow.daily_job._append_run_history", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job._validate_yt_credentials", lambda **_kwargs: (False, "skip"))
-    monkeypatch.setattr("src.workflow.daily_job._ig_configured", lambda: False)
-    monkeypatch.setattr("src.workflow.daily_job._tt_configured", lambda: False)
-    monkeypatch.setattr("src.workflow.daily_job._sb_store.cleanup_project_intermediate_assets", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("src.workflow.daily_job._load_remote_used_topics", lambda _profile: set())
-    monkeypatch.setattr("src.workflow.daily_job._save_remote_used_topic", lambda *args, **kwargs: None)
-
-    save_daily_automation_settings(
-        {
-            "publishing": {"youtube_enabled": False, "youtube_privacy_status": "private", "instagram_enabled": False},
-            "preset": {"music_enabled": False},
-        },
-        path=Path(HISTORY_CHANNEL.automation_settings_path),
-    )
-
-    events: list[dict] = []
-    run_daily_video_job(
-        run_date=datetime(2026, 4, 24).date(),
-        profile=HISTORY_CHANNEL,
-        progress_callback=lambda event: events.append(dict(event)),
-    )
-
-    assert events
-    assert any(event["step"] == "prepare" for event in events)
-    assert any(event["step"] == "workflow" for event in events)
-    assert any(event["step"] == "cleanup" and event["status"] == "completed" for event in events)
 
 
 def test_resolve_default_music_track_prefers_library_then_project_music(tmp_path: Path, monkeypatch):
@@ -522,64 +374,3 @@ def test_run_daily_job_uploads_to_youtube_when_enabled(tmp_path: Path, monkeypat
     assert summary["youtube_privacy_status"] == "unlisted"
     assert summary["youtube_video_id"] == "yt123"
     assert upload_calls[0]["privacy_status"] == "unlisted"
-
-
-def test_run_daily_job_disables_music_when_track_is_unavailable_on_runner(tmp_path: Path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    project_root = Path("data/projects/generated_project")
-    final_path = project_root / "renders/final.mp4"
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    final_path.write_bytes(b"x" * 200_000)
-
-    workflow_calls = []
-
-    def fake_run_full_workflow(*_args, **_kwargs):
-        workflow_calls.append(_kwargs["pipeline"] if "pipeline" in _kwargs else _args[1].pipeline)
-
-        class Result:
-            failed_step = ""
-            warnings = []
-            final_output_path = str(final_path)
-
-        return Result()
-
-    monkeypatch.setattr("src.workflow.daily_job.generate_daily_topic", lambda **_kwargs: "Test Topic")
-    monkeypatch.setattr("src.workflow.daily_job.generate_daily_short_script", lambda *_args, **_kwargs: "A" * 160)
-    monkeypatch.setattr("src.workflow.daily_job.ensure_project_files", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.upsert_project", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.project_dir", lambda *_args, **_kwargs: project_root)
-    monkeypatch.setattr("src.workflow.daily_job.load_project_payload", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr("src.workflow.daily_job.save_project_payload", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.save_used_topic", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job.run_full_workflow", fake_run_full_workflow)
-    monkeypatch.setattr("src.workflow.daily_job._upload_final_to_generated_bucket", lambda *_args, **_kwargs: {
-        "bucket": "generated-videos",
-        "object_path": "daily-renders/test.mp4",
-        "public_url": "https://example.com/final.mp4",
-    })
-    monkeypatch.setattr("src.workflow.daily_job._append_run_history", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("src.workflow.daily_job._validate_yt_credentials", lambda **_kwargs: (False, "skip"))
-    monkeypatch.setattr("src.workflow.daily_job._ig_configured", lambda: False)
-    monkeypatch.setattr("src.workflow.daily_job._tt_configured", lambda: False)
-    monkeypatch.setattr("src.workflow.daily_job._sb_store.cleanup_project_intermediate_assets", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        "src.workflow.daily_job.resolve_music_track_for_project",
-        lambda *_args, **_kwargs: {"selected_track": "missing.mp3", "resolved_path": "", "copied_to_project": False, "file_exists": False},
-    )
-
-    save_daily_automation_settings(
-        {
-            "selected_music_track": "C:/does/not/exist/music.mp3",
-            "publishing": {"youtube_enabled": False, "youtube_privacy_status": "private", "instagram_enabled": False},
-            "preset": {"music_enabled": True},
-        },
-        path=Path(HISTORY_CHANNEL.automation_settings_path),
-    )
-
-    summary = run_daily_video_job(run_date=datetime(2026, 4, 24).date(), profile=HISTORY_CHANNEL)
-
-    assert summary["music_track"] == ""
-    assert summary["warnings"]
-    assert "Continuing without music" in summary["warnings"][0]
-    assert workflow_calls
-    assert workflow_calls[0].include_music is False

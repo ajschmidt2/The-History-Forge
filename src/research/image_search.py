@@ -97,22 +97,37 @@ def _build_queries(
             if cleaned_hint:
                 parts.append(cleaned_hint)
 
+    topic_clean = re.sub(r"\s+", " ", str(topic or "")).strip()
+    generic_topic = any(
+        token in topic_clean.lower()
+        for token in (
+            "history figure",
+            "history event",
+            "history story",
+            "not well known",
+            "little known",
+            "unknown figure",
+            "unknown story",
+            "legendary",
+        )
+    )
+
     # 1. Topic + era (most context-specific)
-    if topic and era:
-        parts.append(f"{topic} {era} historical")
+    if topic_clean and era and not generic_topic:
+        parts.append(f"{topic_clean} {era} historical")
 
     # 2. Scene title + topic
-    if scene_title and topic:
+    if scene_title and topic_clean and not generic_topic:
         cleaned = re.sub(r"\s+", " ", scene_title).strip()
-        parts.append(f"{cleaned} {topic}")
+        parts.append(f"{cleaned} {topic_clean}")
 
     # 3. Scene title alone
     if scene_title:
         parts.append(re.sub(r"\s+", " ", scene_title).strip())
 
     # 4. Topic alone (broad fallback)
-    if topic:
-        parts.append(topic)
+    if topic_clean and not generic_topic:
+        parts.append(topic_clean)
 
     # 5. First noun phrase from description as last resort
     if scene_description:

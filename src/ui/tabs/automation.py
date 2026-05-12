@@ -613,6 +613,38 @@ def _render_daily_automation_status(project_id: str) -> None:
         key="daily_enable_image_search",
         help="When enabled, searches Wikimedia Commons, Library of Congress, and Unsplash for real historical images for each scene before AI generation.",
     )
+    _enable_broll_default = bool(preset.get("enable_broll", True))
+    daily_enable_broll = st.toggle(
+        "Enable B-roll search",
+        value=_enable_broll_default,
+        key="daily_enable_broll",
+        help="When enabled, searches free stock footage providers and assigns motion clips to scenes that benefit from real movement.",
+    )
+    _auto_search_broll_default = bool(preset.get("auto_search_broll", True))
+    daily_auto_search_broll = st.toggle(
+        "Auto-search B-roll for scenes",
+        value=_auto_search_broll_default,
+        key="daily_auto_search_broll",
+        disabled=not daily_enable_broll,
+    )
+    _auto_assign_broll_default = bool(preset.get("auto_assign_broll", True))
+    daily_auto_assign_broll = st.toggle(
+        "Auto-assign first acceptable B-roll result",
+        value=_auto_assign_broll_default,
+        key="daily_auto_assign_broll",
+        disabled=not daily_enable_broll,
+    )
+    _broll_provider_options = ["Pexels then Pixabay", "Pixabay then Pexels", "Pexels", "Pixabay"]
+    _broll_provider_default = str(preset.get("broll_preferred_provider", "Pexels then Pixabay") or "Pexels then Pixabay")
+    if _broll_provider_default not in _broll_provider_options:
+        _broll_provider_default = "Pexels then Pixabay"
+    daily_broll_provider = st.selectbox(
+        "Preferred B-roll provider order",
+        options=_broll_provider_options,
+        index=_broll_provider_options.index(_broll_provider_default),
+        key="daily_broll_provider",
+        disabled=not daily_enable_broll,
+    )
 
     project_music_tracks = _list_music_tracks(project_dir(project_id) / "assets/music")
     shared_music_tracks = _list_shared_music_tracks()
@@ -640,6 +672,10 @@ def _render_daily_automation_status(project_id: str) -> None:
             "image_provider": daily_image_provider,
             "openai_image_model": daily_openai_image_model,
             "enable_image_search": bool(daily_enable_image_search),
+            "enable_broll": bool(daily_enable_broll),
+            "auto_search_broll": bool(daily_auto_search_broll),
+            "auto_assign_broll": bool(daily_auto_assign_broll),
+            "broll_preferred_provider": str(daily_broll_provider or "Pexels then Pixabay"),
         }
 
     def _build_daily_settings_dict() -> dict:
@@ -1060,6 +1096,10 @@ def tab_automation(project_id: str) -> None:
         openai_image_model=str(_daily_preset.get("openai_image_model", DEFAULT_OPENAI_IMAGE_MODEL) or DEFAULT_OPENAI_IMAGE_MODEL),
         fal_video_model=str(st.session_state.get("fal_video_model_override", "") or _daily_preset.get("fal_video_model", DEFAULT_FAL_VIDEO_MODEL) or DEFAULT_FAL_VIDEO_MODEL),
         enable_image_search=bool(_daily_preset.get("enable_image_search", False)),
+        enable_broll=bool(_daily_preset.get("enable_broll", True)),
+        auto_search_broll=bool(_daily_preset.get("auto_search_broll", True)),
+        auto_assign_broll=bool(_daily_preset.get("auto_assign_broll", True)),
+        broll_preferred_provider=str(_daily_preset.get("broll_preferred_provider", "Pexels then Pixabay") or "Pexels then Pixabay"),
     )
 
     st.markdown("#### Controls")

@@ -58,3 +58,24 @@ def test_plan_media_for_scenes_falls_back_to_heuristics(monkeypatch):
 
     assert plans[1]["primary_asset"] == "real_image"
     assert plans[2]["primary_asset"] in {"broll", "ai_image"}
+
+
+def test_plan_media_for_scenes_prefers_broll_for_motion_in_photo_era(monkeypatch):
+    scenes = [
+        SimpleNamespace(
+            index=1,
+            title="Resistance escape by bicycle",
+            script_excerpt="She raced through occupied streets at night, slipping past patrols and checkpoints.",
+            visual_intent="fast-moving pursuit through wartime streets",
+        )
+    ]
+
+    class BrokenRouter:
+        def generate_structured(self, prompt, *, system=None, task_type="json"):
+            raise RuntimeError("ollama offline")
+
+    monkeypatch.setattr("src.workflow.media_planner.get_router", lambda: BrokenRouter())
+
+    plans = plan_media_for_scenes(scenes, topic="Nancy Wake in World War II", era="1940s", aspect_ratio="9:16")
+
+    assert plans[1]["primary_asset"] == "broll"

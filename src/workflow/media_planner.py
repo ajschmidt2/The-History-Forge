@@ -42,6 +42,20 @@ _PHOTO_ERA_HINTS = (
     "198",
 )
 
+_ARCHIVAL_SPECIFIC_HINTS = (
+    "photograph",
+    "photo",
+    "portrait",
+    "newspaper",
+    "headline",
+    "document",
+    "archive",
+    "poster",
+    "map",
+    "engraving",
+    "mugshot",
+)
+
 _MOTION_HINTS = (
     "march",
     "marching",
@@ -77,6 +91,17 @@ _PRE_PHOTO_HINTS = (
     "samurai",
 )
 
+_GENERIC_TOPIC_HINTS = (
+    "history figure",
+    "history event",
+    "history story",
+    "not well known",
+    "little known",
+    "unknown figure",
+    "unknown story",
+    "legendary",
+)
+
 
 def _keywords(text: str, limit: int = 6) -> list[str]:
     words = re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(text or ""))
@@ -110,6 +135,13 @@ def _clean_query_list(values: Any, fallback: list[str]) -> list[str]:
     return cleaned or fallback
 
 
+def _topic_is_generic(topic: str) -> bool:
+    text = str(topic or "").strip().lower()
+    if not text:
+        return True
+    return any(token in text for token in _GENERIC_TOPIC_HINTS)
+
+
 def _heuristic_asset_type(scene: Any, topic: str) -> str:
     haystack = " ".join(
         [
@@ -119,13 +151,16 @@ def _heuristic_asset_type(scene: Any, topic: str) -> str:
             str(topic or ""),
         ]
     ).lower()
-    if any(token in haystack for token in _PHOTO_ERA_HINTS):
-        return _ASSET_REAL_IMAGE
-    if any(token in haystack for token in _MOTION_HINTS):
+    has_photo_era = any(token in haystack for token in _PHOTO_ERA_HINTS) or bool(re.search(r"\b(18|19|20)\d{2}\b", haystack))
+    has_archival_specificity = any(token in haystack for token in _ARCHIVAL_SPECIFIC_HINTS)
+    has_motion = any(token in haystack for token in _MOTION_HINTS)
+    if has_motion and not has_archival_specificity:
         return _ASSET_BROLL
     if any(token in haystack for token in _PRE_PHOTO_HINTS):
         return _ASSET_AI_IMAGE
-    return _ASSET_REAL_IMAGE if re.search(r"\b(18|19|20)\d{2}\b", haystack) else _ASSET_AI_IMAGE
+    if has_photo_era or has_archival_specificity:
+        return _ASSET_REAL_IMAGE
+    return _ASSET_AI_IMAGE
 
 
 def _fallback_plan_for_scene(scene: Any, topic: str, era: str) -> dict[str, Any]:
@@ -133,16 +168,20 @@ def _fallback_plan_for_scene(scene: Any, topic: str, era: str) -> dict[str, Any]
     excerpt = str(getattr(scene, "script_excerpt", "") or "").strip()
     visual_intent = str(getattr(scene, "visual_intent", "") or "").strip()
     primary_asset = _heuristic_asset_type(scene, topic)
-    search_seed = scene_title or topic or "historical scene"
-    search_keywords = _keywords(" ".join([scene_title, excerpt, topic, era]), limit=6)
+    useful_topic = "" if _topic_is_generic(topic) else str(topic or "").strip()
+    search_seed = scene_title or useful_topic or topic or "historical scene"
+    search_keywords = _keywords(" ".join([scene_title, excerpt, useful_topic, era]), limit=6)
     joined_keywords = " ".join(search_keywords[:5]).strip() or search_seed
+    portrait_seed = " ".join(_keywords(" ".join([scene_title, excerpt]), limit=4)).strip()
+    fallback_queries = [
+        " ".join(part for part in [scene_title, useful_topic] if part).strip() or search_seed,
+        " ".join(part for part in [portrait_seed, "historical photo"] if part).strip() or search_seed,
+        " ".join(part for part in [useful_topic or scene_title, era, "historical"] if part).strip() or search_seed,
+    ]
     return {
         "scene_index": int(getattr(scene, "index", 0) or 0),
         "primary_asset": primary_asset,
-        "real_image_search_terms": [
-            " ".join(part for part in [scene_title, topic] if part).strip() or search_seed,
-            " ".join(part for part in [topic, era, "historical"] if part).strip() or search_seed,
-        ],
+        "real_image_search_terms": fallback_queries,
         "broll_query": joined_keywords,
         "notes": visual_intent or excerpt or search_seed,
     }

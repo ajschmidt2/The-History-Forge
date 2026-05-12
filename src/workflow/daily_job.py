@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from src.config.secrets import get_secret
 from src.constants import SUPABASE_VIDEO_BUCKET
@@ -25,7 +25,6 @@ from src.services.youtube_upload import validate_youtube_credentials as _validat
 from src.storage import upsert_project
 import src.supabase_storage as _sb_store
 from src.topics.daily_topics import generate_daily_topic, load_used_topics, save_used_topic
-from src.workflow.assets import resolve_music_track_for_project
 from src.workflow.presets import DAILY_SHORT_PRESET, DailyShortPreset
 from src.workflow.project_io import ensure_project_files, load_project_payload, project_dir, save_project_payload
 from src.workflow.services import FullWorkflowOptions, run_full_workflow
@@ -33,7 +32,6 @@ from src.workflow.services import FullWorkflowOptions, run_full_workflow
 RUN_HISTORY_PATH = Path("data/daily_run_history.json")
 DAILY_AUTOMATION_SETTINGS_PATH = Path("data/daily_automation_settings.json")
 DEFAULT_DAILY_TIMEZONE = "America/Indianapolis"
-REMOTE_AUTOMATION_STATE_BUCKET = "history-forge-scripts"
 DAILY_WEEKDAY_OPTIONS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 _DAY_TO_CRON = {
     "mon": "MON",
@@ -45,23 +43,6 @@ _DAY_TO_CRON = {
     "sun": "SUN",
 }
 _CRON_TO_DAY = {value: key for key, value in _DAY_TO_CRON.items()}
-
-
-def _resolve_timezone(timezone_name: str) -> tuple[str, ZoneInfo | timezone]:
-    """Resolve a timezone key to a tzinfo object with a safe UTC fallback."""
-    requested_name = str(timezone_name or "").strip() or DEFAULT_DAILY_TIMEZONE
-    try:
-        return requested_name, ZoneInfo(requested_name)
-    except ZoneInfoNotFoundError:
-        pass
-
-    if requested_name != DEFAULT_DAILY_TIMEZONE:
-        try:
-            return DEFAULT_DAILY_TIMEZONE, ZoneInfo(DEFAULT_DAILY_TIMEZONE)
-        except ZoneInfoNotFoundError:
-            pass
-
-    return "UTC", timezone.utc
 
 
 # ---------------------------------------------------------------------------
@@ -201,35 +182,6 @@ def _normalize_daily_publishing(raw_publishing: dict[str, Any] | None) -> dict[s
     }
 
 
-def _env_bool(name: str) -> bool | None:
-    raw = str(os.getenv(name, "") or "").strip().lower()
-    if not raw:
-        return None
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    return None
-
-
-def _apply_publishing_env_overrides(publishing: dict[str, Any]) -> dict[str, Any]:
-    resolved = dict(publishing)
-
-    youtube_enabled = _env_bool("DAILY_YOUTUBE_ENABLED")
-    if youtube_enabled is not None:
-        resolved["youtube_enabled"] = youtube_enabled
-
-    instagram_enabled = _env_bool("DAILY_INSTAGRAM_ENABLED")
-    if instagram_enabled is not None:
-        resolved["instagram_enabled"] = instagram_enabled
-
-    youtube_privacy_status = str(os.getenv("DAILY_YOUTUBE_PRIVACY_STATUS", "") or "").strip().lower()
-    if youtube_privacy_status in {"private", "unlisted", "public"}:
-        resolved["youtube_privacy_status"] = youtube_privacy_status
-
-    return _normalize_daily_publishing(resolved)
-
-
 def _normalize_daily_schedule(raw_schedule: dict[str, Any] | None) -> dict[str, Any]:
     schedule = raw_schedule if isinstance(raw_schedule, dict) else {}
     enabled = bool(schedule.get("enabled", False))
@@ -251,7 +203,11 @@ def _normalize_daily_schedule(raw_schedule: dict[str, Any] | None) -> dict[str, 
         hour_local = 7
     hour_local = max(0, min(23, hour_local))
 
-    timezone_name, _ = _resolve_timezone(str(schedule.get("timezone", DEFAULT_DAILY_TIMEZONE) or DEFAULT_DAILY_TIMEZONE).strip())
+    timezone_name = str(schedule.get("timezone", DEFAULT_DAILY_TIMEZONE) or DEFAULT_DAILY_TIMEZONE).strip()
+    try:
+        ZoneInfo(timezone_name)
+    except Exception:
+        timezone_name = DEFAULT_DAILY_TIMEZONE
 
     return {
         "enabled": enabled,
@@ -267,8 +223,7 @@ def build_daily_workflow_cron(schedule: dict[str, Any], *, reference_dt: datetim
     if not normalized["enabled"]:
         return ""
 
-    resolved_timezone, tz = _resolve_timezone(normalized["timezone"])
-    normalized["timezone"] = resolved_timezone
+    tz = ZoneInfo(normalized["timezone"])
     reference = reference_dt or datetime.now(tz)
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=tz)
@@ -303,8 +258,7 @@ def parse_daily_workflow_cron(cron_expr: str, *, timezone_name: str = DEFAULT_DA
         return normalized
     utc_hour = max(0, min(23, utc_hour))
 
-    resolved_timezone, tz = _resolve_timezone(normalized["timezone"])
-    normalized["timezone"] = resolved_timezone
+    tz = ZoneInfo(normalized["timezone"])
     reference = reference_dt or datetime.now(timezone.utc)
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
@@ -419,6 +373,15 @@ def _resolve_daily_short_preset(settings: dict[str, Any], extra_overrides: dict 
         last_scene_cta_text=str(preset_payload.get("last_scene_cta_text", base.last_scene_cta_text) or base.last_scene_cta_text),
         ai_video_provider=str(preset_payload.get("ai_video_provider", base.ai_video_provider) or base.ai_video_provider),
         image_provider=str(preset_payload.get("image_provider", base.image_provider) or base.image_provider),
+        openai_image_model=str(preset_payload.get("openai_image_model", base.openai_image_model) or base.openai_image_model),
+        fal_video_model=str(preset_payload.get("fal_video_model", base.fal_video_model) or base.fal_video_model),
+        enable_image_search=bool(preset_payload.get("enable_image_search", base.enable_image_search)),
+        enable_broll=bool(preset_payload.get("enable_broll", base.enable_broll)),
+        auto_search_broll=bool(preset_payload.get("auto_search_broll", base.auto_search_broll)),
+        auto_assign_broll=bool(preset_payload.get("auto_assign_broll", base.auto_assign_broll)),
+        broll_preferred_provider=str(
+            preset_payload.get("broll_preferred_provider", base.broll_preferred_provider) or base.broll_preferred_provider
+        ),
     )
 
 
@@ -446,75 +409,6 @@ def _append_run_history(entry: dict[str, Any], path: Path = RUN_HISTORY_PATH) ->
     rows.append(entry)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rows[-1000:], indent=2), encoding="utf-8")
-
-
-def _emit_daily_progress(
-    callback: Any | None,
-    *,
-    step: str,
-    status: str,
-    index: int,
-    total: int,
-    message: str = "",
-    detail: str = "",
-) -> None:
-    if not callable(callback):
-        return
-    callback(
-        {
-            "step": step,
-            "status": status,
-            "index": index,
-            "total": total,
-            "message": message,
-            "detail": detail,
-        }
-    )
-
-
-def _remote_topics_state_path(profile: ChannelProfile) -> str:
-    return f"automation-state/{profile.channel_id}_daily_topics_used.json"
-
-
-def _load_remote_used_topics(profile: ChannelProfile) -> set[str]:
-    payload = _sb_store.download_text(REMOTE_AUTOMATION_STATE_BUCKET, _remote_topics_state_path(profile))
-    if not payload:
-        return set()
-    try:
-        rows = json.loads(payload)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return set()
-    if not isinstance(rows, list):
-        return set()
-    return {
-        str(item.get("topic", "") if isinstance(item, dict) else item).strip().lower()
-        for item in rows
-        if str(item.get("topic", "") if isinstance(item, dict) else item).strip()
-    }
-
-
-def _save_remote_used_topic(topic: str, *, run_date: date, profile: ChannelProfile) -> None:
-    normalized = str(topic or "").strip()
-    if not normalized:
-        return
-
-    storage_path = _remote_topics_state_path(profile)
-    rows: list[dict[str, str]] = []
-    existing = _sb_store.download_text(REMOTE_AUTOMATION_STATE_BUCKET, storage_path)
-    if existing:
-        try:
-            loaded = json.loads(existing)
-            if isinstance(loaded, list):
-                rows = [row for row in loaded if isinstance(row, dict)]
-        except (TypeError, ValueError, json.JSONDecodeError):
-            rows = []
-
-    rows.append({"topic": normalized, "date": run_date.isoformat()})
-    _sb_store.upload_text(
-        REMOTE_AUTOMATION_STATE_BUCKET,
-        storage_path,
-        json.dumps(rows[-1000:], indent=2),
-    )
 
 
 def _resolve_default_music_track() -> str:
@@ -575,88 +469,28 @@ def _upload_final_to_generated_bucket(project_id: str, final_path: Path, run_dat
     return {"bucket": SUPABASE_VIDEO_BUCKET, "object_path": object_path, "public_url": public_url}
 
 
-def run_daily_video_job(
-    run_date: date | None = None,
-    profile: ChannelProfile = HISTORY_CHANNEL,
-    progress_callback: Any | None = None,
-) -> dict[str, Any]:
+def run_daily_video_job(run_date: date | None = None, profile: ChannelProfile = HISTORY_CHANNEL) -> dict[str, Any]:
     target_date = run_date or date.today()
     project_id = _project_id_for_day(target_date, channel_id=profile.channel_id)
     timestamp = _utc_now().isoformat()
-    job_warnings: list[str] = []
-    daily_total_steps = 8
-
-    _emit_daily_progress(
-        progress_callback,
-        step="prepare",
-        status="in_progress",
-        index=1,
-        total=daily_total_steps,
-        message="Loading daily automation settings",
-    )
 
     settings = load_daily_automation_settings(path=profile.automation_settings_path)
     preset = _resolve_daily_short_preset(settings, extra_overrides=profile.preset_overrides or {})
-    publishing = _apply_publishing_env_overrides(
-        _normalize_daily_publishing(settings.get("publishing") if isinstance(settings.get("publishing"), dict) else None)
-    )
+    publishing = _normalize_daily_publishing(settings.get("publishing") if isinstance(settings.get("publishing"), dict) else None)
     used_topics = load_used_topics(path=profile.topics_used_path)
-    remote_used_topics = _load_remote_used_topics(profile)
-    if remote_used_topics:
-        used_topics |= remote_used_topics
 
     topic_override = str(settings.get("topic_override", "") or "").strip()
     # Profile topic_direction is the base; settings can further refine it
     topic_direction = str(settings.get("topic_direction", "") or "").strip() or profile.topic_direction
     topic = topic_override or generate_daily_topic(used_topics=used_topics, topic_direction=topic_direction)
-    _emit_daily_progress(
-        progress_callback,
-        step="prepare",
-        status="completed",
-        index=1,
-        total=daily_total_steps,
-        message=f"Topic selected: {topic}",
-    )
 
-    _emit_daily_progress(
-        progress_callback,
-        step="script",
-        status="in_progress",
-        index=2,
-        total=daily_total_steps,
-        message="Generating short script",
-    )
     script_text = generate_daily_short_script(topic, preset, channel_name=profile.channel_name)
-    _emit_daily_progress(
-        progress_callback,
-        step="script",
-        status="completed",
-        index=2,
-        total=daily_total_steps,
-        message=f"Script generated ({len(script_text)} chars)",
-    )
     music_track = str(settings.get("selected_music_track", "") or "").strip() or _resolve_default_music_track()
+    if preset.music_enabled and not music_track:
+        raise RuntimeError("Background music is enabled but no track was found. Add an mp3/wav/m4a to data/music_library or select a project music track.")
 
     ensure_project_files(project_id)
     upsert_project(project_id, f"{profile.channel_name} — {target_date.isoformat()}")
-
-    if preset.music_enabled:
-        if not music_track:
-            job_warnings.append(
-                "Background music is enabled but no track was found on this runner. Continuing without music."
-            )
-            preset = replace(preset, music_enabled=False)
-        else:
-            resolved_music = resolve_music_track_for_project(project_id, music_track)
-            resolved_music_path = str(resolved_music.get("resolved_path", "") or "").strip()
-            if resolved_music_path:
-                music_track = resolved_music_path
-            else:
-                job_warnings.append(
-                    f"Background music is enabled but the selected track could not be resolved on this runner ({music_track}). Continuing without music."
-                )
-                music_track = ""
-                preset = replace(preset, music_enabled=False)
 
     payload = load_project_payload(project_id)
     payload.update(
@@ -684,13 +518,18 @@ def run_daily_video_job(
             "enable_music": preset.music_enabled,
             "music_volume_relative_to_voiceover": preset.music_relative_level,
             "selected_music_track": music_track if preset.music_enabled else "",
+            "broll_settings": {
+                "enable_broll": bool(preset.enable_broll),
+                "auto_search": bool(preset.auto_search_broll),
+                "auto_assign_first": bool(preset.auto_assign_broll),
+                "preferred_provider": str(preset.broll_preferred_provider or "Pexels then Pixabay"),
+            },
             "tts_provider": preset.voice_provider,
             "openai_tts_model": preset.openai_tts_model,
             "openai_tts_voice": preset.openai_tts_voice,
             "daily_preset": preset.as_dict(),
             "daily_job_run_date": target_date.isoformat(),
             "daily_job_started_at": timestamp,
-            "daily_job_warnings": list(job_warnings),
         }
     )
     save_project_payload(project_id, payload)
@@ -709,32 +548,6 @@ def run_daily_video_job(
     _preset_payload = settings.get("preset") if isinstance(settings.get("preset"), dict) else {}
     _transition = str(_preset_payload.get("scene_transition_type", "fade") or "fade")
     pipeline = replace(pipeline, scene_transition_type=_transition)
-
-    def _workflow_progress(event: dict[str, Any]) -> None:
-        step_name = str(event.get("step", "workflow") or "workflow")
-        status = str(event.get("status", "in_progress") or "in_progress").lower()
-        sub_index = int(event.get("index", 0) or 0)
-        sub_total = int(event.get("total", 0) or 0)
-        message = str(event.get("message", "") or "").strip()
-        detail = f"{step_name} ({sub_index}/{sub_total})" if sub_total else step_name
-        _emit_daily_progress(
-            progress_callback,
-            step="workflow",
-            status=status,
-            index=3,
-            total=daily_total_steps,
-            message=message or f"Running workflow step: {step_name}",
-            detail=detail,
-        )
-
-    _emit_daily_progress(
-        progress_callback,
-        step="workflow",
-        status="in_progress",
-        index=3,
-        total=daily_total_steps,
-        message="Running full workflow",
-    )
     run_result = run_full_workflow(
         project_id,
         FullWorkflowOptions(
@@ -749,35 +562,18 @@ def run_daily_video_job(
             overwrite_render=True,
             enable_ai_video=True,
             pipeline=pipeline,
-            progress_callback=_workflow_progress,
         ),
     )
     print(
-        f"[Checkpoint 2] Workflow returned. failed_step={run_result.failed_step!r}  warnings={run_result.warnings} job_warnings={job_warnings}",
+        f"[Checkpoint 2] Workflow returned. failed_step={run_result.failed_step!r}  warnings={run_result.warnings}",
         file=sys.stderr,
     )
 
     # Checkpoint 3: abort on workflow failure
     if run_result.failed_step:
-        _emit_daily_progress(
-            progress_callback,
-            step="workflow",
-            status="failed",
-            index=3,
-            total=daily_total_steps,
-            message=f"Workflow failed at {run_result.failed_step}",
-        )
         raise RuntimeError(
             f"Workflow failed at step '{run_result.failed_step}': {'; '.join(run_result.warnings)}"
         )
-    _emit_daily_progress(
-        progress_callback,
-        step="workflow",
-        status="completed",
-        index=3,
-        total=daily_total_steps,
-        message="Workflow render completed",
-    )
 
     # Checkpoint 4: verify final render file exists and is large enough
     final_path = Path(run_result.final_output_path or project_dir(project_id) / "renders/final.mp4")
@@ -795,44 +591,15 @@ def run_daily_video_job(
         )
 
     # Checkpoint 5: upload to Supabase
-    _emit_daily_progress(
-        progress_callback,
-        step="upload",
-        status="in_progress",
-        index=4,
-        total=daily_total_steps,
-        message="Uploading final video to Supabase",
-    )
     upload_result = _upload_final_to_generated_bucket(project_id, final_path, target_date)
     save_used_topic(topic, run_date=target_date, path=profile.topics_used_path)
-    try:
-        _save_remote_used_topic(topic, run_date=target_date, profile=profile)
-    except Exception as exc:
-        print(f"[Checkpoint 5] Remote topic-history save failed (non-fatal): {exc}", file=sys.stderr)
     print(f"[Checkpoint 5] Supabase upload complete. public_url={upload_result['public_url']}", file=sys.stderr)
-    _emit_daily_progress(
-        progress_callback,
-        step="upload",
-        status="completed",
-        index=4,
-        total=daily_total_steps,
-        message="Supabase upload completed",
-        detail=upload_result["public_url"],
-    )
 
     # Checkpoint 6: YouTube upload (non-fatal; skipped if credentials are absent)
     youtube_video_id = ""
     youtube_url = ""
     _yt_client_secrets = Path(get_secret(profile.youtube_client_secrets_secret, profile.youtube_client_secrets_file)).expanduser()
     _yt_token = Path(get_secret(profile.youtube_token_file_secret, profile.youtube_token_file)).expanduser()
-    _emit_daily_progress(
-        progress_callback,
-        step="youtube",
-        status="in_progress",
-        index=5,
-        total=daily_total_steps,
-        message="Checking YouTube upload",
-    )
     if publishing["youtube_enabled"]:
         try:
             _yt_ready, _yt_status = _validate_yt_credentials(
@@ -861,57 +628,16 @@ def run_daily_video_job(
                     f"video_id={youtube_video_id} url={youtube_url}",
                     file=sys.stderr,
                 )
-                _emit_daily_progress(
-                    progress_callback,
-                    step="youtube",
-                    status="completed",
-                    index=5,
-                    total=daily_total_steps,
-                    message="YouTube upload completed",
-                    detail=youtube_url,
-                )
             else:
                 print(f"[Checkpoint 6] YouTube upload skipped: {_yt_status}", file=sys.stderr)
-                _emit_daily_progress(
-                    progress_callback,
-                    step="youtube",
-                    status="skipped",
-                    index=5,
-                    total=daily_total_steps,
-                    message=_yt_status,
-                )
         except Exception as exc:
             print(f"[Checkpoint 6] YouTube upload failed (non-fatal): {exc}", file=sys.stderr)
-            _emit_daily_progress(
-                progress_callback,
-                step="youtube",
-                status="failed",
-                index=5,
-                total=daily_total_steps,
-                message=str(exc),
-            )
     else:
-        print(f"[Checkpoint 6] YouTube upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
-        _emit_daily_progress(
-            progress_callback,
-            step="youtube",
-            status="skipped",
-            index=5,
-            total=daily_total_steps,
-            message="YouTube upload disabled",
-        )
+        print(f"[Checkpoint 6] YouTube credentials not found for channel={profile.channel_id} — skipping.", file=sys.stderr)
 
     # Checkpoint 7: Instagram upload (non-fatal; only for enabled channels with credentials)
     instagram_media_id = ""
     instagram_permalink = ""
-    _emit_daily_progress(
-        progress_callback,
-        step="instagram",
-        status="in_progress",
-        index=6,
-        total=daily_total_steps,
-        message="Checking Instagram upload",
-    )
     if profile.instagram_enabled and publishing.get("instagram_enabled", True):
         if _ig_configured():
             try:
@@ -936,57 +662,16 @@ def run_daily_video_job(
                 instagram_media_id = _ig_result.media_id
                 instagram_permalink = _ig_result.permalink or ""
                 print(f"[Checkpoint 7] Instagram upload complete. media_id={instagram_media_id} permalink={instagram_permalink}", file=sys.stderr)
-                _emit_daily_progress(
-                    progress_callback,
-                    step="instagram",
-                    status="completed",
-                    index=6,
-                    total=daily_total_steps,
-                    message="Instagram upload completed",
-                    detail=instagram_permalink,
-                )
             except Exception as exc:
                 print(f"[Checkpoint 7] Instagram upload failed (non-fatal): {exc}", file=sys.stderr)
-                _emit_daily_progress(
-                    progress_callback,
-                    step="instagram",
-                    status="failed",
-                    index=6,
-                    total=daily_total_steps,
-                    message=str(exc),
-                )
         else:
             print(f"[Checkpoint 7] Instagram credentials not configured — skipping.", file=sys.stderr)
-            _emit_daily_progress(
-                progress_callback,
-                step="instagram",
-                status="skipped",
-                index=6,
-                total=daily_total_steps,
-                message="Instagram credentials not configured",
-            )
     else:
         print(f"[Checkpoint 7] Instagram upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
-        _emit_daily_progress(
-            progress_callback,
-            step="instagram",
-            status="skipped",
-            index=6,
-            total=daily_total_steps,
-            message="Instagram upload disabled",
-        )
 
     # Checkpoint 8: TikTok upload (non-fatal; only for enabled channels with credentials)
     tiktok_publish_id = ""
     tiktok_share_url = ""
-    _emit_daily_progress(
-        progress_callback,
-        step="tiktok",
-        status="in_progress",
-        index=7,
-        total=daily_total_steps,
-        message="Checking TikTok upload",
-    )
     if profile.tiktok_enabled:
         if _tt_configured():
             try:
@@ -1000,55 +685,14 @@ def run_daily_video_job(
                 tiktok_publish_id = _tt_result.publish_id
                 tiktok_share_url = _tt_result.share_url or ""
                 print(f"[Checkpoint 8] TikTok upload complete. publish_id={tiktok_publish_id} share_url={tiktok_share_url}", file=sys.stderr)
-                _emit_daily_progress(
-                    progress_callback,
-                    step="tiktok",
-                    status="completed",
-                    index=7,
-                    total=daily_total_steps,
-                    message="TikTok upload completed",
-                    detail=tiktok_share_url,
-                )
             except Exception as exc:
                 print(f"[Checkpoint 8] TikTok upload failed (non-fatal): {exc}", file=sys.stderr)
-                _emit_daily_progress(
-                    progress_callback,
-                    step="tiktok",
-                    status="failed",
-                    index=7,
-                    total=daily_total_steps,
-                    message=str(exc),
-                )
         else:
             print("[Checkpoint 8] TikTok credentials not configured — skipping.", file=sys.stderr)
-            _emit_daily_progress(
-                progress_callback,
-                step="tiktok",
-                status="skipped",
-                index=7,
-                total=daily_total_steps,
-                message="TikTok credentials not configured",
-            )
     else:
         print(f"[Checkpoint 8] TikTok upload disabled for channel={profile.channel_id} — skipping.", file=sys.stderr)
-        _emit_daily_progress(
-            progress_callback,
-            step="tiktok",
-            status="skipped",
-            index=7,
-            total=daily_total_steps,
-            message="TikTok upload disabled",
-        )
 
     # Checkpoint 9: clean up intermediate Supabase assets (non-fatal)
-    _emit_daily_progress(
-        progress_callback,
-        step="cleanup",
-        status="in_progress",
-        index=8,
-        total=daily_total_steps,
-        message="Cleaning up intermediate assets",
-    )
     try:
         deleted = _sb_store.cleanup_project_intermediate_assets(project_id)
         if deleted:
@@ -1078,7 +722,6 @@ def run_daily_video_job(
         "music_track": music_track if preset.music_enabled else "",
         "music_relative_level": preset.music_relative_level,
         "scene_count": preset.scene_count,
-        "warnings": list(job_warnings) + list(run_result.warnings or []),
         "youtube_enabled": publishing["youtube_enabled"],
         "youtube_privacy_status": publishing["youtube_privacy_status"],
         "instagram_enabled": publishing["instagram_enabled"],
@@ -1097,20 +740,11 @@ def run_daily_video_job(
     payload["generated_video_bucket_path"] = upload_result["object_path"]
     payload["generated_video_public_url"] = upload_result["public_url"]
     payload["enable_subtitles"] = preset.subtitles_enabled
-    payload["daily_job_warnings"] = summary["warnings"]
     payload["youtube_video_id"] = youtube_video_id
     payload["youtube_url"] = youtube_url
     payload["instagram_media_id"] = instagram_media_id
     payload["instagram_permalink"] = instagram_permalink
     save_project_payload(project_id, payload)
-    _emit_daily_progress(
-        progress_callback,
-        step="cleanup",
-        status="completed",
-        index=8,
-        total=daily_total_steps,
-        message="Daily job completed",
-    )
     return summary
 
 

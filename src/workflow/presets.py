@@ -29,8 +29,15 @@ class DailyShortPreset:
     target_duration_seconds: int = 60
     require_last_scene_cta: bool = True
     last_scene_cta_text: str = "Subscribe to History Crossroads for more 60-second history stories."
-    ai_video_provider: str = "google_veo_lite"
-    image_provider: str = "gemini"
+    ai_video_provider: str = "falai"
+    image_provider: str = "openai"
+    openai_image_model: str = "dall-e-3"
+    fal_video_model: str = "fal-ai/wan/v2.2-5b/image-to-video"
+    enable_image_search: bool = True
+    enable_broll: bool = True
+    auto_search_broll: bool = True
+    auto_assign_broll: bool = True
+    broll_preferred_provider: str = "Pexels then Pixabay"
 
     def to_pipeline_options(self, *, topic: str = "", selected_music_track: str = "") -> PipelineOptions:
         return PipelineOptions(
@@ -52,6 +59,13 @@ class DailyShortPreset:
             script_profile="youtube_short_60s",
             ai_video_provider=self.ai_video_provider,
             image_provider=self.image_provider,
+            openai_image_model=self.openai_image_model,
+            fal_video_model=self.fal_video_model,
+            enable_image_search=self.enable_image_search,
+            enable_broll=self.enable_broll,
+            auto_search_broll=self.auto_search_broll,
+            auto_assign_broll=self.auto_assign_broll,
+            broll_preferred_provider=self.broll_preferred_provider,
         )
 
     def as_dict(self) -> dict[str, object]:

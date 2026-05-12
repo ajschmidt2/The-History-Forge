@@ -1246,6 +1246,14 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
                     scene.image_variations = [_img_bytes]
                     scene.primary_image_index = 0
                     scene.image_error = ""
+                    scene.active_media_type = "real_image"
+                    scene.prompt_spec = dict(getattr(scene, "prompt_spec", {}) or {})
+                    scene.prompt_spec["resolved_media"] = {
+                        "type": "real_image",
+                        "provider": getattr(_sr, "provider", ""),
+                        "title": getattr(_sr, "title", ""),
+                        "source_url": getattr(_sr, "source_url", ""),
+                    }
                     out.write_bytes(_img_bytes)
                     record_asset(project_id, "image", out)
                     try:
@@ -1347,10 +1355,13 @@ def run_assign_broll(project_id: str, options: PipelineOptions | None = None) ->
     )
 
     if not enabled:
+        update_step_status(project_id, "broll", StepStatus.SKIPPED)
         return StepResult(project_id, "broll", StepStatus.SKIPPED, message="B-roll is disabled.")
     if not auto_search:
+        update_step_status(project_id, "broll", StepStatus.SKIPPED)
         return StepResult(project_id, "broll", StepStatus.SKIPPED, message="B-roll auto-search is disabled.")
     if not auto_assign:
+        update_step_status(project_id, "broll", StepStatus.SKIPPED)
         return StepResult(project_id, "broll", StepStatus.SKIPPED, message="B-roll auto-assignment is disabled.")
 
     update_step_status(project_id, "broll", StepStatus.IN_PROGRESS)
