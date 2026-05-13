@@ -13,7 +13,7 @@ from src.config.secrets import bootstrap_api_keys
 # Ensure canonical runtime API key env vars are populated before modules that may use fal.
 bootstrap_api_keys()
 
-from image_gen import IMAGE_PROVIDER_OPTIONS, validate_gemini_api_key
+from image_gen import IMAGE_PROVIDER_OPTIONS
 from src.ai_video_generation import veo_configured
 from src.config.secrets import fal_configured, fal_key_debug_snapshot
 from src.services.google_veo_video import google_veo_lite_configured
@@ -69,9 +69,8 @@ def main() -> None:
         st.error(str(exc))
         st.stop()
 
-    # Allow the app shell to load even when image generation credentials
-    # are missing; image generation paths still validate strictly when used.
-    validate_gemini_api_key(required=False)
+    # Image generation credentials are validated only when a provider is used,
+    # so optional/legacy Gemini settings cannot prevent the app shell from loading.
     require_passcode()
     init_state()
     st.title("The History Forge")
@@ -151,12 +150,12 @@ def main() -> None:
         st.divider()
         st.markdown("**Image Provider**")
         _image_provider_options = [slug for slug, _label in IMAGE_PROVIDER_OPTIONS]
-        _current_image_provider = st.session_state.get("image_provider", "gemini")
+        _current_image_provider = st.session_state.get("image_provider", "openai")
         if _current_image_provider not in _image_provider_options:
-            _current_image_provider = "gemini"
+            _current_image_provider = "openai"
         _image_labels = {
-            "gemini": "🔷 Google Gemini / Imagen — Default",
-            "openai": "🟢 OpenAI (gpt-image-1 / DALL-E)",
+            "openai": "🟢 OpenAI (gpt-image-1 / DALL-E) — Default",
+            "gemini": "🔷 Google Gemini / Imagen — Optional",
             "qwen": "🧪 Qwen-Image — Open source via Hugging Face",
             "falai": "✨ fal.ai (FLUX Dev) — Fallback",
         }

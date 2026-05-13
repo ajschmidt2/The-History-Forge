@@ -108,3 +108,18 @@ def test_scene_image_router_uses_qwen_provider(monkeypatch):
 
     assert result == [b"png"]
     assert calls == [("paint a clay tablet", 2, "9:16", "Qwen/Qwen-Image")]
+
+
+def test_optional_gemini_validation_is_safe_when_provider_unavailable(monkeypatch):
+    import image_gen
+
+    real_find_spec = image_gen.importlib.util.find_spec
+
+    def fake_find_spec(name):
+        if name == "src.providers.gemini_provider":
+            return None
+        return real_find_spec(name)
+
+    monkeypatch.setattr(image_gen.importlib.util, "find_spec", fake_find_spec)
+
+    assert image_gen.validate_gemini_api_key(required=False) == ""

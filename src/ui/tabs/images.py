@@ -178,7 +178,7 @@ def tab_create_images() -> None:
                     aspect_ratio=st.session_state.aspect_ratio,
                     visual_style=st.session_state.visual_style,
                     tone=st.session_state.tone,
-                    image_provider=str(st.session_state.get("image_provider", "gemini") or "gemini"),
+                    image_provider=str(st.session_state.get("image_provider", "openai") or "openai"),
                 ),
             )
         if result.status != StepStatus.COMPLETED:
@@ -259,7 +259,7 @@ def tab_create_images() -> None:
                             aspect_ratio=st.session_state.aspect_ratio,
                             visual_style=st.session_state.visual_style,
                             visual_anchor=_visual_anchor,
-                            provider=str(st.session_state.get("image_provider", "gemini") or "gemini"),
+                            provider=str(st.session_state.get("image_provider", "openai") or "openai"),
                         )
                         s.image_bytes = updated.image_bytes
                         if s.image_variations:
