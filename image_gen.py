@@ -5,6 +5,8 @@ import os
 from io import BytesIO
 from typing import Any, List, Optional, Sequence
 
+import requests
+
 
 DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1"
 OPENAI_IMAGE_MODELS: tuple[tuple[str, str], ...] = (
@@ -12,10 +14,20 @@ OPENAI_IMAGE_MODELS: tuple[tuple[str, str], ...] = (
     ("dall-e-3", "DALL-E 3"),
     ("dall-e-2", "DALL-E 2"),
 )
+DEFAULT_QWEN_IMAGE_MODEL = "Qwen/Qwen-Image"
+QWEN_IMAGE_MODELS: tuple[tuple[str, str], ...] = (
+    (DEFAULT_QWEN_IMAGE_MODEL, "Qwen-Image (open source, Hugging Face)"),
+)
+IMAGE_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("gemini", "Google Gemini / Imagen"),
+    ("openai", "OpenAI (gpt-image-1 / DALL-E)"),
+    ("qwen", "Qwen-Image (open source via Hugging Face)"),
+    ("falai", "fal.ai (FLUX Dev)"),
+)
 
 _PLACEHOLDER_VALUES = {
     "paste_key_here", "your_api_key_here", "replace_me", "none", "null", "",
-    "aiza...", "your-api-key", "your_key_here",
+    "aiza...", "your-api-key", "your_key_here", "hf_...",
 }
 
 
@@ -318,6 +330,146 @@ def _candidate_models(primary_model: str) -> list[str]:
     return ordered
 
 
+
+def _resolve_huggingface_token() -> str:
+    for name in ("HF_TOKEN", "HUGGINGFACE_API_TOKEN", "HUGGINGFACEHUB_API_TOKEN", "hf_token", "huggingface_api_token"):
+        value = _normalize_secret(os.environ.get(name, ""))
+        if value:
+            return value
+    for name in ("HF_TOKEN", "HUGGINGFACE_API_TOKEN", "HUGGINGFACEHUB_API_TOKEN", "hf_token", "huggingface_api_token"):
+        value = _get_secret(name, "")
+        if value:
+            return _normalize_secret(str(value))
+    return ""
+
+
+def _resolve_qwen_image_model(model: str | None = None) -> str:
+    explicit = _normalize_secret(model or "")
+    if explicit:
+        return explicit
+    for name in ("QWEN_IMAGE_MODEL", "HF_IMAGE_MODEL", "qwen_image_model", "hf_image_model"):
+        value = _normalize_secret(os.environ.get(name, ""))
+        if value:
+            return value
+    for name in ("QWEN_IMAGE_MODEL", "HF_IMAGE_MODEL", "qwen_image_model", "hf_image_model"):
+        value = _get_secret(name, "")
+        if value:
+            return _normalize_secret(str(value))
+    return DEFAULT_QWEN_IMAGE_MODEL
+
+
+def _image_dimensions_for_aspect(aspect_ratio: str, *, provider: str = "generic") -> tuple[int, int]:
+    ar = (aspect_ratio or "16:9").strip()
+    if provider == "openai":
+        if ar == "9:16":
+            return 1024, 1536
+        if ar == "1:1":
+            return 1024, 1024
+        return 1536, 1024
+    if ar == "9:16":
+        return 1024, 1792
+    if ar == "1:1":
+        return 1024, 1024
+    return 1792, 1024
+
+
+def _extract_openai_images(response: Any) -> List[bytes]:
+    images: List[bytes] = []
+    for item in getattr(response, "data", []) or []:
+        b64_json = getattr(item, "b64_json", None)
+        raw = _maybe_decode_bytes(b64_json)
+        if raw:
+            images.append(raw)
+            continue
+        url = getattr(item, "url", None)
+        if url:
+            try:
+                resp = requests.get(url, timeout=60)
+                resp.raise_for_status()
+                images.append(resp.content)
+            except Exception:
+                continue
+    return images
+
+
+def generate_openai_images(
+    prompt: str,
+    number_of_images: int = 1,
+    aspect_ratio: str = "16:9",
+    model: str | None = None,
+) -> List[bytes]:
+    from openai import OpenAI
+
+    api_key = _get_secret("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not found in secrets or environment.")
+
+    selected_model = (model or DEFAULT_OPENAI_IMAGE_MODEL).strip() or DEFAULT_OPENAI_IMAGE_MODEL
+    width, height = _image_dimensions_for_aspect(aspect_ratio, provider="openai")
+    size = f"{width}x{height}"
+    try:
+        response = OpenAI(api_key=api_key).images.generate(
+            model=selected_model,
+            prompt=prompt,
+            size=size,
+            n=max(1, int(number_of_images)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"OpenAI image generation failed: {exc}") from exc
+    return _extract_openai_images(response)
+
+
+def _extract_hf_images(response: requests.Response) -> List[bytes]:
+    content_type = response.headers.get("content-type", "").lower()
+    if content_type.startswith("image/"):
+        return [response.content]
+    try:
+        payload = response.json()
+    except ValueError:
+        return [response.content] if response.content else []
+    if isinstance(payload, dict) and payload.get("error"):
+        raise RuntimeError(str(payload.get("error")))
+    candidates = payload if isinstance(payload, list) else [payload]
+    images: List[bytes] = []
+    for item in candidates:
+        raw = _image_to_png_bytes(item)
+        if raw:
+            images.append(raw)
+    return images
+
+
+def generate_qwen_images(
+    prompt: str,
+    number_of_images: int = 1,
+    aspect_ratio: str = "16:9",
+    model: str | None = None,
+) -> List[bytes]:
+    token = _resolve_huggingface_token()
+    if not token:
+        raise RuntimeError("HF_TOKEN or HUGGINGFACE_API_TOKEN is required for Qwen-Image generation.")
+
+    selected_model = _resolve_qwen_image_model(model)
+    width, height = _image_dimensions_for_aspect(aspect_ratio)
+    url = f"https://api-inference.huggingface.co/models/{selected_model}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "width": width,
+            "height": height,
+            "num_images_per_prompt": max(1, int(number_of_images)),
+            "num_inference_steps": 30,
+            "guidance_scale": 4.0,
+        },
+        "options": {"wait_for_model": True},
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=300)
+        response.raise_for_status()
+        return _extract_hf_images(response)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Qwen-Image generation failed: {exc}") from exc
+
 def generate_falai_images(
     prompt: str,
     number_of_images: int = 1,
@@ -351,13 +503,7 @@ def generate_falai_images(
     # fal_client reads FAL_KEY from the environment.
     _os.environ["FAL_KEY"] = api_key
 
-    ar = (aspect_ratio or "16:9").strip()
-    if ar == "9:16":
-        width, height = 1024, 1792
-    elif ar == "1:1":
-        width, height = 1024, 1024
-    else:  # default 16:9
-        width, height = 1792, 1024
+    width, height = _image_dimensions_for_aspect(aspect_ratio)
 
     try:
         result = fal_client.subscribe(
@@ -396,17 +542,24 @@ def generate_scene_image_bytes(
     number_of_images: int = 1,
     aspect_ratio: str = "16:9",
     provider: str = "gemini",
+    model: str | None = None,
 ) -> List[bytes]:
     """
     Provider-routed scene image generation.
 
     provider:
       - "gemini" — Google Imagen / Gemini image model (default)
+      - "openai" — OpenAI image models
+      - "qwen"   — Qwen-Image open-source model via Hugging Face Inference API
       - "falai"  — fal.ai FLUX Dev fallback
     """
     provider = (provider or "gemini").strip().lower()
     if provider == "gemini":
         return generate_imagen_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
+    if provider == "openai":
+        return generate_openai_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio, model=model)
+    if provider in {"qwen", "qwen-image", "qwen_image"}:
+        return generate_qwen_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio, model=model)
     if provider == "falai":
         return generate_falai_images(prompt, number_of_images=number_of_images, aspect_ratio=aspect_ratio)
     # Unknown provider names use the primary Gemini path.

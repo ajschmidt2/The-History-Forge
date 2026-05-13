@@ -13,7 +13,7 @@ from src.config.secrets import bootstrap_api_keys
 # Ensure canonical runtime API key env vars are populated before modules that may use fal.
 bootstrap_api_keys()
 
-from image_gen import validate_gemini_api_key
+from image_gen import IMAGE_PROVIDER_OPTIONS, validate_gemini_api_key
 from src.ai_video_generation import veo_configured
 from src.config.secrets import fal_configured, fal_key_debug_snapshot
 from src.services.google_veo_video import google_veo_lite_configured
@@ -150,12 +150,14 @@ def main() -> None:
 
         st.divider()
         st.markdown("**Image Provider**")
-        _image_provider_options = ["falai", "gemini"]
+        _image_provider_options = [slug for slug, _label in IMAGE_PROVIDER_OPTIONS]
         _current_image_provider = st.session_state.get("image_provider", "gemini")
         if _current_image_provider not in _image_provider_options:
             _current_image_provider = "gemini"
         _image_labels = {
             "gemini": "🔷 Google Gemini / Imagen — Default",
+            "openai": "🟢 OpenAI (gpt-image-1 / DALL-E)",
+            "qwen": "🧪 Qwen-Image — Open source via Hugging Face",
             "falai": "✨ fal.ai (FLUX Dev) — Fallback",
         }
         st.session_state["image_provider"] = st.selectbox(
@@ -163,7 +165,7 @@ def main() -> None:
             _image_provider_options,
             index=_image_provider_options.index(_current_image_provider),
             format_func=lambda p: _image_labels.get(p, p),
-            help="Gemini/Imagen is the default image path. fal.ai FLUX Dev remains available as a fallback.",
+            help="Select the image generator for scene images across manual and automated workflows. Qwen-Image uses Hugging Face Inference with HF_TOKEN.",
             key="image_provider_select",
         )
 

@@ -2545,6 +2545,7 @@ def generate_image_for_scene(
     visual_style: str = "Photorealistic cinematic",
     visual_anchor: str = "",
     provider: str = "gemini",
+    model: str | None = None,
 ) -> Scene:
     base = (scene.image_prompt or "").strip()
     if not base:
@@ -2601,6 +2602,7 @@ def generate_image_for_scene(
                 number_of_images=1,
                 aspect_ratio=aspect_ratio,
                 provider=provider,
+                model=model,
             )
             raw = raw_images[0] if raw_images else None
             if not raw:
@@ -2655,6 +2657,7 @@ def generate_image_for_scene(
                     number_of_images=1,
                     aspect_ratio=aspect_ratio,
                     provider=provider,
+                    model=model,
                 )
                 raw = raw_images[0] if raw_images else None
                 if raw:
@@ -2690,6 +2693,7 @@ def generate_image_for_scene(
                 number_of_images=1,
                 aspect_ratio=aspect_ratio,
                 provider=provider,
+                model=model,
             )
             raw = raw_images[0] if raw_images else None
             if raw:
