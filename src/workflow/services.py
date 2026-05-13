@@ -1733,6 +1733,7 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
 
     update_step_status(project_id, "render", StepStatus.IN_PROGRESS)
 
+    render_warnings: list[str] = []
     music_resolution = resolve_music_track_for_project(project_id, resolved_settings.music_track) if resolved_settings.music_enabled else {
         "selected_track": "",
         "resolved_path": "",
@@ -1740,12 +1741,25 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
         "file_exists": False,
     }
     resolved_music_track = str(music_resolution.get("resolved_path", "") or "")
+    render_music_enabled = bool(resolved_settings.music_enabled and resolved_music_track and Path(resolved_music_track).exists())
+    if resolved_settings.music_enabled and not render_music_enabled:
+        selected_track = str(music_resolution.get("selected_track", "") or resolved_settings.music_track or "").strip()
+        if selected_track:
+            warning = f"Background music track is unavailable ({selected_track}); continuing without music."
+        else:
+            warning = "Background music is enabled but no track is selected; continuing without music."
+        render_warnings.append(warning)
+        logger.warning("music_unavailable continuing_without_music=True selected_track=%s resolved_track=%s", selected_track, resolved_music_track)
+        resolved_music_track = ""
 
     expected_settings = {
         "aspect_ratio": resolved_settings.aspect_ratio,
         "subtitles_enabled": resolved_settings.subtitles_enabled,
         "effects_style": resolved_settings.effects_style,
-        "music_enabled": resolved_settings.music_enabled,
+        # Missing optional music is handled by rewriting the resolved timeline below,
+        # so do not make preflight auto-rebuild solely because an older timeline
+        # still says music is enabled.
+        "music_enabled": render_music_enabled if not resolved_settings.music_enabled or render_music_enabled else None,
         "music_track": resolved_music_track,
         "voiceover_enabled": cfg.include_voiceover,
     }
@@ -1859,15 +1873,13 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
             timeline_path.parent.mkdir(parents=True, exist_ok=True)
             timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
 
-    if resolved_settings.music_enabled and not resolved_music_track:
-        msg = "Background music is enabled but no track is selected."
-        update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
-        return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
+    if resolved_settings.music_enabled and not render_music_enabled and not render_warnings:
+        render_warnings.append("Background music is unavailable; continuing without music.")
 
     timeline.meta.aspect_ratio = requested_aspect_ratio
     timeline.meta.resolution = requested_resolution
     timeline.meta.burn_captions = should_apply_subtitles(resolved_settings, timeline.meta)
-    timeline.meta.include_music = bool(resolved_settings.music_enabled)
+    timeline.meta.include_music = bool(render_music_enabled)
     timeline.meta.video_effects_style = resolved_settings.effects_style
     if timeline.meta.include_music:
         # Base attenuation ensures music stays well below a loudnorm'd voiceover
@@ -1904,14 +1916,18 @@ def run_render_video(project_id: str, options: PipelineOptions | None = None) ->
     timeline_path.parent.mkdir(parents=True, exist_ok=True)
     timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
 
-    warnings: list[str] = []
+    warnings: list[str] = list(render_warnings)
     music_mix_applied = False
     if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
         if not Path(timeline.meta.music.path).exists():
-            msg = f"Music file missing: {timeline.meta.music.path}"
-            update_step_status(project_id, "render", StepStatus.FAILED, error=msg)
-            return StepResult(project_id, "render", StepStatus.FAILED, message=msg)
-        music_mix_applied = True
+            warning = f"Music file missing ({timeline.meta.music.path}); continuing without music."
+            warnings.append(warning)
+            logger.warning("music_missing continuing_without_music=True path=%s", timeline.meta.music.path)
+            timeline.meta.include_music = False
+            timeline.meta.music = None
+            timeline_path.write_text(timeline.model_dump_json(indent=2), encoding="utf-8")
+        else:
+            music_mix_applied = True
     if timeline.meta.burn_captions:
         try:
             from src.video.captions import write_ass_file
