@@ -33,6 +33,8 @@ For local development, you can export the same keys as env vars (aliases are sup
 - Optional `GEMINI_MODEL_TEXT` text model override (defaults to `gemini-2.5-flash`).
 - Optional `GEMINI_MODEL_FAST` fast text model override (defaults to `gemini-2.5-flash`).
 - Optional `GEMINI_IMAGE_MODEL` image model override (defaults to `gemini-2.5-flash-image`).
+- `HF_TOKEN` (or `HUGGINGFACE_API_TOKEN`) for the Qwen-Image open-source image provider via Hugging Face Inference.
+- Optional `QWEN_IMAGE_MODEL` image model override (defaults to `Qwen/Qwen-Image`).
 - Optional `GEMINI_VIDEO_MODEL` video model override (defaults to `veo-3.1-lite-generate-preview`).
 
 Google Cloud project-based generative settings are no longer used by History Forge:

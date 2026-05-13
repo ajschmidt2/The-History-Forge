@@ -74,3 +74,37 @@ def test_openai_image_model_registry_includes_default():
     assert DEFAULT_OPENAI_IMAGE_MODEL in model_slugs
     assert all(slug for slug in model_slugs)
     assert all(label for _slug, label in OPENAI_IMAGE_MODELS)
+
+
+def test_qwen_image_model_registry_includes_default():
+    from image_gen import DEFAULT_QWEN_IMAGE_MODEL, QWEN_IMAGE_MODELS, IMAGE_PROVIDER_OPTIONS
+
+    model_slugs = [slug for slug, _label in QWEN_IMAGE_MODELS]
+    provider_slugs = [slug for slug, _label in IMAGE_PROVIDER_OPTIONS]
+
+    assert DEFAULT_QWEN_IMAGE_MODEL in model_slugs
+    assert "qwen" in provider_slugs
+    assert all(label for _slug, label in QWEN_IMAGE_MODELS)
+
+
+def test_scene_image_router_uses_qwen_provider(monkeypatch):
+    import image_gen
+
+    calls = []
+
+    def fake_qwen(prompt, number_of_images=1, aspect_ratio="16:9", model=None):
+        calls.append((prompt, number_of_images, aspect_ratio, model))
+        return [b"png"]
+
+    monkeypatch.setattr(image_gen, "generate_qwen_images", fake_qwen)
+
+    result = image_gen.generate_scene_image_bytes(
+        "paint a clay tablet",
+        number_of_images=2,
+        aspect_ratio="9:16",
+        provider="qwen",
+        model="Qwen/Qwen-Image",
+    )
+
+    assert result == [b"png"]
+    assert calls == [("paint a clay tablet", 2, "9:16", "Qwen/Qwen-Image")]

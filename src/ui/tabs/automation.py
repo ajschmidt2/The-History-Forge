@@ -22,7 +22,7 @@ from src.services.youtube_oauth import build_youtube_auth_url, resolve_youtube_r
 from src.services.youtube_upload import exchange_code_for_token, run_local_oauth_sign_in, validate_youtube_credentials
 from src.video.ai_video_clips import SUPPORTED_PROVIDERS
 from src.services.fal_video_test import FAL_VIDEO_MODELS, DEFAULT_FAL_VIDEO_MODEL
-from image_gen import OPENAI_IMAGE_MODELS, DEFAULT_OPENAI_IMAGE_MODEL
+from image_gen import IMAGE_PROVIDER_OPTIONS, OPENAI_IMAGE_MODELS, DEFAULT_OPENAI_IMAGE_MODEL
 from src.ui.constants import VISUAL_STYLE_OPTIONS
 from src.ui.state import DEFAULT_VOICE_ID
 from src.workflow.models import PIPELINE_STEPS
@@ -643,9 +643,10 @@ def _render_daily_automation_status(project_id: str) -> None:
         daily_fal_video_model = _fal_model_default
 
     # Image provider selector
-    _daily_img_provider_options = ["openai", "falai", "gemini"]
+    _daily_img_provider_options = [slug for slug, _label in IMAGE_PROVIDER_OPTIONS]
     _daily_img_provider_labels = {
         "openai": "OpenAI (gpt-image-1 / DALL-E)",
+        "qwen": "Qwen-Image (open source via Hugging Face)",
         "falai":  "fal.ai (FLUX Dev)",
         "gemini": "Google Gemini / Imagen",
     }

@@ -38,6 +38,8 @@ _ALIAS_MAP: dict[str, list[str]] = {
     "TIKTOK_ACCESS_TOKEN": ["TIKTOK_ACCESS_TOKEN", "tiktok_access_token"],
     "TIKTOK_OPEN_ID": ["TIKTOK_OPEN_ID", "tiktok_open_id"],
     "FAL_API_KEY": ["FAL_API_KEY", "fal_api_key", "FAL_KEY", "fal_key"],
+    "HF_TOKEN": ["HF_TOKEN", "hf_token", "HUGGINGFACE_API_TOKEN", "huggingface_api_token", "HUGGINGFACEHUB_API_TOKEN"],
+    "QWEN_IMAGE_MODEL": ["QWEN_IMAGE_MODEL", "qwen_image_model", "HF_IMAGE_MODEL", "hf_image_model"],
 }
 
 _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
@@ -73,6 +75,13 @@ _NESTED_STREAMLIT_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
         ("api_keys", "fal"),
         ("api_keys", "fal_api_key"),
     ),
+    "HF_TOKEN": (
+        ("huggingface", "token"),
+        ("huggingface", "api_token"),
+        ("api_keys", "huggingface"),
+        ("api_keys", "hf_token"),
+    ),
+    "QWEN_IMAGE_MODEL": (("qwen", "image_model"), ("huggingface", "image_model")),
 }
 
 _PLACEHOLDER_VALUES = {"", "none", "null", "paste_key_here", "your_api_key_here", "replace_me"}
