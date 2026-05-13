@@ -6,6 +6,13 @@ from io import BytesIO
 from typing import Any, List, Optional, Sequence
 
 
+DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1"
+OPENAI_IMAGE_MODELS: tuple[tuple[str, str], ...] = (
+    (DEFAULT_OPENAI_IMAGE_MODEL, "GPT Image 1"),
+    ("dall-e-3", "DALL-E 3"),
+    ("dall-e-2", "DALL-E 2"),
+)
+
 _PLACEHOLDER_VALUES = {
     "paste_key_here", "your_api_key_here", "replace_me", "none", "null", "",
     "aiza...", "your-api-key", "your_key_here",

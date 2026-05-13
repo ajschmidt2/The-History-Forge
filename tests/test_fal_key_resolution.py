@@ -54,3 +54,23 @@ def test_get_fal_key_env_priority_and_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="fal.ai API key not found"):
         secrets.get_fal_key()
+
+
+def test_fal_video_model_registry_includes_default():
+    from src.services.fal_video_test import DEFAULT_FAL_VIDEO_MODEL, FAL_VIDEO_MODELS
+
+    model_slugs = [slug for slug, _label in FAL_VIDEO_MODELS]
+
+    assert DEFAULT_FAL_VIDEO_MODEL in model_slugs
+    assert all(slug.startswith("fal-ai/") for slug in model_slugs)
+    assert all(label for _slug, label in FAL_VIDEO_MODELS)
+
+
+def test_openai_image_model_registry_includes_default():
+    from image_gen import DEFAULT_OPENAI_IMAGE_MODEL, OPENAI_IMAGE_MODELS
+
+    model_slugs = [slug for slug, _label in OPENAI_IMAGE_MODELS]
+
+    assert DEFAULT_OPENAI_IMAGE_MODEL in model_slugs
+    assert all(slug for slug in model_slugs)
+    assert all(label for _slug, label in OPENAI_IMAGE_MODELS)

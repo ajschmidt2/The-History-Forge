@@ -17,6 +17,13 @@ from src.config import get_fal_key
 MIN_VIDEO_BYTES = 100_000
 DEFAULT_OUTPUT_DIR = Path("data/fal_video_tests")
 DEFAULT_FAL_VIDEO_MODEL = "fal-ai/wan/v2.2-5b/image-to-video"
+FAL_VIDEO_MODELS: tuple[tuple[str, str], ...] = (
+    (DEFAULT_FAL_VIDEO_MODEL, "Wan 2.2 5B (image-to-video)"),
+    ("fal-ai/minimax/video-01/image-to-video", "MiniMax Video-01 (image-to-video)"),
+    ("fal-ai/kling-video/v1.6/standard/image-to-video", "Kling 1.6 Standard (image-to-video)"),
+    ("fal-ai/kling-video/v1.6/pro/image-to-video", "Kling 1.6 Pro (image-to-video)"),
+    ("fal-ai/luma-dream-machine/ray-2/image-to-video", "Luma Ray 2 (image-to-video)"),
+)
 WORKING_TEST_MODEL_SLUG = DEFAULT_FAL_VIDEO_MODEL
 INVALID_MODEL_HELP = "Use a full fal model slug, e.g. fal-ai/wan/v2.2-5b/image-to-video"
 logger = logging.getLogger(__name__)
