@@ -446,3 +446,64 @@ def test_run_daily_job_emits_progress_events(tmp_path: Path, monkeypatch):
     assert "workflow" in phases
     assert "supabase" in phases
     assert "complete" in phases
+
+
+def test_parse_daily_workflow_cron_uses_dateutil_when_zoneinfo_data_missing(monkeypatch):
+    import src.workflow.daily_job as daily_job
+
+    def unavailable_zoneinfo(_timezone_name):
+        raise daily_job.ZoneInfoNotFoundError
+
+    monkeypatch.setattr(daily_job, "ZoneInfo", unavailable_zoneinfo)
+
+    schedule = daily_job.parse_daily_workflow_cron(
+        "0 11 * * *",
+        timezone_name="America/Indianapolis",
+        reference_dt=datetime.fromisoformat("2026-04-24T12:00:00+00:00"),
+    )
+
+    assert schedule["enabled"] is True
+    assert schedule["timezone"] == "America/Indianapolis"
+    assert schedule["hour_local"] == 7
+
+
+def test_build_daily_workflow_cron_uses_dateutil_when_zoneinfo_data_missing(monkeypatch):
+    import src.workflow.daily_job as daily_job
+
+    def unavailable_zoneinfo(_timezone_name):
+        raise daily_job.ZoneInfoNotFoundError
+
+    monkeypatch.setattr(daily_job, "ZoneInfo", unavailable_zoneinfo)
+
+    cron = daily_job.build_daily_workflow_cron(
+        {
+            "enabled": True,
+            "mode": "daily",
+            "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+            "hour_local": 7,
+            "timezone": "America/Indianapolis",
+        },
+        reference_dt=datetime.fromisoformat("2026-04-24T12:00:00+00:00"),
+    )
+
+    assert cron == "0 11 * * *"
+
+
+def test_parse_daily_workflow_cron_falls_back_to_utc_when_no_timezone_provider(monkeypatch):
+    import src.workflow.daily_job as daily_job
+
+    def unavailable_zoneinfo(_timezone_name):
+        raise daily_job.ZoneInfoNotFoundError
+
+    monkeypatch.setattr(daily_job, "ZoneInfo", unavailable_zoneinfo)
+    monkeypatch.setattr(daily_job, "gettz", lambda _timezone_name: None)
+
+    schedule = daily_job.parse_daily_workflow_cron(
+        "0 11 * * *",
+        timezone_name="America/Indianapolis",
+        reference_dt=datetime.fromisoformat("2026-04-24T12:00:00+00:00"),
+    )
+
+    assert schedule["enabled"] is True
+    assert schedule["timezone"] == "UTC"
+    assert schedule["hour_local"] == 11

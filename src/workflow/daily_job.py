@@ -8,10 +8,11 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from collections.abc import Callable
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from dateutil.tz import gettz
 
 from src.config.secrets import get_secret
 from src.constants import SUPABASE_VIDEO_BUCKET
@@ -44,6 +45,32 @@ _DAY_TO_CRON = {
     "sun": "SUN",
 }
 _CRON_TO_DAY = {value: key for key, value in _DAY_TO_CRON.items()}
+UTC_DAILY_TIMEZONE_FALLBACK = "UTC"
+
+
+def _safe_zoneinfo(timezone_name: str | None, *, fallback_timezone: str = DEFAULT_DAILY_TIMEZONE) -> tuple[tzinfo, str]:
+    """Return an available ZoneInfo and the key that was successfully loaded.
+
+    Streamlit Cloud and other slim Python deployments may not ship the IANA
+    timezone database unless the ``tzdata`` package is installed.  In that
+    case even our default timezone can raise ``ZoneInfoNotFoundError``; fall
+    back to UTC rather than letting the app crash while rendering the daily
+    automation tab.
+    """
+
+    candidate_names = [
+        str(timezone_name or "").strip(),
+        str(fallback_timezone or "").strip(),
+        UTC_DAILY_TIMEZONE_FALLBACK,
+    ]
+    for candidate in dict.fromkeys(name for name in candidate_names if name):
+        try:
+            return ZoneInfo(candidate), candidate
+        except ZoneInfoNotFoundError:
+            fallback_tz = gettz(candidate)
+            if fallback_tz is not None:
+                return fallback_tz, candidate
+    return timezone.utc, UTC_DAILY_TIMEZONE_FALLBACK
 
 
 # ---------------------------------------------------------------------------
@@ -204,11 +231,7 @@ def _normalize_daily_schedule(raw_schedule: dict[str, Any] | None) -> dict[str, 
         hour_local = 7
     hour_local = max(0, min(23, hour_local))
 
-    timezone_name = str(schedule.get("timezone", DEFAULT_DAILY_TIMEZONE) or DEFAULT_DAILY_TIMEZONE).strip()
-    try:
-        ZoneInfo(timezone_name)
-    except Exception:
-        timezone_name = DEFAULT_DAILY_TIMEZONE
+    _tz, timezone_name = _safe_zoneinfo(schedule.get("timezone", DEFAULT_DAILY_TIMEZONE))
 
     return {
         "enabled": enabled,
@@ -224,7 +247,8 @@ def build_daily_workflow_cron(schedule: dict[str, Any], *, reference_dt: datetim
     if not normalized["enabled"]:
         return ""
 
-    tz = ZoneInfo(normalized["timezone"])
+    tz, resolved_timezone = _safe_zoneinfo(normalized["timezone"])
+    normalized["timezone"] = resolved_timezone
     reference = reference_dt or datetime.now(tz)
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=tz)
@@ -259,7 +283,8 @@ def parse_daily_workflow_cron(cron_expr: str, *, timezone_name: str = DEFAULT_DA
         return normalized
     utc_hour = max(0, min(23, utc_hour))
 
-    tz = ZoneInfo(normalized["timezone"])
+    tz, resolved_timezone = _safe_zoneinfo(normalized["timezone"])
+    normalized["timezone"] = resolved_timezone
     reference = reference_dt or datetime.now(timezone.utc)
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
