@@ -406,6 +406,95 @@ def test_run_render_video_auto_rebuilds_invalid_timeline_references(tmp_path, mo
     assert result.outputs["preflight"]["timeline_rebuild_succeeded"] is True
 
 
+def test_run_render_video_continues_without_unavailable_music(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_id = "svc-render-missing-music"
+    pdir = Path("data/projects") / project_id
+    (pdir / "assets/images").mkdir(parents=True, exist_ok=True)
+    (pdir / "assets/images/s01.png").write_bytes(b"png")
+    (pdir / "scenes.json").write_text(
+        json.dumps(
+            [
+                {
+                    "index": 1,
+                    "title": "S1",
+                    "script_excerpt": "A line.",
+                    "visual_intent": "v1",
+                    "image_prompt": "prompt",
+                    "estimated_duration_sec": 2,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    missing_track = "data/music_library/missing.mp3"
+    save_project_payload(
+        project_id,
+        {
+            "project_id": project_id,
+            "project_title": "Missing Music",
+            "aspect_ratio": "9:16",
+            "enable_subtitles": False,
+            "enable_music": True,
+            "selected_music_track": missing_track,
+        },
+    )
+
+    def _fake_sync_timeline(project_id_arg, options=None):
+        timeline_path = Path("data/projects") / project_id_arg / "timeline.json"
+        timeline_path.write_text(
+            json.dumps(
+                {
+                    "meta": {
+                        "project_id": project_id_arg,
+                        "title": "missing music",
+                        "aspect_ratio": "9:16",
+                        "resolution": "720x1280",
+                        "burn_captions": False,
+                        "include_voiceover": False,
+                        "include_music": True,
+                        "enable_motion": True,
+                        "video_effects_style": "Ken Burns - Standard",
+                        "music": {"path": missing_track, "volume_db": -18, "ducking": {"enabled": True}},
+                    },
+                    "scenes": [
+                        {"id": "s01", "image_path": str(pdir / "assets/images/s01.png"), "start": 0, "duration": 2}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return StepResult(project_id_arg, "timeline", StepStatus.COMPLETED, outputs={"timeline_path": str(timeline_path)})
+
+    rendered_timelines = []
+
+    def _fake_render(timeline_path, output_path, **kwargs):
+        rendered_timelines.append(json.loads(Path(timeline_path).read_text(encoding="utf-8")))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"mp4")
+
+    monkeypatch.setattr("src.workflow.services.run_sync_timeline", _fake_sync_timeline)
+    monkeypatch.setattr("src.workflow.services.ensure_ffmpeg_exists", lambda: None)
+    monkeypatch.setattr("src.workflow.services.render_video_from_timeline", _fake_render)
+
+    result = run_render_video(
+        project_id,
+        PipelineOptions(
+            aspect_ratio="9:16",
+            include_subtitles=False,
+            include_music=True,
+            selected_music_track=missing_track,
+            include_voiceover=False,
+        ),
+    )
+
+    assert result.status == StepStatus.COMPLETED
+    assert any("continuing without music" in warning for warning in result.outputs["warnings"])
+    assert rendered_timelines[-1]["meta"]["include_music"] is False
+    assert rendered_timelines[-1]["meta"].get("music") is None
+
+
 def test_load_options_explicit_options_override_payload(tmp_path, monkeypatch):
     """Explicit pipeline_options values must win over saved payload for render settings."""
     monkeypatch.chdir(tmp_path)

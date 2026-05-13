@@ -2049,8 +2049,15 @@ def render_video_from_timeline(
             if timeline.meta.include_music and timeline.meta.music and timeline.meta.music.path:
                 music_path = Path(timeline.meta.music.path).resolve()
                 if not music_path.exists():
-                    raise FileNotFoundError(f"Music file not found: {timeline.meta.music.path}")
-                timeline.meta.music.path = str(music_path)
+                    warning = f"Music file not found ({timeline.meta.music.path}); continuing without music."
+                    render_warnings.append(warning)
+                    if log_file:
+                        with log_file.open("a", encoding="utf-8") as handle:
+                            handle.write(f"MUSIC_UNAVAILABLE continuing_without_music=True path={timeline.meta.music.path}\n")
+                    timeline.meta.include_music = False
+                    timeline.meta.music = None
+                else:
+                    timeline.meta.music.path = str(music_path)
 
             voiceover_duration: float | None = None
             if timeline.meta.include_voiceover and timeline.meta.voiceover and timeline.meta.voiceover.path:
