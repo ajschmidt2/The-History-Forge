@@ -313,3 +313,34 @@ def test_generate_image_for_scene_retries_after_artifact_rejection(monkeypatch) 
     assert updated.image_bytes
     assert len(seen_prompts) == 2
     assert "Full-bleed edge-to-edge image only" in seen_prompts[1]
+
+
+def test_generate_image_for_scene_caps_provider_prompt_length(monkeypatch) -> None:
+    img = Image.new("RGB", (720, 1280), (88, 72, 52))
+    seen_prompts: list[str] = []
+
+    def _fake_generate_scene_image_bytes(prompt: str, **kwargs):
+        seen_prompts.append(prompt)
+        return [_png_bytes_from_image(img)]
+
+    monkeypatch.setattr("utils.generate_scene_image_bytes", _fake_generate_scene_image_bytes)
+    monkeypatch.setattr("utils.load_visual_style", lambda: "\n".join(f"- style note {i} " + "x" * 120 for i in range(30)))
+
+    scene = Scene(
+        index=1,
+        title="Long Prompt Scene",
+        script_excerpt="A long historical moment unfolds.",
+        visual_intent="historical detail",
+        image_prompt="Cinematic historical tableau. " + "period accurate detail " * 300,
+    )
+
+    updated = generate_image_for_scene(
+        scene,
+        visual_anchor="Consistent historical anchor. " + "shared palette " * 120,
+        provider="openai",
+    )
+
+    assert updated.image_bytes
+    assert seen_prompts
+    assert max(len(prompt) for prompt in seen_prompts) <= 3900
+    assert "No visible text" in seen_prompts[0]

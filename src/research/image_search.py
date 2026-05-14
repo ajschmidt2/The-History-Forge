@@ -609,7 +609,7 @@ def search_image_for_scene(
                     continue
                 ranked_candidates.append((score, -provider_index, -query_index, provider, query, candidate, note))
 
-    ranked_candidates.sort(reverse=True)
+    ranked_candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
     for score, _provider_order, _query_order, provider, query, candidate, note in ranked_candidates[:8]:
         img_url = str(candidate.get("image_url", "") or "").strip()
         if not img_url:
