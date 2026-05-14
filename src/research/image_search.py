@@ -564,7 +564,8 @@ def search_image_for_scene(
         "unsplash": lambda q: _unsplash_search(q, unsplash_access_key, limit=5),
     }
 
-    ranked_candidates: list[tuple[float, int, int, str, str, dict, str]] = []
+    ranked_candidates: list[tuple[float, int, int, int, str, str, dict, str]] = []
+    candidate_sequence = 0
     min_score = 0.0 if verification_level == "off" else (0.3 if verification_level == "standard" else 0.48)
 
     for provider_index, provider in enumerate(providers):
@@ -607,10 +608,13 @@ def search_image_for_scene(
                 img_url = candidate.get("image_url", "")
                 if not img_url:
                     continue
-                ranked_candidates.append((score, -provider_index, -query_index, provider, query, candidate, note))
+                ranked_candidates.append((score, -provider_index, -query_index, -candidate_sequence, provider, query, candidate, note))
+                candidate_sequence += 1
 
-    ranked_candidates.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-    for score, _provider_order, _query_order, provider, query, candidate, note in ranked_candidates[:8]:
+    # Include an integer sequence tie-breaker so equal-score candidates never
+    # fall through to comparing provider payload dictionaries.
+    ranked_candidates.sort(key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True)
+    for score, _provider_order, _query_order, _candidate_order, provider, query, candidate, note in ranked_candidates[:8]:
         img_url = str(candidate.get("image_url", "") or "").strip()
         if not img_url:
             continue

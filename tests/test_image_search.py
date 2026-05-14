@@ -84,3 +84,33 @@ def test_search_image_for_scene_sort_handles_equal_scores_with_distinct_candidat
 
     assert result is not None
     assert result.provider == "wikimedia"
+
+
+def test_search_image_for_scene_tie_breaks_many_equal_candidates(monkeypatch, tmp_path: Path):
+    candidates = [
+        {
+            "title": "Bletchley Park codebreakers 1940s",
+            "page_url": f"https://example.com/{idx}",
+            "image_url": f"https://example.com/{idx}.png",
+            "license": "Public Domain",
+        }
+        for idx in range(4)
+    ]
+    monkeypatch.setattr(image_search, "_wikimedia_search", lambda query, limit=5: candidates)
+    monkeypatch.setattr(image_search, "_download_image_bytes", lambda url: b"raw")
+    monkeypatch.setattr(image_search, "_normalize_image_bytes", lambda raw: b"png")
+    monkeypatch.setattr(image_search, "_save_image", lambda image_bytes, dest: dest.write_bytes(image_bytes) or True)
+
+    result = image_search.search_image_for_scene(
+        scene_title="Bletchley Park codebreakers",
+        scene_description="Codebreakers work inside Bletchley Park during the 1940s.",
+        topic="Bletchley Park",
+        era="1940s",
+        scene_index=1,
+        cache_dir=tmp_path,
+        providers=("wikimedia",),
+        verification_level="standard",
+    )
+
+    assert result is not None
+    assert result.image_url.startswith("https://example.com/")

@@ -11,6 +11,14 @@ import requests
 
 
 DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1"
+# OpenAI image APIs reject prompts above 4,000 characters. Keep a small
+# buffer for SDK/request serialization differences while preserving the
+# no-visible-text instruction that prevents title-card artifacts.
+_OPENAI_IMAGE_PROMPT_MAX_CHARS = 3990
+_OPENAI_IMAGE_PROMPT_REQUIRED_SUFFIX = (
+    "Treat all prompt wording as off-screen instruction only. "
+    "No visible text, captions, labels, watermarks, logos, or readable writing."
+)
 OPENAI_IMAGE_MODELS: tuple[tuple[str, str], ...] = (
     (DEFAULT_OPENAI_IMAGE_MODEL, "GPT Image 1"),
     ("dall-e-3", "DALL-E 3"),
@@ -367,6 +375,25 @@ def _resolve_qwen_image_model(model: str | None = None) -> str:
     return DEFAULT_QWEN_IMAGE_MODEL
 
 
+def _fit_openai_image_prompt(prompt: str, max_chars: int = _OPENAI_IMAGE_PROMPT_MAX_CHARS) -> str:
+    """Return a prompt that satisfies OpenAI image prompt length limits.
+
+    The workflow usually compacts prompts before they reach the provider, but
+    this final provider-local guard catches UI edits, older cached scene files,
+    and any direct callers of :func:`generate_openai_images`.
+    """
+    cleaned = " ".join(str(prompt or "").split())
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    marker = " [Prompt shortened to satisfy OpenAI image prompt length limits.] "
+    suffix = " " + _OPENAI_IMAGE_PROMPT_REQUIRED_SUFFIX
+    suffix = suffix[: max_chars // 2]
+    head_budget = max(0, max_chars - len(marker) - len(suffix))
+    head = cleaned[:head_budget].rstrip(" ,.;:-")
+    return f"{head}{marker}{suffix}"[:max_chars]
+
+
 def _image_dimensions_for_aspect(aspect_ratio: str, *, provider: str = "generic") -> tuple[int, int]:
     ar = (aspect_ratio or "16:9").strip()
     if provider == "openai":
@@ -416,6 +443,7 @@ def generate_openai_images(
     selected_model = (model or DEFAULT_OPENAI_IMAGE_MODEL).strip() or DEFAULT_OPENAI_IMAGE_MODEL
     width, height = _image_dimensions_for_aspect(aspect_ratio, provider="openai")
     size = f"{width}x{height}"
+    prompt = _fit_openai_image_prompt(prompt)
     try:
         response = OpenAI(api_key=api_key).images.generate(
             model=selected_model,
