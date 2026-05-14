@@ -394,9 +394,28 @@ def _fit_openai_image_prompt(prompt: str, max_chars: int = _OPENAI_IMAGE_PROMPT_
     return f"{head}{marker}{suffix}"[:max_chars]
 
 
-def _image_dimensions_for_aspect(aspect_ratio: str, *, provider: str = "generic") -> tuple[int, int]:
+def _image_dimensions_for_aspect(
+    aspect_ratio: str,
+    *,
+    provider: str = "generic",
+    model: str | None = None,
+) -> tuple[int, int]:
     ar = (aspect_ratio or "16:9").strip()
+    normalized_model = (model or "").strip().lower()
     if provider == "openai":
+        # OpenAI image models do not share the same valid size set.  In
+        # particular, DALL-E 3 rejects the gpt-image-1 portrait size
+        # (1024x1536) and expects 1024x1792 for 9:16.  Daily automation can
+        # still use DALL-E 3 from saved presets, so pick a valid size per
+        # model before the workflow crops to the requested output aspect.
+        if normalized_model == "dall-e-3":
+            if ar == "9:16":
+                return 1024, 1792
+            if ar == "1:1":
+                return 1024, 1024
+            return 1792, 1024
+        if normalized_model == "dall-e-2":
+            return 1024, 1024
         if ar == "9:16":
             return 1024, 1536
         if ar == "1:1":
@@ -441,7 +460,7 @@ def generate_openai_images(
         raise RuntimeError("OPENAI_API_KEY not found in secrets or environment.")
 
     selected_model = (model or DEFAULT_OPENAI_IMAGE_MODEL).strip() or DEFAULT_OPENAI_IMAGE_MODEL
-    width, height = _image_dimensions_for_aspect(aspect_ratio, provider="openai")
+    width, height = _image_dimensions_for_aspect(aspect_ratio, provider="openai", model=selected_model)
     size = f"{width}x{height}"
     prompt = _fit_openai_image_prompt(prompt)
     try:
