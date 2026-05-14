@@ -123,3 +123,56 @@ def test_optional_gemini_validation_is_safe_when_provider_unavailable(monkeypatc
     monkeypatch.setattr(image_gen.importlib.util, "find_spec", fake_find_spec)
 
     assert image_gen.validate_gemini_api_key(required=False) == ""
+
+
+def test_openai_image_sizes_match_model_constraints():
+    import image_gen
+
+    assert image_gen._image_dimensions_for_aspect(
+        "9:16", provider="openai", model="dall-e-3"
+    ) == (1024, 1792)
+    assert image_gen._image_dimensions_for_aspect(
+        "16:9", provider="openai", model="dall-e-3"
+    ) == (1792, 1024)
+    assert image_gen._image_dimensions_for_aspect(
+        "9:16", provider="openai", model="gpt-image-1"
+    ) == (1024, 1536)
+    assert image_gen._image_dimensions_for_aspect(
+        "16:9", provider="openai", model="gpt-image-1"
+    ) == (1536, 1024)
+    assert image_gen._image_dimensions_for_aspect(
+        "9:16", provider="openai", model="dall-e-2"
+    ) == (1024, 1024)
+
+
+def test_generate_openai_images_uses_dalle3_portrait_size(monkeypatch):
+    import image_gen
+
+    captured = {}
+
+    class FakeImages:
+        @staticmethod
+        def generate(**kwargs):
+            captured.update(kwargs)
+            return type("Response", (), {"data": []})()
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.images = FakeImages()
+
+    monkeypatch.setattr(
+        image_gen,
+        "_get_secret",
+        lambda name, default="": "sk-test" if name == "OPENAI_API_KEY" else default,
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "openai",
+        type("OpenAIModule", (), {"OpenAI": FakeOpenAI})(),
+    )
+
+    image_gen.generate_openai_images("test prompt", aspect_ratio="9:16", model="dall-e-3")
+
+    assert captured["model"] == "dall-e-3"
+    assert captured["size"] == "1024x1792"
