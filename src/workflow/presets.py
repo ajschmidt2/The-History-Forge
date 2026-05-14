@@ -31,7 +31,7 @@ class DailyShortPreset:
     last_scene_cta_text: str = "Subscribe to History Crossroads for more 60-second history stories."
     ai_video_provider: str = "falai"
     image_provider: str = "openai"
-    openai_image_model: str = "dall-e-3"
+    openai_image_model: str = "gpt-image-1"
     fal_video_model: str = "fal-ai/wan/v2.2-5b/image-to-video"
     enable_image_search: bool = True
     enable_broll: bool = True
