@@ -1442,6 +1442,11 @@ _STRICT_IMAGE_CLEANLINESS_RULE = (
     "Full-bleed edge-to-edge image only. No white bars, blank bands, borders, frames, letterboxing, title cards, "
     "posters, captions, subtitles, floating words, labels, watermarks, logos, or any readable writing."
 )
+_MAX_IMAGE_PROMPT_CHARS = 3900
+_IMAGE_PROMPT_REQUIRED_SUFFIX = (
+    "Treat prompt words as off-screen instructions only. "
+    "No visible text, captions, labels, watermarks, logos, or readable writing."
+)
 
 _SCENE_SUBJECT_STOPWORDS = {
     "the", "and", "for", "with", "that", "from", "this", "were", "their", "they", "into", "while", "over",
@@ -2468,6 +2473,21 @@ def _sanitize_prompt_for_safety(prompt: str) -> str:
     return result
 
 
+def _fit_image_prompt_for_provider(prompt: str, max_chars: int = _MAX_IMAGE_PROMPT_CHARS) -> str:
+    """Keep image prompts below provider limits while preserving safety instructions."""
+    cleaned = re.sub(r"[ \t]+", " ", str(prompt or "")).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    marker = "\n\n[Prompt shortened to satisfy image provider length limits.]"
+    suffix = f"\n\n{_IMAGE_PROMPT_REQUIRED_SUFFIX} {_STRICT_IMAGE_CLEANLINESS_RULE}"
+    suffix = suffix[: max_chars // 2]
+    head_budget = max(0, max_chars - len(marker) - len(suffix))
+    shortened = cleaned[:head_budget].rstrip(" ,.;\n")
+    return f"{shortened}{marker}{suffix}"
+
+
 def _build_safe_fallback_image_prompt(
     scene: Scene,
     *,
@@ -2532,7 +2552,7 @@ def _image_prompt_variants(
         key = re.sub(r"\s+", " ", cleaned).strip()
         if key and key not in seen:
             seen.add(key)
-            deduped.append(cleaned)
+            deduped.append(_fit_image_prompt_for_provider(cleaned))
     return deduped
 
 
@@ -2598,7 +2618,7 @@ def generate_image_for_scene(
     for attempt, prompt_variant in enumerate(prompt_variants, start=1):
         try:
             raw_images = generate_scene_image_bytes(
-                prompt_variant,
+                _fit_image_prompt_for_provider(prompt_variant),
                 number_of_images=1,
                 aspect_ratio=aspect_ratio,
                 provider=provider,
@@ -2653,7 +2673,7 @@ def generate_image_for_scene(
             print(f"[Imagen] Safety-filter detected — retrying with sanitized prompt (scene {scene.index})")
             try:
                 raw_images = generate_scene_image_bytes(
-                    sanitized,
+                    _fit_image_prompt_for_provider(sanitized),
                     number_of_images=1,
                     aspect_ratio=aspect_ratio,
                     provider=provider,
@@ -2689,7 +2709,7 @@ def generate_image_for_scene(
         print(f"[Imagen] Using safe fallback prompt (scene {scene.index})")
         try:
             raw_images = generate_scene_image_bytes(
-                fallback_prompt,
+                _fit_image_prompt_for_provider(fallback_prompt),
                 number_of_images=1,
                 aspect_ratio=aspect_ratio,
                 provider=provider,
