@@ -186,6 +186,12 @@ def load_scenes(project_id: str) -> list[Any]:
             scene = _scene_from_dict(item)
             if scene is not None:
                 scenes.append(scene)
+    # Re-number scenes to ensure sequential indices starting from 1, healing any
+    # gaps or duplicates introduced by partial saves or manual edits.
+    scenes.sort(key=lambda s: getattr(s, "index", 0))
+    for expected, scene in enumerate(scenes, start=1):
+        if getattr(scene, "index", expected) != expected:
+            scene.index = expected
     return scenes
 
 

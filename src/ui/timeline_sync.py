@@ -94,7 +94,15 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
         if not isinstance(idx, int) or idx <= 0:
             continue
 
-        # B-roll has the highest priority if enabled and the file exists locally.
+        # AI-generated video clips take the highest priority (deliberate, expensive).
+        # B-roll (stock video) is used when no AI clip exists for the scene.
+        video_path = str(getattr(scene, "video_path", "") or "").strip()
+        resolved_video_path = _resolve_scene_video_path(project_path, video_path)
+        if resolved_video_path is not None:
+            scene.video_path = str(resolved_video_path)
+            media_files.append(resolved_video_path)
+            continue
+
         if bool(getattr(scene, "use_broll", False)):
             broll_local = str(getattr(scene, "broll_local_path", "") or "").strip()
             if broll_local:
@@ -102,13 +110,6 @@ def _media_files_from_session_scenes(project_path: Path, session_scenes: list[An
                 if broll_path.exists():
                     media_files.append(broll_path.resolve())
                     continue
-
-        video_path = str(getattr(scene, "video_path", "") or "").strip()
-        resolved_video_path = _resolve_scene_video_path(project_path, video_path)
-        if resolved_video_path is not None:
-            scene.video_path = str(resolved_video_path)
-            media_files.append(resolved_video_path)
-            continue
 
         video_url = str(getattr(scene, "video_url", "") or "").strip()
         if video_url:
@@ -147,23 +148,18 @@ def _apply_scene_media_assignments(
 
         # -------------------------------------------------------------------
         # Scene media priority (highest → lowest):
-        #   1. Manually assigned B-roll clip (use_broll=True + valid local file)
-        #   2. Effects clip (rendered via the Video Effects tab)
-        #   3. AI-generated video clip (video_path or video_object_path)
+        #   1. Effects clip (rendered via the Video Effects tab)
+        #   2. AI-generated video clip (video_path or video_object_path)
+        #   3. B-roll clip (use_broll=True + valid local file)
         #   4. Still image with motion (Ken Burns / effects)
+        # AI clips are deliberate and expensive; B-roll is a fallback for scenes
+        # without a dedicated AI clip.
         # -------------------------------------------------------------------
         broll_local_path = str(getattr(session_scene, "broll_local_path", "") or "").strip()
         use_broll = bool(getattr(session_scene, "use_broll", False))
         broll_path = Path(broll_local_path) if broll_local_path else None
 
-        if use_broll and broll_path is not None and broll_path.exists():
-            media_path = str(broll_path.resolve())
-            # Loop B-roll clips that are shorter than the scene duration so
-            # the scene never ends on a frozen or blank frame.
-            timeline_scene.video_loop = True
-            timeline_scene.video_muted = True
-            timeline_scene.video_volume = 0.0
-        elif effects_clips_by_index and idx in effects_clips_by_index:
+        if effects_clips_by_index and idx in effects_clips_by_index:
             # Effects clips (assigned via the Video Effects tab) are pre-rendered
             # and stored separately; they are not on the session_scene object.
             media_path = str(effects_clips_by_index[idx])
@@ -180,6 +176,12 @@ def _apply_scene_media_assignments(
             timeline_scene.video_loop = bool(getattr(session_scene, "video_loop", False))
             timeline_scene.video_muted = bool(getattr(session_scene, "video_muted", True))
             timeline_scene.video_volume = float(getattr(session_scene, "video_volume", 0.0) or 0.0)
+        elif use_broll and broll_path is not None and broll_path.exists():
+            # B-roll (stock video) fills in where no AI clip exists.
+            media_path = str(broll_path.resolve())
+            timeline_scene.video_loop = True
+            timeline_scene.video_muted = True
+            timeline_scene.video_volume = 0.0
         else:
             media_path = str(project_path / "assets/images" / f"{scene_id}.png")
             timeline_scene.video_loop = False

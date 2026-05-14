@@ -19,7 +19,7 @@ import src.supabase_storage as _sb_store
 
 CROSSFADE_DURATION = 1.0   # seconds
 IMAGE_DURATION     = 4.0   # seconds each image stays on screen
-MUSIC_VOLUME       = 0.15  # background music volume (0.0 to 1.0)
+MUSIC_VOLUME       = 0.15  # default music/voiceover ratio; matches PipelineOptions default
 OUTPUT_FPS         = 24
 
 
@@ -33,6 +33,16 @@ def _download_to_temp(url: str, suffix: str) -> str:
     return tmp.name
 
 
+def _output_dimensions(aspect_ratio: str) -> tuple[int, int]:
+    """Return (width, height) for the given aspect ratio string."""
+    ar = (aspect_ratio or "16:9").strip()
+    if ar == "9:16":
+        return 1080, 1920
+    if ar == "1:1":
+        return 1080, 1080
+    return 1920, 1080  # default 16:9
+
+
 def _assemble_video(project: dict, progress_bar) -> str:
     """
     Combine images + voiceover + background music into an MP4.
@@ -41,6 +51,8 @@ def _assemble_video(project: dict, progress_bar) -> str:
     image_urls    = project.get("image_urls") or []
     voiceover_url = project.get("voiceover_path")
     music_url     = project.get("music_path")
+    target_w, target_h = _output_dimensions(project.get("aspect_ratio") or "16:9")
+    music_volume = float(project.get("music_volume") or MUSIC_VOLUME)
 
     if not image_urls:
         raise ValueError("No images found for this project.")
@@ -81,11 +93,13 @@ def _assemble_video(project: dict, progress_bar) -> str:
     clips = []
     for i, img_path in enumerate(image_paths):
         clip = ImageClip(img_path, duration=img_duration)
-        clip = clip.resize(height=1080).crop(
+        # Scale so the shorter axis fills the target, then centre-crop.
+        scale = max(target_w / clip.w, target_h / clip.h)
+        clip = clip.resize(width=int(clip.w * scale), height=int(clip.h * scale)).crop(
             x_center=clip.w / 2,
             y_center=clip.h / 2,
-            width=1920,
-            height=1080,
+            width=target_w,
+            height=target_h,
         )
         if i > 0:
             clip = clip.crossfadein(CROSSFADE_DURATION)
@@ -99,7 +113,7 @@ def _assemble_video(project: dict, progress_bar) -> str:
 
     # Mix voiceover + background music
     if music_path:
-        music_audio = AudioFileClip(music_path).volumex(MUSIC_VOLUME)
+        music_audio = AudioFileClip(music_path).volumex(music_volume)
         # Loop music if shorter than video
         if music_audio.duration < total_duration:
             loops = int(total_duration / music_audio.duration) + 1
@@ -151,7 +165,7 @@ def tab_auto_videos() -> None:
             raise RuntimeError("Supabase is not configured.")
         res = (
             sb.table("projects")
-            .select("id, title, script, image_urls, voiceover_path, music_path, status, created_at")
+            .select("id, title, script, image_urls, voiceover_path, music_path, status, created_at, aspect_ratio")
             .eq("status", "ready")
             .order("created_at", desc=True)
             .limit(30)

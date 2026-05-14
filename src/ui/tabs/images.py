@@ -205,6 +205,50 @@ def tab_create_images() -> None:
             else:
                 st.info("No primary image yet.")
 
+            # ── Media source badge (S7) ────────────────────────────────────
+            _media_type = getattr(s, "active_media_type", "") or ""
+            _resolved = (getattr(s, "prompt_spec", None) or {}).get("resolved_media") or {}
+            if _media_type == "real_image":
+                _src_label = str(_resolved.get("provider", "historic")).title()
+                _score = _resolved.get("match_score")
+                _score_str = f" · match {_score:.0%}" if isinstance(_score, (int, float)) else ""
+                _src_url = _resolved.get("source_url", "")
+                _title = _resolved.get("title", "")
+                _badge = f"🏛 Historic — {_src_label}{_score_str}"
+                if _title:
+                    _badge += f" · {_title}"
+                st.caption(_badge)
+                if _src_url:
+                    st.caption(f"Source: {_src_url}")
+            elif _media_type:
+                st.caption("🤖 AI-generated")
+
+            # ── B-roll panel (S6) ───────────────────────────────────────────
+            _has_broll = bool(getattr(s, "broll_source_url", "") or getattr(s, "broll_local_path", ""))
+            if _has_broll:
+                with st.expander("🎞 B-Roll clip", expanded=False):
+                    _broll_provider = getattr(s, "broll_provider", "") or "unknown"
+                    _broll_url = getattr(s, "broll_source_url", "") or ""
+                    _broll_page = getattr(s, "broll_page_url", "") or ""
+                    _broll_dur = getattr(s, "broll_duration_sec", 0) or 0
+                    st.caption(
+                        f"Provider: {_broll_provider}"
+                        + (f" · {_broll_dur:.1f}s" if _broll_dur else "")
+                    )
+                    if _broll_page:
+                        st.markdown(f"[View clip on {_broll_provider}]({_broll_page})")
+                    _use_broll_current = bool(getattr(s, "use_broll", False))
+                    _new_use_broll = st.toggle(
+                        "Use this B-roll clip in the video",
+                        value=_use_broll_current,
+                        key=f"use_broll_{s.index}",
+                    )
+                    if _new_use_broll != _use_broll_current:
+                        s.use_broll = _new_use_broll
+                        _sync_project_timeline_from_session_scenes()
+                        st.toast(f"B-roll {'enabled' if _new_use_broll else 'disabled'} for scene {s.index:02d}.")
+                        st.rerun()
+
             uploaded_scene_image = st.file_uploader(
                 f"Upload your own image for scene {s.index:02d}",
                 type=["png", "jpg", "jpeg"],

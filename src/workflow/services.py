@@ -1230,7 +1230,11 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
             )
             logger.info("image_search_done found=%d/%d", len(_search_results), len(_scene_dicts))
         except Exception as exc:  # noqa: BLE001 — search failure must not block generation
-            logger.warning("image_search_failed error=%s", exc)
+            logger.warning(
+                "image_search_failed error_type=%s error=%s — falling back to AI generation for all scenes",
+                type(exc).__name__,
+                exc,
+            )
             _search_results = {}
 
     try:
@@ -1303,9 +1307,9 @@ def run_generate_images(project_id: str, options: PipelineOptions | None = None)
     expected_count = len(scenes_to_generate)
     if generated < expected_count:
         missing = expected_count - generated
-        # Allow up to 1 missing image (e.g. rejected by artifact check) so a
-        # single borderline scene doesn't abort an otherwise successful job.
-        tolerance = 1
+        # Allow up to 20% missing images so a few failed scenes don't abort an
+        # otherwise good run (e.g. safety-filtered or rate-limited scenes).
+        tolerance = max(1, expected_count // 5)
         if missing > tolerance:
             msg = f"{missing}/{expected_count} scene images failed to generate"
             update_step_status(project_id, "images", StepStatus.FAILED, error=msg)
