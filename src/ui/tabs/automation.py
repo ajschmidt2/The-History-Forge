@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from collections import deque
@@ -924,12 +924,34 @@ def tab_automation(project_id: str) -> None:
     _music_vol_fallback = float(_daily_preset.get("music_relative_level", 0.15) or 0.15)
     default_music_volume = min(1.0, max(0.0, _coerce_float(payload.get("music_volume_relative_to_voiceover") or _music_vol_fallback, _music_vol_fallback)))
 
+    _default_enable_image_search = bool(payload.get("enable_image_search", _daily_preset.get("enable_image_search", False)))
+    _verification_options = ["strict", "standard", "off"]
+    _default_verification = str(payload.get("historical_media_verification", _daily_preset.get("historical_media_verification", "strict")) or "strict").lower()
+    if _default_verification not in _verification_options:
+        _default_verification = "strict"
+
     with col_settings_1:
         aspect_ratio = st.selectbox("Aspect Ratio", options=["16:9", "9:16"], index=0 if default_ratio == "16:9" else 1)
         visual_style = st.selectbox("Visual Style", options=list(VISUAL_STYLE_OPTIONS), index=list(VISUAL_STYLE_OPTIONS).index(current_style))
         scene_count = st.number_input("Number of Scenes", min_value=1, max_value=75, value=default_scene_count, step=1)
         enable_video_effects = st.toggle("Video Effects", value=default_enable_effects)
         video_effects_style = st.selectbox("Video Effects Style", options=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"], index=["Off", "Ken Burns - Standard", "Ken Burns - Strong", "Ken Burns - Dramatic"].index(default_effect_style), disabled=not enable_video_effects)
+        enable_image_search = st.toggle(
+            "Search for historic images",
+            value=_default_enable_image_search,
+            key="manual_enable_image_search",
+            help="Search Wikimedia Commons and Library of Congress for real historical photos before AI generation.",
+        )
+        if enable_image_search:
+            historical_media_verification = st.selectbox(
+                "Image match strictness",
+                options=_verification_options,
+                index=_verification_options.index(_default_verification),
+                key="manual_historical_media_verification",
+                help="Strict: strong keyword match required. Standard: looser match. Off: accept any result.",
+            )
+        else:
+            historical_media_verification = _default_verification
 
     # â"€â"€ AI Video Clips â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
     st.subheader("🎬 AI Video Clips")
@@ -1185,6 +1207,8 @@ def tab_automation(project_id: str) -> None:
             "topic": topic_input.strip(),
             "topic_direction": topic_direction.strip(),
             "script_profile": "youtube_short_60s" if selected_mode == "topic_to_short_video" else str(payload.get("script_profile", "") or ""),
+            "enable_image_search": bool(enable_image_search),
+            "historical_media_verification": str(historical_media_verification or "strict"),
         })
         save_project_payload(project_id, payload)
 
@@ -1226,12 +1250,12 @@ def tab_automation(project_id: str) -> None:
         image_provider=str(_daily_preset.get("image_provider", "openai") or "openai"),
         openai_image_model=str(_daily_preset.get("openai_image_model", DEFAULT_OPENAI_IMAGE_MODEL) or DEFAULT_OPENAI_IMAGE_MODEL),
         fal_video_model=str(st.session_state.get("fal_video_model_override", "") or _daily_preset.get("fal_video_model", DEFAULT_FAL_VIDEO_MODEL) or DEFAULT_FAL_VIDEO_MODEL),
-        enable_image_search=bool(_daily_preset.get("enable_image_search", False)),
+        enable_image_search=bool(enable_image_search),
+        historical_media_verification=str(historical_media_verification or "strict"),
         enable_broll=bool(_daily_preset.get("enable_broll", True)),
         auto_search_broll=bool(_daily_preset.get("auto_search_broll", True)),
         auto_assign_broll=bool(_daily_preset.get("auto_assign_broll", True)),
         broll_preferred_provider=str(_daily_preset.get("broll_preferred_provider", "Pexels then Pixabay") or "Pexels then Pixabay"),
-        historical_media_verification=str(_daily_preset.get("historical_media_verification", "strict") or "strict"),
     )
 
     st.markdown("#### Controls")
