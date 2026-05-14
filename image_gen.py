@@ -14,7 +14,7 @@ DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1"
 # OpenAI image APIs reject prompts above 4,000 characters. Keep a small
 # buffer for SDK/request serialization differences while preserving the
 # no-visible-text instruction that prevents title-card artifacts.
-_OPENAI_IMAGE_PROMPT_MAX_CHARS = 3800
+_OPENAI_IMAGE_PROMPT_MAX_CHARS = 3600
 _OPENAI_IMAGE_PROMPT_REQUIRED_SUFFIX = (
     "Treat all prompt wording as off-screen instruction only. "
     "No visible text, captions, labels, watermarks, logos, or readable writing."
@@ -23,6 +23,9 @@ OPENAI_IMAGE_MODELS: tuple[tuple[str, str], ...] = (
     (DEFAULT_OPENAI_IMAGE_MODEL, "GPT Image 1"),
     ("dall-e-2", "DALL-E 2"),
 )
+_OPENAI_LEGACY_IMAGE_MODEL_ALIASES = {
+    "dall-e-3": DEFAULT_OPENAI_IMAGE_MODEL,
+}
 DEFAULT_QWEN_IMAGE_MODEL = "Qwen/Qwen-Image"
 QWEN_IMAGE_MODELS: tuple[tuple[str, str], ...] = (
     (DEFAULT_QWEN_IMAGE_MODEL, "Qwen-Image (open source, Hugging Face)"),
@@ -379,18 +382,28 @@ def _fit_openai_image_prompt(prompt: str, max_chars: int = _OPENAI_IMAGE_PROMPT_
 
     The workflow usually compacts prompts before they reach the provider, but
     this final provider-local guard catches UI edits, older cached scene files,
-    and any direct callers of :func:`generate_openai_images`.
+    and any direct callers of :func:`generate_openai_images`.  OpenAI currently
+    rejects image prompts over 4,000 characters, so use a conservative default
+    and always return a hard-sliced string even if a caller supplies a larger
+    ``max_chars`` value.
     """
+    hard_limit = min(int(max_chars), 3990)
     cleaned = " ".join(str(prompt or "").split())
-    if len(cleaned) <= max_chars:
-        return cleaned
+    if len(cleaned) <= hard_limit:
+        return cleaned[:hard_limit]
 
     marker = " [Prompt shortened to satisfy OpenAI image prompt length limits.] "
     suffix = " " + _OPENAI_IMAGE_PROMPT_REQUIRED_SUFFIX
-    suffix = suffix[: max_chars // 2]
-    head_budget = max(0, max_chars - len(marker) - len(suffix))
+    suffix = suffix[: hard_limit // 2]
+    head_budget = max(0, hard_limit - len(marker) - len(suffix))
     head = cleaned[:head_budget].rstrip(" ,.;:-")
-    return f"{head}{marker}{suffix}"[:max_chars]
+    return f"{head}{marker}{suffix}"[:hard_limit]
+
+
+def _normalize_openai_image_model(model: str | None) -> str:
+    """Resolve saved/legacy OpenAI image model IDs to supported models."""
+    selected = (model or DEFAULT_OPENAI_IMAGE_MODEL).strip() or DEFAULT_OPENAI_IMAGE_MODEL
+    return _OPENAI_LEGACY_IMAGE_MODEL_ALIASES.get(selected.lower(), selected)
 
 
 def _image_dimensions_for_aspect(
@@ -458,7 +471,7 @@ def generate_openai_images(
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY not found in secrets or environment.")
 
-    selected_model = (model or DEFAULT_OPENAI_IMAGE_MODEL).strip() or DEFAULT_OPENAI_IMAGE_MODEL
+    selected_model = _normalize_openai_image_model(model)
     width, height = _image_dimensions_for_aspect(aspect_ratio, provider="openai", model=selected_model)
     size = f"{width}x{height}"
     prompt = _fit_openai_image_prompt(prompt)

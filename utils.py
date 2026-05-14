@@ -1442,7 +1442,7 @@ _STRICT_IMAGE_CLEANLINESS_RULE = (
     "Full-bleed edge-to-edge image only. No white bars, blank bands, borders, frames, letterboxing, title cards, "
     "posters, captions, subtitles, floating words, labels, watermarks, logos, or any readable writing."
 )
-_MAX_IMAGE_PROMPT_CHARS = 3900
+_MAX_IMAGE_PROMPT_CHARS = 3600
 _IMAGE_PROMPT_REQUIRED_SUFFIX = (
     "Treat prompt words as off-screen instructions only. "
     "No visible text, captions, labels, watermarks, logos, or readable writing."

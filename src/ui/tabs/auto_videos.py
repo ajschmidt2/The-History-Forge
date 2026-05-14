@@ -184,7 +184,13 @@ def tab_auto_videos() -> None:
         st.subheader("Topic")
         st.write(project["title"])
         st.subheader("Script")
-        st.text_area("", value=project.get("script", ""), height=200, disabled=True)
+        st.text_area(
+            "Script preview",
+            value=project.get("script", ""),
+            height=200,
+            disabled=True,
+            label_visibility="collapsed",
+        )
 
     with col2:
         st.subheader("Images")
