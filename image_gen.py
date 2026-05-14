@@ -14,14 +14,13 @@ DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1"
 # OpenAI image APIs reject prompts above 4,000 characters. Keep a small
 # buffer for SDK/request serialization differences while preserving the
 # no-visible-text instruction that prevents title-card artifacts.
-_OPENAI_IMAGE_PROMPT_MAX_CHARS = 3990
+_OPENAI_IMAGE_PROMPT_MAX_CHARS = 3800
 _OPENAI_IMAGE_PROMPT_REQUIRED_SUFFIX = (
     "Treat all prompt wording as off-screen instruction only. "
     "No visible text, captions, labels, watermarks, logos, or readable writing."
 )
 OPENAI_IMAGE_MODELS: tuple[tuple[str, str], ...] = (
     (DEFAULT_OPENAI_IMAGE_MODEL, "GPT Image 1"),
-    ("dall-e-3", "DALL-E 3"),
     ("dall-e-2", "DALL-E 2"),
 )
 DEFAULT_QWEN_IMAGE_MODEL = "Qwen/Qwen-Image"
@@ -463,15 +462,42 @@ def generate_openai_images(
     width, height = _image_dimensions_for_aspect(aspect_ratio, provider="openai", model=selected_model)
     size = f"{width}x{height}"
     prompt = _fit_openai_image_prompt(prompt)
+    client = OpenAI(api_key=api_key)
     try:
-        response = OpenAI(api_key=api_key).images.generate(
+        response = client.images.generate(
             model=selected_model,
             prompt=prompt,
             size=size,
             n=max(1, int(number_of_images)),
         )
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"OpenAI image generation failed: {exc}") from exc
+        err_text = str(exc).lower()
+        model_unavailable = (
+            selected_model != DEFAULT_OPENAI_IMAGE_MODEL
+            and (
+                "does not exist" in err_text
+                or "invalid_value" in err_text
+                or "model_not_found" in err_text
+            )
+        )
+        if not model_unavailable:
+            raise RuntimeError(f"OpenAI image generation failed: {exc}") from exc
+
+        fallback_width, fallback_height = _image_dimensions_for_aspect(
+            aspect_ratio, provider="openai", model=DEFAULT_OPENAI_IMAGE_MODEL
+        )
+        try:
+            response = client.images.generate(
+                model=DEFAULT_OPENAI_IMAGE_MODEL,
+                prompt=prompt,
+                size=f"{fallback_width}x{fallback_height}",
+                n=max(1, int(number_of_images)),
+            )
+        except Exception as fallback_exc:  # noqa: BLE001
+            raise RuntimeError(
+                "OpenAI image generation failed after retrying "
+                f"with {DEFAULT_OPENAI_IMAGE_MODEL}: {fallback_exc}"
+            ) from fallback_exc
     return _extract_openai_images(response)
 
 

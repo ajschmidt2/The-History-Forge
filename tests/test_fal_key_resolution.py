@@ -110,6 +110,53 @@ def test_scene_image_router_uses_qwen_provider(monkeypatch):
     assert calls == [("paint a clay tablet", 2, "9:16", "Qwen/Qwen-Image")]
 
 
+
+def test_openai_prompt_is_capped_below_provider_limit():
+    import image_gen
+
+    prompt = "Halifax harbor 1916. " * 300
+
+    fitted = image_gen._fit_openai_image_prompt(prompt)
+
+    assert len(fitted) <= image_gen._OPENAI_IMAGE_PROMPT_MAX_CHARS
+    assert len(fitted) < 4000
+    assert "No visible text" in fitted
+
+
+def test_generate_openai_images_retries_unavailable_legacy_model(monkeypatch):
+    import image_gen
+
+    captured = []
+
+    class FakeImages:
+        @staticmethod
+        def generate(**kwargs):
+            captured.append(kwargs)
+            if kwargs["model"] == "dall-e-3":
+                raise Exception("Error code: 400 - The model 'dall-e-3' does not exist. invalid_value")
+            return type("Response", (), {"data": []})()
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.images = FakeImages()
+
+    monkeypatch.setattr(
+        image_gen,
+        "_get_secret",
+        lambda name, default="": "sk-test" if name == "OPENAI_API_KEY" else default,
+    )
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "openai",
+        type("OpenAIModule", (), {"OpenAI": FakeOpenAI})(),
+    )
+
+    image_gen.generate_openai_images("test prompt", aspect_ratio="9:16", model="dall-e-3")
+
+    assert [call["model"] for call in captured] == ["dall-e-3", image_gen.DEFAULT_OPENAI_IMAGE_MODEL]
+    assert captured[-1]["size"] == "1024x1536"
+
+
 def test_optional_gemini_validation_is_safe_when_provider_unavailable(monkeypatch):
     import image_gen
 
